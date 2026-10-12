@@ -121,9 +121,11 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
   (`+` becomes `plus_`, `*` becomes `star_`, optional `_fbr`), or a recorded
   same-family substitute. For E1M1 that is 21 exact, 5 renamed and 38
   substitutes; `materials.json` lists every choice and its source file.
-- **Materials:** each clones Coliseum's `world/concrete/concrete_plates_plain_wet_bm`
+- **Materials:** each clones Coliseum's single-layer `world/dev/dev_gray_512`
   (shader set, uber buffer, depth passes, colpass), with a mipped sRGB albedo and
-  flat normal/gloss/spec maps.
+  flat normal/gloss/spec maps. The first attempt used
+  `concrete_plates_plain_wet_bm`. That is a two-layer blend material whose dry
+  layer (slot 23, behind mask slot 22) kept showing Coliseum concrete in-game.
 - **Build:** RePak is built from r-ex/RePak `adc52f7`, the same commit the
   apex-to-titanfall-2 converter uses. The September 2022 `RePak.exe` release
   does not support this material JSON. The template pak is a copy of the game's

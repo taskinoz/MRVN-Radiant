@@ -83,7 +83,9 @@ V3 QuakeColour(const entity_t &e, double brightness) {
     }
     // Quake brightness (~200) is far below retail realtime lights, whose
     // "_light" brightness reaches thousands (Glitch: 5100 -> intensity 20).
-    constexpr double QuakeScale = 10.0;
+    // In-game E1M1 (199 dense lights) was fully overexposed at 10x; tune with
+    // worldspawn "_lightscale" instead.
+    constexpr double QuakeScale = 1.0;
     return colour * (brightness / 255.0 * QuakeScale);
 }
 

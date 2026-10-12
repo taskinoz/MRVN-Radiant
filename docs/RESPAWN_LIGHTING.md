@@ -213,11 +213,13 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   cosines of `_inner_cone`/`_cone`.
 - **Order:** ambient (5), suns (3), spots (2), points (1).
 - **Brightness in practice:** Glitch's short-range realtime points use
-  `_light "255 175 94 5100"`, which gives intensity 20 over 150 units. Quake-style
-  `"light" "200"` keys are therefore scaled by 10, giving about 7.8. A worldspawn
-  `_lightscale` key multiplies every point and spot light. The first in-game E1M1
-  test, with unscaled Quake lights at about 0.8, rendered correctly but looked
-  flat.
+  `_light "255 175 94 5100"`, which gives intensity 20 over 150 units. Even so,
+  E1M1's 199 closely spaced Quake lights at a ×10 scale overexposed the whole map
+  in-game. Quake-style `"light"` values are therefore used unscaled (about 0.8
+  for 200), which gives Quake-like pools of light (harness captures, 12
+  October). A worldspawn `_lightscale` key multiplies every point and spot
+  light. The earlier "flat" report came from the old 0.2.1 build, which had no
+  baked lights.
 - **`_pbr_falloff 1`:** these lights store intensity ×100000. They are not
   modelled; such lights are treated as `_pbr_falloff 0`.
 

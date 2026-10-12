@@ -23,7 +23,9 @@ import zlib
 
 from rpak import RPak
 
-TEMPLATE = "world/concrete/concrete_plates_plain_wet_bm"
+# Single-layer world material (albedo/normal/gloss/spec in slots 0-3). Blend
+# materials (_bm) also sample a second albedo from slot 23 and a mask from 22.
+TEMPLATE = "world/dev/dev_gray_512"
 PAK_NAME = "quake_textures"
 
 # Quake textures that are not drawn: (shader name, remap shader body)

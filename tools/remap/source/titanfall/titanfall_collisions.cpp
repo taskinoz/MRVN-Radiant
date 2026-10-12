@@ -234,6 +234,25 @@ void Titanfall::EmitGeoSet(MinMax minmax, int index, int flags) {
 }
 
 /*
+    EmitBrushSideProperty()
+    Returns a brush side property for the side's texture. The texture index
+    only has 9 bits; later textures fall back to texture 0 instead of failing.
+*/
+static uint16_t EmitBrushSideProperty(const shaderInfo_t &shader) {
+    const uint32_t texture = Titanfall::EmitTextureData(shader);
+    if (texture <= 0x1ff)
+        return texture;
+
+    static bool warned = false;
+    if (!warned) {
+        Sys_FPrintf(SYS_WRN, "WARNING: Collision side texture index %u exceeds its 9-bit field; "
+                             "sides using texture 512 or later fall back to texture 0\n", texture);
+        warned = true;
+    }
+    return 0;
+}
+
+/*
     EmitBrush()
     Emits a brush into bsp
 */
@@ -314,10 +333,7 @@ void Titanfall::EmitBrush(brush_t &brush) {
     for (int i = 0; i < 6; i++) {
         side_t side = sortedAxialSides[i];
         if (side.shaderInfo != nullptr) {
-            const uint32_t texture = Titanfall::EmitTextureData(*side.shaderInfo);
-            if (texture > 0x1ff)
-                Error("Collision side texture index exceeds its 9-bit field");
-            Titanfall::Bsp::cmBrushSideProperties.emplace_back(texture);
+            Titanfall::Bsp::cmBrushSideProperties.emplace_back(EmitBrushSideProperty(*side.shaderInfo));
         } else {
             Titanfall::Bsp::cmBrushSideProperties.emplace_back(MASK_DISCARD);
             // TODO: ensure BrushSideProperty indexes tools/toolsnodraw
@@ -345,10 +361,7 @@ void Titanfall::EmitBrush(brush_t &brush) {
         if (b.planeCount == 255)
             Error("Collision brush has more than 255 non-axial sides");
         b.planeCount++;
-        const uint32_t texture = Titanfall::EmitTextureData(*side.shaderInfo);
-        if (texture > 0x1ff)
-            Error("Collision side texture index exceeds its 9-bit field");
-        Titanfall::Bsp::cmBrushSideProperties.emplace_back(texture);
+        Titanfall::Bsp::cmBrushSideProperties.emplace_back(EmitBrushSideProperty(*side.shaderInfo));
 
         uint16_t &so = Titanfall::Bsp::cmBrushSidePlaneOffsets.emplace_back();
         so = 0;

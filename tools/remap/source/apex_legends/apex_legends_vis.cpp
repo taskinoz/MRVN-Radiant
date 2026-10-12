@@ -78,6 +78,8 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
 
 
         // Emit textrue related structs
+        if (mesh.vertices.empty() || mesh.vertices.size() > 65536 || mesh.triangles.size() / 3 > 65535)
+            Error("Mesh vertex or triangle count exceeds its 16-bit field");
         uint32_t textureIndex = ApexLegends::EmitTextureData(*mesh.shaderInfo);
         m.materialOffset = ApexLegends::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size());
         int materialSortOffset = ApexLegends::Bsp::materialSorts.at(m.materialOffset).vertexOffset;
@@ -105,7 +107,11 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
 
         // Save triangles
         for (uint16_t triangle : mesh.triangles) {
-            Titanfall::Bsp::meshIndices.emplace_back(triangle + vertexOffset - materialSortOffset);
+            // The pool offset can exceed 16 bits; indices are relative to the sort.
+            const int index = triangle + vertexOffset - materialSortOffset;
+            if (index < 0 || index > 65535)
+                Error("Mesh index exceeds the 16-bit material-sort range");
+            Titanfall::Bsp::meshIndices.emplace_back(index);
         }
 
         // Save MeshBounds
@@ -123,7 +129,12 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
     Emits texture data and returns its index
 */
 uint32_t ApexLegends::EmitTextureData(shaderInfo_t shader) {
-    std::string  tex = Respawn::textureName(shader.shader.c_str());
+    std::string  tex;
+    try {
+        tex = Respawn::textureName(shader.shader.c_str());
+    } catch (const std::exception &error) {
+        Error("EmitTextureData: \"%s\": %s", shader.shader.c_str(), error.what());
+    }
     std::size_t  index;
 
     for (std::size_t i = 0; i < ApexLegends::Bsp::textureData.size(); i++) {
@@ -158,14 +169,20 @@ uint32_t ApexLegends::EmitTextureData(shaderInfo_t shader) {
     Tries to create a material sort of the last texture
 */
 uint16_t ApexLegends::EmitMaterialSort(uint32_t index, int offset, int count) {
+        if (index > 65535)
+            Error("Material-sort texture index exceeds its 16-bit field");
         /* Check if the material sort we need already exists */
         std::size_t pos = 0;
         for (ApexLegends::MaterialSort_t &ms : ApexLegends::Bsp::materialSorts) {
-            if (ms.textureData == index && offset - ms.vertexOffset + count < 65535) {
+            if (ms.textureData == index && offset >= static_cast<int64_t>(ms.vertexOffset)
+             && offset - static_cast<int64_t>(ms.vertexOffset) + count <= 65536) {
                 return pos;
             }
             pos++;
         }
+
+        if (pos > 65535)
+            Error("Material-sort index exceeds 16 bits");
 
         ApexLegends::MaterialSort_t &ms = ApexLegends::Bsp::materialSorts.emplace_back();
         ms.textureData = index;

@@ -32,7 +32,12 @@
     Emits texture data and returns its index
 */
 uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
-    std::string  tex = Respawn::textureName(shader.shader.c_str());
+    std::string  tex;
+    try {
+        tex = Respawn::textureName(shader.shader.c_str());
+    } catch (const std::exception &error) {
+        Error("EmitTextureData: \"%s\": %s", shader.shader.c_str(), error.what());
+    }
     std::size_t  index;
 
     for (std::size_t i = 0; i < Titanfall::Bsp::textureData.size(); i++) {

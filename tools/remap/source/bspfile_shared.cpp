@@ -76,9 +76,14 @@ void Shared::MakeMeshes(const entity_t &e) {
                 y = vector3_dot(vTranslated, texY);
                 // TODO: scale lightmapUV by side.luxelScale
                 lightmapUV = {x / Shared::luxelSize, y / Shared::luxelSize};
-                // TODO: valve 220 st vector projection
-                textureUV[0] = side.texMat[0][0] * x + side.texMat[0][1] * y + side.texMat[0][2];
-                textureUV[1] = side.texMat[1][0] * x + side.texMat[1][1] * y + side.texMat[1][2];
+                if (g_brushType == EBrushType::Bp) {
+                    textureUV[0] = side.texMat[0][0] * x + side.texMat[0][1] * y + side.texMat[0][2];
+                    textureUV[1] = side.texMat[1][0] * x + side.texMat[1][1] * y + side.texMat[1][2];
+                } else {
+                    // Quake and Valve 220 maps carry st vectors instead of a texture matrix.
+                    textureUV[0] = (side.vecs[0][3] + vector3_dot(side.vecs[0].vec3(), vTranslated)) / side.shaderInfo->shaderWidth;
+                    textureUV[1] = (side.vecs[1][3] + vector3_dot(side.vecs[1].vec3(), vTranslated)) / side.shaderInfo->shaderHeight;
+                }
 
                 Shared::Vertex_t &sv = mesh.vertices.emplace_back();
                 sv.xyz          = vertex;

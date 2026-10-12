@@ -54,8 +54,8 @@ namespace Titanfall {
     uint32_t     EmitVertexNormal(Vector3 &normal);
     void         EmitVertexUnlit(Shared::Vertex_t &vertex);
     void         EmitVertexLitFlat(Shared::Vertex_t &vertex);
-    void         EmitVertexLitBump(Shared::Vertex_t &vertex);
-    void         EmitVertexUnlitTS(Shared::Vertex_t &vertex);
+    void         EmitVertexLitBump(Shared::Vertex_t &vertex, uint32_t tangent);
+    void         EmitVertexUnlitTS(Shared::Vertex_t &vertex, uint32_t tangent);
     void         EmitVertexBlinnPhong(Shared::Vertex_t &vertex);
     void         EmitMeshes(const entity_t &e);
     uint16_t     EmitOcclusionMeshVertex(Vector3 vertex);

@@ -97,9 +97,19 @@ int main() {
         const std::array<std::uint8_t, 4> shadedSky{skyA[shaded * 4], skyA[shaded * 4 + 1], skyA[shaded * 4 + 2], skyA[shaded * 4 + 3]};
         const std::array<std::uint8_t, 4> litSky{skyA[lit * 4], skyA[lit * 4 + 1], skyA[lit * 4 + 2], skyA[lit * 4 + 3]};
         require(decodeRGBM(litSky).x > decodeRGBM(shadedSky).x, "Roof reduces sky ambient");
-        // Some hemisphere rays from the open texel still reach the roof.
+        // Fill is ambient * scale * (0.4 + 0.6 * visibility); some hemisphere rays
+        // from the open texel still reach the roof.
         const double open = decodeRGBM(litSky).x / (0.8 * options.ambientScale);
-        require(open > 0.6 && open < 1.01, "Open sky ambient uses ambient * visibility * scale");
+        require(open > 0.76 && open < 1.01, "Open sky fill uses ambient * scale * (0.4 + 0.6 * visibility)");
+        require(decodeRGBM(shadedSky).x >= 0.8 * options.ambientScale * 0.39, "Fill keeps its 40% floor");
+        // SKY B: bent sky direction scaled by cbrt(visibility).
+        const std::uint8_t* skyB = r.sky.data() + 16 * 16 * 4;
+        auto skyVector = [&](std::size_t i) {
+            return decodeDirection({skyB[i * 4], skyB[i * 4 + 1], skyB[i * 4 + 2], skyB[i * 4 + 3]});
+        };
+        require(length(skyVector(lit)) > length(skyVector(shaded)) + 0.1, "Roof shortens the sky vector");
+        require(skyVector(lit).z > 0.5 && length(skyVector(lit)) <= 1.01, "Open sky vector points up");
+        require(skyVector(shaded).x > 0, "Roofed sky vector bends towards the open side");
         require(r.chartedTexels >= 64, "Floor covers its texels");
 
         // An unscaled static light lands in SKY A instead of RTL.

@@ -3,8 +3,9 @@
  * measured from retail Coliseum/Glitch samples; see docs/RESPAWN_LIGHTING.md.
  *
  * Per page the engine reads:
- *   SKY  A  RGBM: rgb/255 * (a/255 * 3.984375 + 0.015625)
- *   SKY  B  direction: rgb/127 - 1, alpha 255
+ *   SKY  A  RGBM: rgb/255 * (a/255 * 3.984375 + 0.015625); a small ambient fill
+ *   SKY  B  bent sky direction scaled by cbrt(sky visibility): rgb/127 - 1, alpha 255.
+ *           The shader applies the ambient world light through this vector.
  *   RTL  A  four 6-bit slots into an RTL page (63 = unused), page in the top byte;
  *           texels without realtime lights hold 0xffffffff
  *   RTL  B  per-slot visibility (shadow mask), channel N for slot N
@@ -269,7 +270,10 @@ struct PageSize { std::uint32_t width, height; };
 struct Options {
     int ambientSamples = 16;       // cosine-weighted sky visibility rays per texel
     bool ambientOcclusion = true;  // false: treat the sky as fully visible
-    double ambientScale = 0.05;    // SKY A = ambient * visibility * scale (needs engine calibration)
+    // SKY A fill = ambient * scale * (0.4 + 0.6 * sky visibility). The scale gives
+    // ~0.03 for a typical 0.8 ambient, matching retail magnitudes and the
+    // client-checked Phase Runner fill (0.025-0.032).
+    double ambientScale = 0.04;
     double luxelSize = 16.0;       // world units per texel, for sub-texel shadow samples
     double rayOffset = 0.5;        // start rays off the surface along its normal
     unsigned threads = 0;          // 0: hardware concurrency
@@ -557,13 +561,13 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                     const V3 start = pos + n * options.rayOffset;
                     V3 t, b;
                     detail::basis(n, t, b);
-                    V3 baked{}, direction{};
-                    double directionWeight = 0;
+                    V3 baked{};
+                    V3 sky = n;  // SKY B: bent sky direction scaled by cbrt(visibility)
 
                     // Sky ambient: cosine-weighted visibility of the sky.
                     if (luminance(ambient) > 0) {
                         double visible = ambientSamples;
-                        V3 openDirection = n * double(ambientSamples);
+                        V3 openDirection = n;
                         if (options.ambientOcclusion) {
                             visible = 0;
                             openDirection = {};
@@ -581,12 +585,8 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                             }
                         }
                         const double fraction = visible / ambientSamples;
-                        baked = baked + ambient * (fraction * options.ambientScale);
-                        const double w = luminance(ambient) * fraction * options.ambientScale;
-                        if (visible > 0) {
-                            direction = direction + normalize(openDirection) * w;
-                            directionWeight += w;
-                        }
+                        baked = baked + ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+                        sky = visible > 0 ? normalize(openDirection) * std::cbrt(fraction) : V3{};
                     }
 
                     // Static (non-realtime) local lights.
@@ -601,15 +601,11 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         const double scale = falloff(light, d) * lambert * spotFactor(light, -l3);
                         if (!(scale > 0) || occluders.blocked(start, light.origin)) continue;
                         baked = baked + light.intensity * scale;
-                        const double w = luminance(light.intensity) * scale;
-                        direction = direction + l3 * w;
-                        directionWeight += w;
                     }
 
                     auto a = encodeRGBM(baked);
                     std::memcpy(skyA + i * 4, a.data(), 4);
-                    const V3 dir = directionWeight > 0 ? direction * (1.0 / directionWeight) : n;
-                    auto bd = encodeDirection(dir);
+                    auto bd = encodeDirection(sky);
                     std::memcpy(skyB + i * 4, bd.data(), 4);
 
                     // Realtime slots and their shadow masks.

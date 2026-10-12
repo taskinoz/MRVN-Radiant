@@ -342,7 +342,7 @@ void Titanfall::EmitVertexLitFlat(Shared::Vertex_t &vertex) {
     EmitVertexLitBump
     Saves a vertex into Titanfall::Bsp::vertexLitBumpVertices
 */
-void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
+void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, uint32_t tangent) {
     Titanfall::VertexLitBump_t &lv = Titanfall::Bsp::vertexLitBumpVertices.emplace_back();
     lv.vertexIndex  = Titanfall::EmitVertex(vertex.xyz);
     lv.normalIndex  = Titanfall::EmitVertexNormal(vertex.normal);
@@ -350,7 +350,8 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
     lv.colour       = vertex.colour;
     lv.lightmapUV   = vertex.lightmapUV;
     lv.lightmapStep = vertex.lightmapStep;
-    // TODO: tangentIndex
+    lv.tangentIndex[0] = tangent;
+    lv.tangentIndex[1] = 0;
 }
 
 
@@ -358,13 +359,14 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
     EmitVertexUnlitTS
     Saves a vertex into Titanfall::Bsp::vertexUnlitTSVertices
 */
-void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex) {
+void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex, uint32_t tangent) {
     Titanfall::VertexUnlitTS_t &ul = Titanfall::Bsp::vertexUnlitTSVertices.emplace_back();
     ul.vertexIndex = Titanfall::EmitVertex(vertex.xyz);
     ul.normalIndex = Titanfall::EmitVertexNormal(vertex.normal);
     ul.textureUV   = vertex.textureUV;
     ul.colour      = vertex.colour;
-    // TODO: tangentIndex
+    ul.tangentIndex[0] = tangent;
+    ul.tangentIndex[1] = 0;
 }
 
 
@@ -380,6 +382,47 @@ void Titanfall::EmitVertexBlinnPhong(Shared::Vertex_t &vertex) {
     bp.colour      = vertex.colour;
     bp.lightmapUV  = vertex.lightmapUV;
     // TODO: tangentQuaternion
+}
+
+
+/*
+    MeshTangents()
+    Tangent references for normal-mapped vertices, as retail Coliseum/Glitch
+    store them: the vertex-normal index of a unit tangent along +dP/du with the
+    normal component removed, and bit 31 set when the bitangent runs against
+    +dP/dv. The second tangent word is always zero.
+*/
+static std::vector<uint32_t> MeshTangents(const Shared::Mesh_t &mesh) {
+    std::vector<Vector3>  du(mesh.vertices.size(), Vector3(0, 0, 0)), dv(mesh.vertices.size(), Vector3(0, 0, 0));
+    for (std::size_t i = 0; i + 2 < mesh.triangles.size(); i += 3) {
+        const uint16_t  t[3] = {mesh.triangles[i], mesh.triangles[i + 1], mesh.triangles[i + 2]};
+        const Shared::Vertex_t &a = mesh.vertices.at(t[0]), &b = mesh.vertices.at(t[1]), &c = mesh.vertices.at(t[2]);
+        const Vector3  e1 = b.xyz - a.xyz, e2 = c.xyz - a.xyz;
+        const Vector2  d1 = b.textureUV - a.textureUV, d2 = c.textureUV - a.textureUV;
+        const float  det = d1.x() * d2.y() - d1.y() * d2.x();
+        if (std::fabs(det) < 1e-12f)
+            continue;
+        const Vector3  s = (e1 * d2.y() - e2 * d1.y()) / det;
+        const Vector3  u = (e2 * d1.x() - e1 * d2.x()) / det;
+        for (uint16_t k : t) {
+            du[k] += s;
+            dv[k] += u;
+        }
+    }
+
+    std::vector<uint32_t>  words;
+    for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
+        const Vector3  n = mesh.vertices[i].normal;
+        Vector3  tangent = du[i] - n * static_cast<float>(vector3_dot(n, du[i]));
+        if (vector3_length(tangent) < 1e-6) {  // no usable UV gradient
+            const Vector3  axis = std::fabs(n.z()) < 0.9f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
+            tangent = vector3_cross(axis, n);
+        }
+        tangent = vector3_normalised(tangent);
+        const bool  mirrored = vector3_dot(vector3_cross(n, tangent), dv[i]) < 0;
+        words.push_back(Titanfall::EmitVertexNormal(tangent) | (mirrored ? 0x80000000u : 0u));
+    }
+    return words;
 }
 
 
@@ -434,15 +477,17 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         MinMax  aabb;
 
         // Save vertices and vertexnormals
+        const std::vector<uint32_t>  tangents = (m.vertexType == 2 || m.vertexType == 3)
+                                              ? MeshTangents(mesh) : std::vector<uint32_t>();
         for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
             Shared::Vertex_t  vertex = mesh.vertices.at(i);
 
             aabb.extend(vertex.xyz);
 
             if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT_TS)) {
-                Titanfall::EmitVertexUnlitTS(vertex);
+                Titanfall::EmitVertexUnlitTS(vertex, tangents.at(i));
             } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_LIT_BUMP)) {
-                Titanfall::EmitVertexLitBump(vertex);
+                Titanfall::EmitVertexLitBump(vertex, tangents.at(i));
             } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT)) {
                 Titanfall::EmitVertexUnlit(vertex);
             } else {

@@ -67,6 +67,50 @@ LIT_FIXTURE = (
 )
 
 
+def tangent_checks(bsp):
+    """Bump-lit tangents follow retail: unit, along +dP/du, bit 31 = mirrored."""
+    with bsp.open("rb") as stream:
+        def lump(index):
+            stream.seek(16 + index * 16)
+            offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+            stream.seek(offset)
+            return stream.read(length)
+        positions = list(struct.iter_unpack("<3f", lump(0x03)))
+        normals = list(struct.iter_unpack("<3f", lump(0x1E)))
+        bump = list(struct.iter_unpack("<2I2f4B4f2I", lump(0x49)))
+        indices = [i[0] for i in struct.iter_unpack("<H", lump(0x4F))]
+        sorts = list(struct.iter_unpack("<4hi", lump(0x52)))
+        meshes = list(struct.iter_unpack("<IHHHBBIHHHHI", lump(0x50)))
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))
+    sub = lambda a, b: tuple(x - y for x, y in zip(a, b))
+    cross = lambda a, b: (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    checked = 0
+    for tri, count, _, _, kind, _, _, _, _, _, sort, _ in meshes:
+        if kind != 2:
+            continue
+        base = sorts[sort][4]
+        for t in range(count):
+            a, b, c = (base + i for i in indices[tri + 3 * t: tri + 3 * t + 3])
+            p = [positions[bump[k][0]] for k in (a, b, c)]
+            uv = [(bump[k][2], bump[k][3]) for k in (a, b, c)]
+            e1, e2 = sub(p[1], p[0]), sub(p[2], p[0])
+            d1, d2 = sub(uv[1], uv[0]), sub(uv[2], uv[0])
+            det = d1[0] * d2[1] - d1[1] * d2[0]
+            if abs(det) < 1e-9:
+                continue
+            du = tuple((x * d2[1] - y * d1[1]) / det for x, y in zip(e1, e2))
+            dv = tuple((y * d1[0] - x * d2[0]) / det for x, y in zip(e1, e2))
+            word, second = bump[a][-2], bump[a][-1]
+            n, tangent = normals[bump[a][1]], normals[word & 0x7fffffff]
+            if second or abs(dot(tangent, tangent) - 1) > 1e-3 or abs(dot(tangent, n)) > 1e-3:
+                raise RuntimeError("tangent is not a unit vector perpendicular to the normal")
+            if dot(tangent, du) <= 0 or (dot(cross(n, tangent), dv) < 0) != bool(word >> 31):
+                raise RuntimeError("tangent direction or handedness bit disagrees with retail convention")
+            checked += 1
+    if not checked:
+        raise RuntimeError("no bump-lit triangles to check")
+
+
 def lit_fixture_checks(bsp):
     """Structural and shadow checks on the lit Titanfall 2 fixture."""
     with bsp.open("rb") as stream:
@@ -194,6 +238,7 @@ def main():
             if not inventory["lumps"][pool]["length"]:
                 raise RuntimeError(f"{game}: expected populated vertex pool {pool}")
         if game != "apexlegends":
+            tangent_checks(bsp)
             records = load_records(bsp, inventory)
             if not records[92][0][4] or records[92][1][4] or not records[92][1][9]:
                 raise RuntimeError("fixture must contain a sloped brush followed by an axial brush")

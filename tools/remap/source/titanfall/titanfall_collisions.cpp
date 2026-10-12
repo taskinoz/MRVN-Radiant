@@ -64,6 +64,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     // Sky-only or patch-only worlds have no ordinary grid-brush bounds.
     if (gridBrushes.empty())
         gridSize.extend(Vector3(0, 0, 0));
+    // Other models may already have emitted brushes; only index our own.
+    const std::size_t firstBrush = Titanfall::Bsp::cmBrushes.size();
     for( brush_t *brush : gridBrushes )
         Titanfall::EmitBrush( *brush );
 
@@ -120,8 +122,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
             cell.start = Titanfall::Bsp::cmGeoSets.size();
 
             // Check brushes
-            for (uint32_t index = 0; index < Titanfall::Bsp::cmBrushes.size(); index++) {
-                Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(index);
+            for (std::size_t index = 0; index < gridBrushes.size(); index++) {
+                Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(firstBrush + index);
 
                 MinMax brushMinmax;
                 brushMinmax.mins = brush.origin - brush.extents;
@@ -156,7 +158,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     cell.start = Titanfall::Bsp::cmGeoSets.size();
 
     for( std::size_t i = 0; i < modelBrushes.size(); i++ ) {
-        Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(gridBrushes.size() + i);
+        Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(firstBrush + gridBrushes.size() + i);
 
         MinMax brushMinmax;
         brushMinmax.mins = brush.origin - brush.extents;

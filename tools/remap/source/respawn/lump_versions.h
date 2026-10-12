@@ -14,7 +14,7 @@ constexpr std::uint32_t generatedLumpVersion(std::uint32_t bspVersion, std::size
     case 0x01: // planes
     case 0x02: // texture data
     case 0x24: // leaf water data
-    case 0x44: // triangle collision bounds
+    case 0x44: // triangle collision nodes
     case 0x45: // triangle collision headers
     case 0x48: // lit flat vertices
     case 0x49: // lit bump vertices

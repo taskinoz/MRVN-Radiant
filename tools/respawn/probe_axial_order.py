@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GPL-2.0-or-later. Usage: probe_axial_order.py MAP.bsp [...]
+# GPL-2.0-or-later. Usage: probe_axial_order.py MAP.bsp
 """Score candidate axial brush-side orders against a retail rBSP v29/v37 map."""
 import os, struct, sys
 path = sys.argv[1]  # adjacent .bsp_lump sidecars override embedded lumps

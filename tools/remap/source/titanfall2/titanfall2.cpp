@@ -204,7 +204,9 @@ void CompileR2BSPFile() {
             Shared::MakeMeshes(entity);
             Shared::MakeVisReferences();
 
+            const std::size_t firstMesh = Titanfall::Bsp::meshes.size();
             Titanfall::EmitMeshes(entity);
+            Titanfall2::CheckWorldIndexBudget(firstMesh);
 
             Titanfall::EmitCollisionGrid(entity);
 
@@ -253,6 +255,29 @@ void CompileR2BSPFile() {
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall2::EmitStubs();
     Titanfall::EmitStubs();
+}
+
+
+/*
+   CheckWorldIndexBudget()
+   Warns when the world model may exceed the retail engine's index capacity
+*/
+void Titanfall2::CheckWorldIndexBudget(std::size_t firstMesh) {
+    // The retail engine compares world indices against 0x300000. Odd triangle
+    // counts are padded to pairs; this per-mesh estimate is inherited research,
+    // see docs/RESPAWN_GRAVEMIND.md and tools/respawn/audit_tf2_budget.py.
+    constexpr std::uint64_t capacity = 0x300000;
+    std::uint64_t padded = 0;
+    for (std::size_t i = firstMesh; i < Titanfall::Bsp::meshes.size(); i++) {
+        const std::uint64_t triangles = Titanfall::Bsp::meshes[i].triCount;
+        padded += 3 * (triangles + (triangles & 1));
+    }
+
+    Sys_Printf("%9llu estimated padded world indices (%.2f%% of retail capacity)\n",
+               (unsigned long long)padded, 100.0 * padded / capacity);
+    if (padded > capacity)
+        Sys_FPrintf(SYS_WRN, "WARNING: World model exceeds the retail Titanfall 2 index capacity of %llu\n",
+                    (unsigned long long)capacity);
 }
 
 

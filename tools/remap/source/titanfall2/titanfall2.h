@@ -48,6 +48,7 @@ namespace Titanfall2 {
     void SetUpGameLump();
     void EmitStaticProp(entity_t &e);
     void EmitLevelInfo();
+    void CheckWorldIndexBudget(std::size_t firstMesh);
 
     void EmitEntity(const entity_t &e);
     void EmitStubs();

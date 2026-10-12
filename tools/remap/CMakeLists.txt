@@ -79,8 +79,9 @@ add_executable(remap
                source/prtfile.cpp
                source/remap.h
                source/respawn/bsp_reader.h
-                source/respawn/lump_versions.h
-                source/respawn/encoding.h
+               source/respawn/lump_versions.h
+               source/respawn/encoding.h
+               source/respawn/lightmap.h
                source/shaders.cpp
                source/shaders.h
                source/surface_extra.cpp

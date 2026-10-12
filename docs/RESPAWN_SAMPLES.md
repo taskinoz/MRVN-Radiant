@@ -113,3 +113,22 @@ Qt5, so a full editor build still needs Qt6 as described by the CI setup.
 The compiler-only build uses `-DBUILD_RADIANT=OFF -DBUILD_PLUGINS=OFF
 -DBUILD_TOOLS=ON`. Its successful build emits existing legacy warnings; this work
 does not assert a warning-free build.
+
+## Collision brush axial side order (2026-10-12)
+
+`tools/respawn/probe_axial_order.py` checks the six axial brush-side slots that
+come before each brush's cutting planes. A slot flagged `0x4000` (replaced by a
+non-axial side) should lie on the side its cutting planes face. If a discarded
+slot's cuts all point the same way along its axis, that slot shows which sign
+comes first:
+
+| Sample | Unambiguous slots: +X first | Unambiguous slots: −X first |
+| --- | ---: | ---: |
+| TF2 `mp_glitch` | 0 | 24 |
+| TF1 `mp_angel_city` | 98 | 1,758 |
+
+Texture vectors confirm that slots pair by axis (X, X, Y, Y, Z, Z), not by sign
+(bsp_tool's `+XYZ -XYZ` decompile order). The emitter therefore writes
+−X, +X, −Y, +Y, −Z, +Z. An earlier change to +X first was reverted. Coliseum has
+no discarded slots and cannot tell the orders apart. This test uses flag
+placement only. It does not show how the runtime uses each slot.

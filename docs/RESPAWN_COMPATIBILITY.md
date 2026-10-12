@@ -58,7 +58,7 @@ runtime geometry test, not complete map compatibility.
   tangent-space unlit pool. All three emitters now write mesh bounding radii.
 - R1/R2 collision emission initializes missing axial faces, preserves the side
   prefix for boxes following sloped brushes, and writes axial texture references
-  in +X/-X/+Y/-Y/+Z/-Z order. Unrepresentable brush/side indices fail explicitly.
+  in -X/+X/-Y/+Y/-Z/+Z order. Unrepresentable brush/side indices fail explicitly.
 - R1/R2 triangle emission uses the full vertex-pool offset before calculating
   material-sort-relative indices, avoiding an intermediate 16-bit truncation.
 - R1/R2/R5 texture emission compares whole NUL-terminated names at each texture

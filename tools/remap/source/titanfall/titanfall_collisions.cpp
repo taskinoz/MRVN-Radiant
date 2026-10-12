@@ -294,15 +294,17 @@ void Titanfall::EmitBrush(brush_t &brush) {
         cuttingSides.emplace_back(side);
     }
 
-    // +X -X +Y -Y +Z -Z
+    // -X +X -Y +Y -Z +Z
+    // Retail Glitch/Angel City brushes discard axial slots on the side their
+    // cutting planes face; that only agrees with negative-first ordering.
     // Sloped brushes can have missing axial faces; these must have null shaders.
     side_t sortedAxialSides[6]{};
-    sortedAxialSides[0].plane=Plane3(+1, 0, 0, 0);
-    sortedAxialSides[1].plane=Plane3(-1, 0, 0, 0);
-    sortedAxialSides[2].plane=Plane3(0, +1, 0, 0);
-    sortedAxialSides[3].plane=Plane3(0, -1, 0, 0);
-    sortedAxialSides[4].plane=Plane3(0, 0, +1, 0);
-    sortedAxialSides[5].plane=Plane3(0, 0, -1, 0);
+    sortedAxialSides[0].plane=Plane3(-1, 0, 0, 0);
+    sortedAxialSides[1].plane=Plane3(+1, 0, 0, 0);
+    sortedAxialSides[2].plane=Plane3(0, -1, 0, 0);
+    sortedAxialSides[3].plane=Plane3(0, +1, 0, 0);
+    sortedAxialSides[4].plane=Plane3(0, 0, -1, 0);
+    sortedAxialSides[5].plane=Plane3(0, 0, +1, 0);
     // The bsp brushes are AABBs + cutting planes
     // Surface flags are indexed first for AABB ( first 6 planes ) then for the rest
     // Radiant brushes are made purely of planes so we dont have a guarantee that we'll get the
@@ -311,21 +313,21 @@ void Titanfall::EmitBrush(brush_t &brush) {
         Vector3 normal = side.plane.normal();
         SnapNormal(normal);
 
-        if (normal[0] == 1.0f) {
+        if (normal[0] == -1.0f) {
             sortedAxialSides[0] = side;
-        } else if (normal[0] == -1.0f) {
+        } else if (normal[0] == 1.0f) {
             sortedAxialSides[1] = side;
         }
 
-        if (normal[1] == 1.0f) {
+        if (normal[1] == -1.0f) {
             sortedAxialSides[2] = side;
-        } else if (normal[1] == -1.0f) {
+        } else if (normal[1] == 1.0f) {
             sortedAxialSides[3] = side;
         }
 
-        if (normal[2] == 1.0f) {
+        if (normal[2] == -1.0f) {
             sortedAxialSides[4] = side;
-        } else if (normal[2] == -1.0f) {
+        } else if (normal[2] == 1.0f) {
             sortedAxialSides[5] = side;
         }
     }

@@ -94,7 +94,7 @@ def main():
             records = load_records(bsp, inventory)
             if not records[92][0][4] or records[92][1][4] or not records[92][1][9]:
                 raise RuntimeError("fixture must contain a sloped brush followed by an axial brush")
-            # The box order is +X, -X, +Y, -Y, +Z, -Z.
+            # The box order is -X, +X, -Y, +Y, -Z, +Z (checked against retail maps).
             # Texture strings provide an independent check on axial surface identity.
             directory = inventory["lumps"]
             with bsp.open("rb") as stream:
@@ -108,7 +108,7 @@ def main():
                 texture = records[2][prop[0] & 0x1ff]
                 offset = table[texture[3]]
                 materials.append(names[offset:names.index(b"\0", offset)].decode())
-            expected = ["ts", "bump", "flat", "unlit", "bump", "flat"]
+            expected = ["bump", "ts", "unlit", "flat", "flat", "bump"]
             if materials != ["compat\\" + v for v in expected]:
                 raise RuntimeError(f"axial material order incorrect: {materials}")
             for (_, count, word), bound in zip(records[87], records[88]):

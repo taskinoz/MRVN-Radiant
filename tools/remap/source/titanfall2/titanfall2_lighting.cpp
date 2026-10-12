@@ -304,11 +304,34 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     Titanfall2::Bsp::lightmapRtlPages = std::move(result.rtlPages);
     Titanfall2::Bsp::lightingBaked = true;
 
+    // Character light probes over the lit geometry, found through a KD tree.
+    V3 lo{1e30, 1e30, 1e30}, hi{-1e30, -1e30, -1e30};
+    for (const Respawn::Bake::Chart &chart : Titanfall::Bsp::lightmapCharts)
+        for (const V3 &p : chart.positions) {
+            lo = Respawn::Bake::vmin(lo, p);
+            hi = Respawn::Bake::vmax(hi, p);
+        }
+    std::vector<V3> probePoints;
+    try {
+        probePoints = Respawn::Bake::probePositions(occluders, lo, hi);
+        Titanfall2::Bsp::lightprobes = Respawn::Bake::bakeProbes(probePoints, Titanfall2::Bsp::bakeLights,
+                                                                  Titanfall2::Bsp::ambient, occluders, options);
+    } catch (const std::exception &error) {
+        Error("Light probe bake failed: %s", error.what());
+    }
+    Respawn::Bake::ProbeTree tree = Respawn::Bake::buildProbeTree(probePoints);
+    Titanfall2::Bsp::lightprobeTree = std::move(tree.nodes);
+    Titanfall2::Bsp::lightprobeReferences = std::move(tree.references);
+    Titanfall2::Bsp::lightprobeParentInfos.push_back({0, 0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobes.size()),
+                                                      0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeReferences.size()),
+                                                      0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
+
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     Sys_Printf("%9zu world lights (%d hardware)\n", Titanfall2::Bsp::worldLights.size(), hardware);
     Sys_Printf("%9zu occluding brushes\n", occluders.size());
     Sys_Printf("%9zu lightmap pages, %zu charts\n", pages.size(), Titanfall::Bsp::lightmapCharts.size());
     Sys_Printf("%9zu lit texels, %zu with realtime lights, %zu RTL pages\n", result.chartedTexels,
                result.realtimeTexels, Titanfall2::Bsp::lightmapRtlPages.size());
+    Sys_Printf("%9zu light probes, %zu tree nodes\n", Titanfall2::Bsp::lightprobes.size(), Titanfall2::Bsp::lightprobeTree.size());
     Sys_Printf("%9.1f seconds baking\n", seconds);
 }

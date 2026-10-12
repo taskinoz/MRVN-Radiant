@@ -12,6 +12,13 @@
  *   RTL  C  half-resolution plane, embedded payloads only (written as zero)
  * RTL pages are 63 int16 hardware-light indices. Hardware indices count world
  * lights excluding ambient (type 5) records.
+ *
+ * Character light probes (0x65) are 48 bytes: sixteen int16 values in 1/8192
+ * units (directional ambient x,y,z,w for each of R,G,B; sky vector xyz; sun
+ * visibility), four 0-255 local-light weights, four int16 hardware-light
+ * indices (-1 unused; the loader adds its dynamic-light offset) and a zero word.
+ * Probes are found through a KD tree (0x67) over references (0x68). Layout from
+ * apex-to-titanfall-2's engine analysis, value ranges checked against retail.
  */
 #pragma once
 
@@ -231,6 +238,34 @@ public:
     bool empty() const { return m_brushes.empty(); }
     V3 mins() const { return m_nodes.empty() ? V3{} : m_nodes[0].mins; }
     V3 maxs() const { return m_nodes.empty() ? V3{} : m_nodes[0].maxs; }
+
+    // True when the point lies strictly inside any brush.
+    bool inside(V3 point) const {
+        if (m_nodes.empty()) return false;
+        int stack[128];
+        int top = 0;
+        stack[top++] = 0;
+        while (top) {
+            const Node& node = m_nodes[stack[--top]];
+            if (point.x < node.mins.x || point.y < node.mins.y || point.z < node.mins.z ||
+                point.x > node.maxs.x || point.y > node.maxs.y || point.z > node.maxs.z)
+                continue;
+            if (node.left < 0) {
+                for (int i = node.first; i < node.first + node.count; ++i) {
+                    bool within = true;
+                    for (const auto& p : m_brushes[m_order[i]].planes)
+                        if (p[0] * point.x + p[1] * point.y + p[2] * point.z - p[3] > -1e-3) { within = false; break; }
+                    if (within) return true;
+                }
+            } else if (top + 2 <= 128) {
+                stack[top++] = node.left;
+                stack[top++] = node.right;
+            } else {
+                throw std::runtime_error("Occluder hierarchy is too deep");
+            }
+        }
+        return false;
+    }
 
     bool blocked(V3 a, V3 b) const {
         if (m_nodes.empty()) return false;
@@ -636,6 +671,172 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     result.chartedTexels = charted;
     result.realtimeTexels = realtime;
     return result;
+}
+
+/* ---------------------------------------------------------------------------
+   Character light probes
+--------------------------------------------------------------------------- */
+struct Probe {
+    std::array<std::int16_t, 16> values{};
+    std::array<std::uint8_t, 4> weights{};
+    std::array<std::int16_t, 4> lights{-1, -1, -1, -1};
+    std::uint32_t unused = 0;
+};
+static_assert(sizeof(Probe) == 48, "Light probes are 48 bytes");
+
+struct ProbeReference {
+    float x, y, z;
+    std::uint32_t probe;
+    std::int32_t unused;
+};
+static_assert(sizeof(ProbeReference) == 20, "Light probe references are 20 bytes");
+
+struct ProbeTree {
+    std::vector<std::array<std::uint32_t, 2>> nodes;  // internal: {child << 2 | axis, cut}; leaf: {first << 2 | 3, count}
+    std::vector<ProbeReference> references;
+};
+
+/*
+    Probe positions on a grid over the lit geometry's bounds, skipping points
+    inside brushes. Spacing grows until the count fits under `maxProbes`.
+*/
+inline std::vector<V3> probePositions(const Occluders& occluders, V3 lo, V3 hi, double spacing = 256,
+                                      double verticalSpacing = 128, std::size_t maxProbes = 65536) {
+    if (!(hi.x >= lo.x && hi.y >= lo.y && hi.z >= lo.z)) return {};
+    lo = lo + V3{0, 0, 32};
+    hi = hi + V3{0, 0, 128};
+    auto count = [&](double s, double vs) {
+        return (std::floor((hi.x - lo.x) / s) + 1) * (std::floor((hi.y - lo.y) / s) + 1) *
+               (std::floor(std::max(0.0, hi.z - lo.z) / vs) + 1);
+    };
+    while (count(spacing, verticalSpacing) > double(maxProbes)) {
+        spacing *= 1.25;
+        verticalSpacing *= 1.25;
+    }
+    std::vector<V3> points;
+    for (double z = lo.z; z <= hi.z; z += verticalSpacing)
+        for (double y = lo.y; y <= hi.y; y += spacing)
+            for (double x = lo.x; x <= hi.x; x += spacing)
+                if (!occluders.inside({x, y, z})) points.push_back({x, y, z});
+    return points;
+}
+
+inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::vector<Light>& lights, V3 ambient,
+                                     const Occluders& occluders, const Options& options = {}) {
+    V3 lo = occluders.empty() ? V3{} : occluders.mins(), hi = occluders.empty() ? V3{} : occluders.maxs();
+    for (const V3& p : points) { lo = vmin(lo, p); hi = vmax(hi, p); }
+    const double far = length(hi - lo) * 2 + 1024;
+    // Upper-hemisphere sky directions (golden-angle spiral, cosine weighted).
+    std::vector<V3> sky;
+    for (int k = 0; k < 64; ++k) {
+        const double z = std::sqrt((k + 0.5) / 64), r = std::sqrt(1 - z * z), a = k * 2.39996323;
+        sky.push_back({r * std::cos(a), r * std::sin(a), z});
+    }
+    const V3 jitter[4] = {{6, 0, 0}, {-6, 0, 0}, {0, 6, 0}, {0, -6, 0}};
+    // Fraction of four jittered rays that reach `to` (a point, or a direction when `directional`).
+    auto visibility = [&](V3 p, V3 to, bool directional) {
+        int open = 0;
+        for (const V3& j : jitter)
+            if (!occluders.blocked(p + j, directional ? p + j + to : to)) ++open;
+        return open / 4.0;
+    };
+    const Light* sun = nullptr;
+    for (const Light& light : lights)
+        if (light.type == LightType::Sun && light.realtime) { sun = &light; break; }
+
+    std::vector<Probe> probes(points.size());
+    detail::parallelFor(points.size(), options.threads, [&](std::size_t i) {
+        const V3 p = points[i];
+        double visible = 0;
+        V3 bent{};
+        for (const V3& d : sky)
+            if (!occluders.blocked(p, p + d * far)) { visible += 1; bent = bent + d; }
+        const double fraction = visible / sky.size();
+        const V3 direction = visible > 0 ? normalize(bent) : V3{};
+        const V3 fill = ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+
+        Probe& probe = probes[i];
+        // Up to four visible realtime local lights, strongest first.
+        struct Pick { double score; int light; double visible; };
+        Pick picks[4] = {{0, -1, 0}, {0, -1, 0}, {0, -1, 0}, {0, -1, 0}};
+        for (std::size_t l = 0; l < lights.size(); ++l) {
+            const Light& light = lights[l];
+            if (!light.realtime || (light.type != LightType::Point && light.type != LightType::Spot)) continue;
+            const V3 toLight = light.origin - p;
+            const double d = length(toLight);
+            if (d >= light.zeroDistance || d < 1) continue;
+            const double score = falloff(light, d) * spotFactor(light, toLight * (-1.0 / d)) *
+                                 std::max({light.intensity.x, light.intensity.y, light.intensity.z});
+            if (!(score > picks[3].score)) continue;
+            const double seen = visibility(p, light.origin, false);
+            if (!(seen > 0)) continue;
+            picks[3] = {score * seen, static_cast<int>(l), seen};
+            std::sort(picks, picks + 4, [](const Pick& a, const Pick& b) { return a.score > b.score; });
+        }
+        for (int k = 0; k < 4; ++k) {
+            if (picks[k].light < 0) continue;
+            probe.weights[k] = static_cast<std::uint8_t>(std::lround(picks[k].visible * 255));
+            probe.lights[k] = static_cast<std::int16_t>(lights[picks[k].light].hardwareIndex);
+        }
+
+        auto fixed = [](double v) {
+            return static_cast<std::int16_t>(std::clamp(std::round(v * 8192), -32768.0, 32767.0));
+        };
+        const double c[3] = {fill.x, fill.y, fill.z};
+        for (int ch = 0; ch < 3; ++ch) {
+            probe.values[ch * 4 + 0] = fixed(c[ch] * 0.35 * direction.x);
+            probe.values[ch * 4 + 1] = fixed(c[ch] * 0.35 * direction.y);
+            probe.values[ch * 4 + 2] = fixed(c[ch] * 0.35 * direction.z);
+            probe.values[ch * 4 + 3] = fixed(c[ch]);
+        }
+        const V3 skyVector = direction * std::cbrt(fraction);
+        probe.values[12] = fixed(skyVector.x);
+        probe.values[13] = fixed(skyVector.y);
+        probe.values[14] = fixed(skyVector.z);
+        probe.values[15] = fixed(sun ? visibility(p, -sun->direction * far, true) : 0.0);
+    });
+    return probes;
+}
+
+// KD tree over probe positions: leaves of at most eight references.
+inline ProbeTree buildProbeTree(const std::vector<V3>& points) {
+    ProbeTree tree;
+    if (points.empty()) return tree;
+    std::vector<std::uint32_t> ids(points.size());
+    for (std::size_t i = 0; i < ids.size(); ++i) ids[i] = static_cast<std::uint32_t>(i);
+    tree.nodes.push_back({0, 0});
+    auto coord = [&](std::uint32_t id, int axis) {
+        return axis == 0 ? points[id].x : axis == 1 ? points[id].y : points[id].z;
+    };
+    std::function<void(std::size_t, std::size_t, std::size_t)> emit = [&](std::size_t node, std::size_t first, std::size_t count) {
+        if (count <= 8) {
+            const auto start = static_cast<std::uint32_t>(tree.references.size());
+            for (std::size_t i = first; i < first + count; ++i) {
+                const V3& p = points[ids[i]];
+                tree.references.push_back({float(p.x), float(p.y), float(p.z), ids[i], 0});
+            }
+            tree.nodes[node] = {(start << 2) | 3u, static_cast<std::uint32_t>(count)};
+            return;
+        }
+        V3 lo{1e300, 1e300, 1e300}, hi{-1e300, -1e300, -1e300};
+        for (std::size_t i = first; i < first + count; ++i) { lo = vmin(lo, points[ids[i]]); hi = vmax(hi, points[ids[i]]); }
+        const V3 extent = hi - lo;
+        const int axis = extent.x >= extent.y && extent.x >= extent.z ? 0 : (extent.y >= extent.z ? 1 : 2);
+        std::stable_sort(ids.begin() + first, ids.begin() + first + count,
+                         [&](std::uint32_t a, std::uint32_t b) { return coord(a, axis) < coord(b, axis); });
+        const std::size_t middle = count / 2;
+        const float cut = static_cast<float>((coord(ids[first + middle - 1], axis) + coord(ids[first + middle], axis)) / 2);
+        std::uint32_t cutBits;
+        std::memcpy(&cutBits, &cut, 4);
+        const auto child = static_cast<std::uint32_t>(tree.nodes.size());
+        tree.nodes.push_back({0, 0});
+        tree.nodes.push_back({0, 0});
+        tree.nodes[node] = {(child << 2) | static_cast<std::uint32_t>(axis), cutBits};
+        emit(child, first, middle);
+        emit(child + 1, first + middle, count - middle);
+    };
+    emit(0, 0, points.size());
+    return tree;
 }
 
 }  // namespace Respawn::Bake

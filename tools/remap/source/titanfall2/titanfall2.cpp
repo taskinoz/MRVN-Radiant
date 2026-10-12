@@ -94,6 +94,8 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_PLANES],            Titanfall::Bsp::planes);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA],      Titanfall::Bsp::textureData);
     AddLump(file, header.lumps[R2_LUMP_VERTICES],          Titanfall::Bsp::vertices);
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_PARENT_INFOS], Titanfall2::Bsp::lightprobeParentInfos);
     AddLump(file, header.lumps[R2_LUMP_MODELS],            Titanfall::Bsp::models);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_NORMALS],    Titanfall::Bsp::vertexNormals);
     AddLump(file, header.lumps[R2_LUMP_ENTITY_PARTITIONS], Titanfall::Bsp::entityPartitions);
@@ -154,6 +156,11 @@ void WriteR2BSPFile(const char *filename) {
     else
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightMapDataSky_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],            Titanfall::Bsp::csmAABBNodes_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBES],           Titanfall2::Bsp::lightprobes);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_TREE],       Titanfall2::Bsp::lightprobeTree);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_REFERENCES], Titanfall2::Bsp::lightprobeReferences);
+    }
     if (Titanfall2::Bsp::lightingBaked)
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS], Titanfall2::Bsp::lightmapDataRtl);
     AddLump(file, header.lumps[R2_LUMP_CELL_BSP_NODES],            Titanfall::Bsp::cellBSPNodes_stub);  // stub

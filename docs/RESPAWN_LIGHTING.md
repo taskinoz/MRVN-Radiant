@@ -2,10 +2,10 @@
 
 For Titanfall 2, `remap` now bakes lightmaps whenever a map places light
 entities (see [Compiler bake](#compiler-bake-titanfall-2)). The output matches the
-retail layout and passes structural checks. It has **not yet been tested in-game**,
-and the SKY A brightness scale is a guess. Maps without lights, and the Titanfall 1
-and Apex writers, still emit placeholder records with atlas index `-1`. None of
-this provides GI, light probes or CSM.
+retail layout and passes structural checks. It also writes character light
+probes. It has **not yet been tested in-game**. Maps without lights, and the
+Titanfall 1 and Apex writers, still emit placeholder records with atlas index
+`-1`. There is no GI or CSM shadow geometry.
 
 ## Attribution
 
@@ -25,6 +25,15 @@ was copied. The existing NetRadiant lighting infrastructure remains credited by
 its original source notices. Local map archives were read through the pinned
 `pg9182/tf2vpk` tool already credited in [RESPAWN_SOURCES.md](RESPAWN_SOURCES.md).
 No retail map assets are added to the repository or distributed in the tools.
+
+The SKY A/B encoding and the light-probe layout follow the
+[apex-to-titanfall-2](https://github.com/taskinoz/apex-to-titanfall-2) converter
+(commit `89fbcaa`): its `LIGHTING.md`, `CHARACTER_LIGHTING.md`,
+`bake_phase_lighting.cpp`, `apply_baked_lighting.py` and
+`build_character_lighting.py`. That project reverse-engineered the shipped world
+pixel shader and the engine's probe loader, and checked its Phase Runner bake in
+the game client. MRVN-Radiant reimplements the documented encodings; no
+converter code is copied, and no retail probe data is reused.
 
 ## Findings checked against local maps
 
@@ -173,12 +182,23 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   flags 28 appear in RTL pages. Lights with flag 4 (`"realtime" "0"` in the
   `.ent`) never do, so they are treated as baked-only.
 - **RTL C:** nearly all zero in retail and written as zero here.
-- **SKY B:** alpha is 255 on every charted retail texel. Decoded RGB is a
-  direction whose mean length is about 0.78, consistent with a weighted average
-  of incoming light directions.
-- **SKY A:** small values, with a decoded p95 of about 0.03–0.07. It is warm
-  under a cool sky ambient, which suggests bounced sunlight rather than plain sky
-  ambient. Its exact meaning is not established.
+- **SKY B:** alpha is 255 on every charted retail texel. The converter's shader
+  analysis identifies RGB as a world-space bent sky vector. The shader applies
+  the ambient world light through it, so the vector's length carries sky
+  visibility. Retail's mean length of about 0.78 is consistent with this.
+- **SKY A:** small values, with a decoded p95 of about 0.03–0.07, warm-tinted
+  under a cool sky ambient. Retail probably includes bounce lighting here. The
+  converter's client-checked bake writes only a small fill.
+- **Tangents:** bump-lit (0x49) and tangent-space unlit (0x4A) vertices store
+  the vertex-normal index of a unit tangent along +dP/du, with the normal
+  removed. Bit 31 is set when cross(normal, tangent) points against +dP/dv. The
+  second word is 0. Coliseum agrees on 100% of checked triangles and Glitch on
+  99.3%.
+- **Light probes:** the layout is given in `lightbake.h`. Retail values are
+  directional ambient with W around 0.004–0.035 (p95 0.13), sun visibility as a
+  0–1 fraction, graded 0–255 weights, and small hardware light indices. The
+  parent record (0x04) is (first probe, probe count, first reference, reference
+  count, tree nodes); Glitch's 16,183 + 32,085 probes match its probe lump size.
 
 ### World lights from `*_env.ent` keys
 
@@ -208,9 +228,19 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    page holding at most 63 lights.
 4. Shadow masks average four sub-texel rays against opaque, non-sky world
    brushes. Sky brushes let sun and sky rays through.
-5. SKY A = sky ambient × cosine-weighted sky visibility (16 rays) × 0.05, plus
-   static (`realtime 0`) lights. SKY B is the weighted incoming direction. The
-   0.05 scale was chosen to match retail magnitudes and needs an in-game check.
+5. SKY B is the bent sky direction × ∛(sky visibility), using 16
+   cosine-weighted rays. SKY A is a fill of ambient × 0.04 × (0.4 + 0.6 ×
+   visibility), plus static (`realtime 0`) lights. That is about 0.03 for a
+   typical ambient, in line with retail and the converter.
+6. Character probes sit on a 256 × 256 × 128 grid over the lit geometry; the
+   spacing grows past 65,536 probes, and points inside brushes are skipped. Each
+   probe gets directional ambient, a bent sky vector, sun visibility from four
+   jittered rays, and up to four visible realtime lights. A KD tree with leaves
+   of at most 8 indexes them; the optional probe BSP accelerator (0x06/0x07) is
+   left empty, since the converter found the engine falls back to the KD tree.
+7. Quake/Valve 220 brush faces (the editor's `quake3` brush type) now get their
+   texture UVs from st vectors. Previously every brush face had zero UVs. Bump
+   and TS-unlit vertices get tangents.
 
 Only the first `light_environment` is baked. Retail menu stages use a second
 environment selected by `light_environment_volume`, which is not implemented.
@@ -221,7 +251,9 @@ environment selected by `light_environment_volume`, which is not implemented.
   order/flags, plane sizes and page binding are correct. The roof's sun shadow
   falls on the correct side and reaches past the roof edge. Realtime point and
   spot lights get slots, the static light lands in SKY A, and the roof reduces
-  sky ambient.
+  sky ambient. Probe lumps are consistent, probes link to the nearby realtime
+  light (never the static one), and probe sun visibility follows the roof.
+  Compiled tangents follow the retail direction and handedness convention.
 - **Quake E1M1** (198 lights): one 1024² page and 8 RTL pages. Bake time is
   about 0.3 s. Mask averages are 224–236. Lit vs unlit agrees with the
   independent Python vertex reference on 82.6% of vertices; that reference used
@@ -230,14 +262,12 @@ environment selected by `light_environment_volume`, which is not implemented.
 
 ## Remaining work
 
-1. Load a baked map in Northstar. Confirm the sun and point-light shadows, then
-   calibrate the SKY A scale and the meaning of SKY B against retail-looking
-   output.
-2. Add indirect (bounce) lighting to SKY A, which retail appears to contain, and
-   tangent-space handling for bump-lit surfaces.
+1. Load a baked map in Northstar. Confirm the sun and point-light shadows,
+   character lighting and the fill brightness.
+2. Add indirect (bounce) lighting to SKY A, which retail appears to contain.
 3. Support `light_environment_volume` for menu stages, and splitting oversized
-   charts.
-4. Generate probes, model/parent links, shadow meshes and CSM structures from
-   authored data, followed by independent validation and Northstar tests.
+   charts. Place probes along walkable surfaces rather than only on a grid.
+4. Emit shadow meshes (0x7C–0x7F) so CSM sun shadows use real geometry, as the
+   converter does, and static-prop probe indices (0x66).
 5. Add separate TF1/Online and Apex season profiles. No cross-game bake equivalence
    is assumed from shared lump numbers.

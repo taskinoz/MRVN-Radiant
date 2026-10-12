@@ -126,6 +126,28 @@ def lit_fixture_checks(bsp):
         normals = list(struct.iter_unpack("<3f", lump(0x1E)))
         bump = list(struct.iter_unpack("<2I2f4B4f2i", lump(0x49)))
         sorts = list(struct.iter_unpack("<4hi", lump(0x52)))
+        parents = list(struct.iter_unpack("<i6I", lump(0x04)))
+        probes = list(struct.iter_unpack("<16h4B4hI", lump(0x65)))
+        tree = list(struct.iter_unpack("<2I", lump(0x67)))
+        references = list(struct.iter_unpack("<3fIi", lump(0x68)))
+    if parents != [(0, 0, len(probes), 0, len(references), 0, len(tree))] or not probes:
+        raise RuntimeError(f"light probe parent info {parents} does not match the probe lumps")
+    if sorted(r[3] for r in references) != list(range(len(probes))):
+        raise RuntimeError("probe references do not cover each probe exactly once")
+    leaves = [n for n in tree if n[0] & 3 == 3]
+    if sum(n[1] for n in leaves) != len(references) or max(n[1] for n in leaves) > 8:
+        raise RuntimeError("probe tree leaves do not partition the references")
+
+    def probe_near(x, y, z):
+        ref = min(references, key=lambda r: (r[0] - x) ** 2 + (r[1] - y) ** 2 + (r[2] - z) ** 2)
+        return probes[ref[3]]
+    # Hardware indices: sun 0, spot 1, realtime point 2, static point 3.
+    if probe_near(256, -256, 64)[16] == 0 or 2 not in probe_near(256, -256, 64)[20:24]:
+        raise RuntimeError("probe beside the realtime point light has no link to it")
+    if probe_near(-300, 0, 64)[15] != 0 or probe_near(400, 0, 64)[15] != 8192:
+        raise RuntimeError("probe sun visibility does not follow the roof")
+    if any(3 in p[20:24] for p in probes):
+        raise RuntimeError("static light was linked from a probe")
     if [(l[13], l[22]) for l in lights] != [(5, 0), (3, 24), (2, 28), (1, 28), (1, 4)]:
         raise RuntimeError(f"world light order/flags: {[(l[13], l[22]) for l in lights]}")
     texels = sum(w * h for _, w, h in headers)

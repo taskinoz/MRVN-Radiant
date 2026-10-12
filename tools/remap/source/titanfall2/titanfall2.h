@@ -88,6 +88,18 @@ namespace Titanfall2 {
     };
     static_assert(sizeof(LightmapHeader_t) == 8, "Lightmap headers are 8 bytes");
 
+    // 0x04: the probes, references and KD-tree nodes of one parent (the world)
+    struct LightprobeParentInfo_t {
+        int32_t   unknown;
+        uint32_t  firstProbe;
+        uint32_t  probeCount;
+        uint32_t  firstReference;
+        uint32_t  referenceCount;
+        uint32_t  firstTreeNode;
+        uint32_t  treeNodeCount;
+    };
+    static_assert(sizeof(LightprobeParentInfo_t) == 28, "Light probe parent infos are 28 bytes");
+
     // 0x23
     // GameLump is the only lump which isn't just a vector
     // The order in which these structs were defined is the order in which both our and the respawn compiler saves them
@@ -144,6 +156,10 @@ namespace Titanfall2 {
         inline std::vector<uint8_t>                  lightmapDataSky;
         inline std::vector<uint8_t>                  lightmapDataRtl;
         inline std::vector<std::array<int16_t, 63>>  lightmapRtlPages;
+        inline std::vector<LightprobeParentInfo_t>   lightprobeParentInfos;
+        inline std::vector<Respawn::Bake::Probe>     lightprobes;
+        inline std::vector<std::array<uint32_t, 2>>  lightprobeTree;
+        inline std::vector<Respawn::Bake::ProbeReference>  lightprobeReferences;
         inline std::vector<Respawn::Bake::Light>     bakeLights;      // parallel to worldLights
         inline Respawn::Bake::V3                     ambient;         // first light_environment
 

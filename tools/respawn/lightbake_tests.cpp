@@ -122,6 +122,51 @@ int main() {
         require(decodeRGBM(centre).x > 0.3, "Static light is baked into SKY A");
         require(rtlWord(s, texel(6, 6)) == RtlUnusedTexel, "Static light takes no RTL slot");
 
+        // Probes: one under the roof, one in the open next to a realtime point light.
+        require(cube.inside({0, 0, 0}) && !cube.inside({0, 0, 20}), "Point-in-brush test");
+        Light lamp2 = point;
+        lamp2.origin = {200, 0, 80};
+        const std::vector<V3> probePoints{{-100, 0, 50}, {150, 0, 50}};
+        const auto probes = bakeProbes(probePoints, {sun, lamp2}, {0.8, 0.8, 0.8}, scene, options);
+        require(probes[0].values[15] == 0 && probes[1].values[15] == 8192, "Probe sun visibility");
+        require(probes[1].values[14] > probes[0].values[14], "Open probe sky vector is longer upwards");
+        require(probes[1].lights[0] == 1 && probes[1].weights[0] == 255 && probes[1].lights[1] == -1, "Probe local light link");
+        require(probes[0].lights[0] == -1, "Out-of-range light is not linked");
+        require(probes[1].values[3] > 0 && probes[1].values[3] < 8192, "Ambient W term in fixed point");
+
+        // KD tree: every probe referenced once, leaves of at most eight, cuts separate children.
+        std::vector<V3> cloud;
+        for (int i = 0; i < 300; ++i)
+            cloud.push_back({double((i * 37) % 101), double((i * 59) % 89), double((i * 13) % 17)});
+        const ProbeTree tree = buildProbeTree(cloud);
+        std::vector<int> seen(cloud.size(), 0);
+        for (const auto& ref : tree.references) seen.at(ref.probe)++;
+        require(std::all_of(seen.begin(), seen.end(), [](int n) { return n == 1; }), "Each probe referenced once");
+        std::function<void(std::uint32_t, std::vector<std::uint32_t>&)> collect = [&](std::uint32_t node, std::vector<std::uint32_t>& out) {
+            const auto& n = tree.nodes.at(node);
+            if ((n[0] & 3) == 3) {
+                require(n[1] >= 1 && n[1] <= 8, "Leaf size");
+                for (std::uint32_t i = 0; i < n[1]; ++i) out.push_back((n[0] >> 2) + i);
+                return;
+            }
+            std::vector<std::uint32_t> left, right;
+            collect(n[0] >> 2, left);
+            collect((n[0] >> 2) + 1, right);
+            float cut;
+            std::memcpy(&cut, &n[1], 4);
+            auto axisOf = [&](std::uint32_t r) {
+                const auto& ref = tree.references[r];
+                return (n[0] & 3) == 0 ? ref.x : (n[0] & 3) == 1 ? ref.y : ref.z;
+            };
+            for (auto r : left) require(axisOf(r) <= cut, "Left subtree lies below the cut");
+            for (auto r : right) require(axisOf(r) >= cut, "Right subtree lies above the cut");
+            out.insert(out.end(), left.begin(), left.end());
+            out.insert(out.end(), right.begin(), right.end());
+        };
+        std::vector<std::uint32_t> all;
+        collect(0, all);
+        require(all.size() == cloud.size(), "Tree covers every reference");
+
         std::cout << "Lightmap bake tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

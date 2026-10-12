@@ -2,6 +2,13 @@
 .settings
 out
 
+# Python format research tools
+__pycache__/
+*.pyc
+
+# Local research tools, game samples and inventories
+/.local/
+
 # Editors
 .vscode
 .vs
@@ -10,6 +17,7 @@ out
 # CMake
 libs/assimp/out
 CMakeFiles
+Testing/
 cmake_install.cmake
 CMakeCache.txt
 Makefile

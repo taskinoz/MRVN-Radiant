@@ -78,6 +78,9 @@ add_executable(remap
                source/portals.cpp
                source/prtfile.cpp
                source/remap.h
+               source/respawn/bsp_reader.h
+                source/respawn/lump_versions.h
+                source/respawn/encoding.h
                source/shaders.cpp
                source/shaders.h
                source/surface_extra.cpp
@@ -122,4 +125,6 @@ target_link_libraries(remap
                       ${LIBXML2_LIBRARIES}
                      )
 
-set_target_properties(remap PROPERTIES LINK_FLAGS "-Wl,-rpath,./")
+if(UNIX)
+    set_target_properties(remap PROPERTIES LINK_FLAGS "-Wl,-rpath,./")
+endif()

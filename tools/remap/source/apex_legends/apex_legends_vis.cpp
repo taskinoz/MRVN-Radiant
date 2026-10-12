@@ -26,6 +26,7 @@
 #include "../model.h"
 #include "../bspfile_abstract.h"
 #include <ctime>
+#include "../respawn/encoding.h"
 
 /*
     EmitVisTree
@@ -63,11 +64,11 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
         m.triCount = mesh.triangles.size() / 3;
 
         int vertexOffset;
-        if (CHECK_FLAG(m.flags, S_VERTEX_LIT_BUMP)) {
+        if ((m.flags & 0x600) == S_VERTEX_LIT_BUMP) {
             vertexOffset = ApexLegends::Bsp::vertexLitBumpVertices.size();
-        } else if (CHECK_FLAG(m.flags, S_VERTEX_UNLIT)) {
+        } else if ((m.flags & 0x600) == S_VERTEX_UNLIT) {
             vertexOffset = ApexLegends::Bsp::vertexUnlitVertices.size();
-        } else if (CHECK_FLAG(m.flags, S_VERTEX_UNLIT_TS)) {
+        } else if ((m.flags & 0x600) == S_VERTEX_UNLIT_TS) {
             vertexOffset = ApexLegends::Bsp::vertexUnlitTSVertices.size();
         } else {
             vertexOffset = ApexLegends::Bsp::vertexUnlitVertices.size();
@@ -89,11 +90,11 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
             // Check against aabb
             aabb.extend(vertex.xyz);
 
-            if (CHECK_FLAG(m.flags, S_VERTEX_LIT_BUMP)) {
+            if ((m.flags & 0x600) == S_VERTEX_LIT_BUMP) {
                 ApexLegends::EmitVertexLitBump(vertex);
-            } else if (CHECK_FLAG(m.flags, S_VERTEX_UNLIT)) {
+            } else if ((m.flags & 0x600) == S_VERTEX_UNLIT) {
                 ApexLegends::EmitVertexUnlit(vertex);
-            } else if (CHECK_FLAG(m.flags, S_VERTEX_UNLIT_TS)) {
+            } else if ((m.flags & 0x600) == S_VERTEX_UNLIT_TS) {
                 ApexLegends::EmitVertexUnlitTS(vertex);
             } else {
                 // There's no way to get here, if future code changes break this exit with an error
@@ -111,6 +112,8 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
         Titanfall::MeshBounds_t &mb = Titanfall::Bsp::meshBounds.emplace_back();
         mb.origin = (aabb.maxs + aabb.mins) / 2;
         mb.extents = (aabb.maxs - aabb.mins) / 2;
+        mb.radius = vector3_length(mb.extents);
+        mb.tanYaw = 0.0f;
     }
 }
 
@@ -120,24 +123,13 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
     Emits texture data and returns its index
 */
 uint32_t ApexLegends::EmitTextureData(shaderInfo_t shader) {
-    std::string  tex = shader.shader.c_str();
+    std::string  tex = Respawn::textureName(shader.shader.c_str());
     std::size_t  index;
 
-    // Strip 'textures/'
-    tex.erase(tex.begin(), tex.begin() + strlen("textures/"));
-    std::replace(tex.begin(), tex.end(), '/', '\\');  // Do we even need to do this?
-
-    // Check if it's already saved
-    std::string table = std::string(Titanfall::Bsp::textureDataData.begin(), Titanfall::Bsp::textureDataData.end());
-    index = table.find(tex);
-    if (index != std::string::npos) {
-        // Is already saved, find the index of its textureData
-        for (std::size_t i = 0; i < ApexLegends::Bsp::textureData.size(); i++) {
-            ApexLegends::TextureData_t &td = ApexLegends::Bsp::textureData.at(i);
-
-            if (td.surfaceIndex == index) {
-                return i;
-            }
+    for (std::size_t i = 0; i < ApexLegends::Bsp::textureData.size(); i++) {
+        const auto &td = ApexLegends::Bsp::textureData[i];
+        if (Respawn::textureNameEquals(Titanfall::Bsp::textureDataData, td.surfaceIndex, tex)) {
+            return i;
         }
     }
 

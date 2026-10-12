@@ -231,8 +231,8 @@ namespace Titanfall {
     struct Mesh_t {
         uint32_t  triOffset;
         uint16_t  triCount;
-        uint16_t  vertexOffset;
-        uint16_t  vertexCount;
+        uint16_t  vertexOffset;  // relative to material-sort vertexOffset
+        uint16_t  vertexCount;   // last local vertex index (inclusive)
         uint8_t   vertexType;
         uint8_t   unused;
         uint32_t  const0;
@@ -246,9 +246,9 @@ namespace Titanfall {
     // 0x51
     struct MeshBounds_t {
         Vector3   origin;
-        uint32_t  unk0;
+        float     radius;
         Vector3   extents;
-        uint32_t  unk1;
+        float     tanYaw;
     };
 
     // 0x52

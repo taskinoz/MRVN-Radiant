@@ -25,32 +25,21 @@
 #include "../model.h"
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
+#include "../respawn/encoding.h"
 
 /*
     EmitTextureData()
     Emits texture data and returns its index
 */
 uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
-    std::string  tex = shader.shader.c_str();
+    std::string  tex = Respawn::textureName(shader.shader.c_str());
     std::size_t  index;
 
-    // Strip 'textures/'
-    tex.erase(tex.begin(), tex.begin() + strlen("textures/"));
-    std::replace(tex.begin(), tex.end(), '/', '\\');  // Do we even need to do this ?
-
-    // Check if it's already saved
-    std::string table = std::string(Titanfall::Bsp::textureDataData.begin(), Titanfall::Bsp::textureDataData.end());
-    index = table.find(tex);
-    if (index != std::string::npos) {
-        // Is already saved, find the index of its textureData
-
-        for (std::size_t i = 0; i < Titanfall::Bsp::textureData.size(); i++) {
-            Titanfall::TextureData_t &td = Titanfall::Bsp::textureData.at(i);
-            uint32_t &tdt = Titanfall::Bsp::textureDataTable.at(td.name_index);
-
-            if (tdt == index) {
-                return i;
-            }
+    for (std::size_t i = 0; i < Titanfall::Bsp::textureData.size(); i++) {
+        const auto &td = Titanfall::Bsp::textureData[i];
+        const auto offset = Titanfall::Bsp::textureDataTable.at(td.name_index);
+        if (Respawn::textureNameEquals(Titanfall::Bsp::textureDataData, offset, tex)) {
+            return i;
         }
     }
 
@@ -401,10 +390,13 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
     // Emit Bsp::meshes
     for (const Shared::Mesh_t &mesh : Shared::meshes) {
+        if (mesh.vertices.empty() || mesh.vertices.size() > 65536 || mesh.triangles.size() / 3 > 65535)
+            Error("Mesh vertex or triangle count exceeds its 16-bit field");
         Titanfall::Mesh_t &m = Titanfall::Bsp::meshes.emplace_back();
         m.const0 = 4294967040;  // :)
         m.flags = mesh.shaderInfo->surfaceFlags;
-        m.vertexCount = mesh.vertices.size();
+        // Engine surface/decal queries iterate through this index inclusively.
+        m.vertexCount = mesh.vertices.size() - 1;
         m.triOffset = Titanfall::Bsp::meshIndices.size();
         m.triCount = mesh.triangles.size() / 3;
 
@@ -424,12 +416,12 @@ void Titanfall::EmitMeshes(const entity_t &e) {
             vertexOffset = Titanfall::Bsp::vertexLitFlatVertices.size();
         }
 
-        m.vertexOffset = vertexOffset;
-
         // Emit texture related structs
         uint32_t  textureIndex = Titanfall::EmitTextureData(*mesh.shaderInfo);
-        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, m.vertexCount);
+        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size());
         int materialSortOffset = Titanfall::Bsp::materialSorts.at(m.materialOffset).vertexOffset;
+        // Both surface queries and triangle indices add the material-sort base.
+        m.vertexOffset = vertexOffset - materialSortOffset;
         MinMax  aabb;
 
         // Save vertices and vertexnormals
@@ -451,13 +443,19 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
         // Save triangles
         for (uint16_t triangle : mesh.triangles) {
-            Titanfall::Bsp::meshIndices.emplace_back(triangle + m.vertexOffset - materialSortOffset);
+            // The pool offset can exceed 16 bits; indices are relative to the sort.
+            const int index = triangle + vertexOffset - materialSortOffset;
+            if (index < 0 || index > 65535)
+                Error("Mesh index exceeds the 16-bit material-sort range");
+            Titanfall::Bsp::meshIndices.emplace_back(index);
         }
 
         // Save MeshBounds
         Titanfall::MeshBounds_t &mb = Titanfall::Bsp::meshBounds.emplace_back();
         mb.origin = (aabb.maxs + aabb.mins) / 2;
         mb.extents = (aabb.maxs - aabb.mins) / 2;
+        mb.radius = vector3_length(mb.extents);
+        mb.tanYaw = 0.0f;
     }
 }
 
@@ -467,16 +465,20 @@ void Titanfall::EmitMeshes(const entity_t &e) {
     Tries to create a material sort of the last texture
 */
 uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count) {
+    if (index > 32767)
+        Error("Material-sort texture index exceeds its signed 16-bit field");
     /* Check if the material sort we need already exists */
     std::size_t pos = 0;
     for (Titanfall::MaterialSort_t &ms : Titanfall::Bsp::materialSorts) {
-        if (ms.textureData == index && offset - ms.vertexOffset + count < 65535) {
+        if (ms.textureData == index && offset >= ms.vertexOffset && offset - ms.vertexOffset + count <= 65536) {
             return pos;
         }
 
         pos++;
     }
 
+    if (pos > 65535)
+        Error("Material-sort index exceeds 16 bits");
     Titanfall::MaterialSort_t &ms = Titanfall::Bsp::materialSorts.emplace_back();
     ms.textureData = index;
     ms.lightmapHeader = -1;

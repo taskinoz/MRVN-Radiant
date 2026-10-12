@@ -30,6 +30,7 @@
 
 /* dependencies */
 #include "remap.h"
+#include "respawn/bsp_reader.h"
 
 
 
@@ -149,10 +150,23 @@ int BSPInfo( Args& args ){
 			fclose( f );
 		}
 
-		/* load the bsp file and print lump sizes */
+		/* Inspect the directory without invoking incomplete geometry decoders. */
 		Sys_Printf( "%s\n", source );
-		LoadBSPFile( source );
-		//PrintBSPFileSizes();
+		try {
+			Respawn::BspReader reader(source);
+			const auto& header = reader.header();
+			Sys_Printf("rBSP %u.%u, revision %u, %s endian\n",
+				header.version & 0xffff, header.version >> 16, header.revision,
+				header.bigEndian ? "big" : "little");
+			for (std::size_t i = 0; i < Respawn::LumpCount; ++i) {
+				const auto& lump = header.lumps[i];
+				if (lump.length)
+					Sys_Printf("  %02zx: offset %u, length %u, version %u, fourCC %u\n",
+						i, lump.offset, lump.length, lump.version, lump.fourCC);
+			}
+		} catch (const std::exception& error) {
+			Error("BSPInfo: %s", error.what());
+		}
 
 		/* print sizes */
 		Sys_Printf( "\n" );

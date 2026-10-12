@@ -16,6 +16,16 @@ MRVN-Radiant is a fork of NetRadiant-custom (GtkRadiant 1.4 &rarr; massive rewri
 - Apex Legends ( [R5Reloaded](https://r5reloaded.com/) )
 
 ## Status
+
+End-to-end game compatibility is not yet verified. The percentages below are
+historical lump-generation counts, not a measure of playable-map compatibility.
+See the [compatibility plan](docs/RESPAWN_COMPATIBILITY.md) for current gaps,
+release gates and the BSP inspection tool, and the
+[source attribution register](docs/RESPAWN_SOURCES.md) for research/tool credits.
+Lighting research, atlas inspection/export, authored-light experiments and the
+offline direct-light baker are documented in [RESPAWN_LIGHTING.md](docs/RESPAWN_LIGHTING.md).
+These tools do not yet provide a verified engine lightmap bake.
+
 | Game | Coverage | Note |
 |------|----------|------|
 | Titanfall Online | 38% | No triangle collision, no lighting, no portals |

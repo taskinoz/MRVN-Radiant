@@ -23,6 +23,7 @@
 
 #include "remap.h"
 #include "bspfile_abstract.h"
+#include "respawn/lightmap.h"
 
 
 /*
@@ -90,7 +91,7 @@ void Shared::MakeMeshes(const entity_t &e) {
                 island.bounds.extend(lightmapUV);
             }
 
-            if ((shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
+            if ((mesh.shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
                 island.mesh = mesh_index;
                 Shared::islands.push_back(island);
             } else {
@@ -136,7 +137,7 @@ void Shared::MakeMeshes(const entity_t &e) {
             island.bounds.extend(lightmapUV);
         }
 
-        if ((shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
+        if ((mesh.shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
             island.mesh = mesh_index;
             Shared::islands.push_back(island);
         } else {
@@ -163,7 +164,7 @@ void Shared::MakeMeshes(const entity_t &e) {
     }
 
     // Recalculate lightmapUVs for all vertices
-    // Shared::MakeLightmapUVs();  /* causes heap corruption */
+    // Shared::MakeLightmapUVs();  // enable after engine atlas emission is implemented
 
     // Combine all meshes based on shaderInfo and AABB tests
     std::size_t index = 0;
@@ -455,78 +456,27 @@ void Shared::MergeVisTree(Shared::visNode_t &node) {
     recalculate lightmap uvs for Shared::meshes
 */
 void Shared::MakeLightmapUVs() {
-    Sys_Printf("%9zu lightmap islands to pack\n", Shared::islands.size());
-    // TODO: some persistent tracking of filled pages so ents won't overlap
-    const int    page_width = 1024;  // pixels
-    const float  page_scale = 1 / page_width;  // pixels -> uv space
-    const float  margin = 16;  // pixels
-
-    int total_texels = 0;
-    // TODO: OPTIMISATION: collect island indices & areas in this loop
-    // -- std::vector<std::pair<int, int>>  sort_keys;  // (island.index, island.area)
-    for (auto &island : Shared::islands) {
-        total_texels += island.bounds.area();  // also a sort key
+    constexpr unsigned pageWidth = 1024;
+    constexpr float pageScale = 1.0f / pageWidth;
+    std::vector<Respawn::LightmapRect> rects;
+    for (const auto& island : Shared::islands)
+        rects.push_back({island.bounds.mins.x(), island.bounds.mins.y(),
+                         island.bounds.maxs.x(), island.bounds.maxs.y()});
+    std::vector<Respawn::LightmapPlacement> placements;
+    try {
+        placements = Respawn::packLightmapRects(rects, pageWidth, pageWidth, 8);
+    } catch (const std::exception& error) {
+        Error("Lightmap packing failed: %s", error.what());
     }
-    int num_full_pages = (total_texels / (page_width * page_width)) + 1;
-    // NOTE: approximate, doesn't account for packing algo effeciency
-
-    // sort islands
-    // TODO: get an even variety of sizes for each full page (multiple bins?)
-    // TODO: sort by height first, width second
-    // TODO: try to keep meshes that can be merged later on the same page
-    std::sort(Shared::islands.begin(), Shared::islands.end(),
-              [](auto a, auto b) { return a.bounds.area() > b.bounds.area(); });
-
-    struct row_t { float top, height, free_width; };
-    std::vector<row_t>  rows;
-    row_t               full_page({0, page_width, page_width});
-    rows.push_back(full_page);
-
-    Vector2  offset;
-    int  current_page = 0;
-    int  island_index = 0;
-    while (current_page <= num_full_pages && island_index < Shared::islands.size()) {
-        // NOTE: we could be getting islands only when we increment, but that's too complicated imo
-        auto   island = Shared::islands.at(island_index);
-        float  island_width  = island.bounds.maxs.x() - island.bounds.mins.x() + margin;
-        float  island_height = island.bounds.maxs.y() - island.bounds.mins.y() + margin;
-        // TODO: if (island_width > page_width || island_height > page_width) { split/shrink island; }
-
-        bool  fits = false;
-        for (auto &row : rows) {
-            if (island_width <= row.free_width && island_height <= row.height) {
-                fits = true;
-                offset = {row.top, page_width - row.height};
-                offset -= island.bounds.mins;
-                if (row.free_width == page_width) {  // first island in row
-                    row_t  new_row;
-                    new_row.top = row.top + island_height;
-                    new_row.height = row.height - island_height;
-                    new_row.free_width = page_width;
-                    if (new_row.height > 0) { rows.push_back(new_row); }
-                    row.height = island_height;
-                }
-                row.free_width -= island_width;
-                break;
-            }
-        }
-
-        if (!fits) {  // move onto the next page
-            current_page++;
-            rows.clear();
-            rows.push_back(full_page);
-        } else {  // update mesh
-            auto mesh = Shared::meshes.at(island.mesh);
-            mesh.lightmapPage = current_page;
-            for (auto &sv : mesh.vertices) {
-                sv.lightmapUV += offset;
-                sv.lightmapUV *= page_scale;
-            }
-            island_index++;
-        }
+    for (std::size_t i = 0; i < placements.size(); ++i) {
+        const auto& placement = placements[i];
+        auto& mesh = Shared::meshes.at(Shared::islands[i].mesh);
+        mesh.lightmapPage = placement.page;
+        const Vector2 offset(static_cast<float>(placement.offsetX),
+                             static_cast<float>(placement.offsetY));
+        for (auto& vertex : mesh.vertices)
+            vertex.lightmapUV = (vertex.lightmapUV + offset) * pageScale;
     }
-
-    // TODO: leftovers
-    Sys_Printf("%d lightmap pages used\n", current_page + 1);
-    Sys_Printf("%9zu lightmap islands leftover\n", Shared::islands.size() - island_index);
+    Sys_Printf("%9zu lightmap islands packed, %u pages used\n", placements.size(),
+               placements.empty() ? 0u : placements.back().page + 1);
 }

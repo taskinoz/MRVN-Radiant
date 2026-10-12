@@ -24,6 +24,7 @@
 
 /* dependencies */
 #include "../bspfile_abstract.h"
+#include "../respawn/lump_versions.h"
 #include <algorithm>
 #include <ctime>
 
@@ -165,6 +166,10 @@ void WriteR1BSPFile(const char *filename) {
     Sys_Printf("Wrote %.1f MB (%d bytes)\n", (float)size / (1024 * 1024), size);
 
     /* write the completed header */
+    for (std::size_t index = 0; index < 128; ++index) {
+        if (header.lumps[index].length)
+            header.lumps[index].lumpVer = LittleLong(Respawn::generatedLumpVersion(29, index));
+    }
     fseek(file, 0, SEEK_SET);
     SafeWrite(file, &header, sizeof(header));
 

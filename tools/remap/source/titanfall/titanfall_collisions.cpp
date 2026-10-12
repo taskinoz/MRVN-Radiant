@@ -24,6 +24,7 @@
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
+#include "../respawn/encoding.h"
 
 /*
     EmitCollisionGrid()
@@ -60,6 +61,9 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     //Sys_Warning( "Model brushes: %li\n", modelBrushes.size() );
 
     // Emit grid brushes
+    // Sky-only or patch-only worlds have no ordinary grid-brush bounds.
+    if (gridBrushes.empty())
+        gridSize.extend(Vector3(0, 0, 0));
     for( brush_t *brush : gridBrushes )
         Titanfall::EmitBrush( *brush );
 
@@ -110,6 +114,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
             //            cellMinmax.mins.x(), cellMinmax.mins.y(), cellMinmax.mins.z(),
             //            cellMinmax.maxs.x(), cellMinmax.maxs.y(), cellMinmax.maxs.z());
 
+            if (Titanfall::Bsp::cmGeoSets.size() > 65535)
+                Error("Collision grid-cell start exceeds 16 bits");
             Titanfall::CMGridCell_t &cell = Titanfall::Bsp::cmGridCells.emplace_back();
             cell.start = Titanfall::Bsp::cmGeoSets.size();
 
@@ -129,6 +135,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
                 Titanfall::EmitGeoSet(brushMinmax, brush.index, gridBrushes.at(index)->contentFlags);
             }
 
+            if (Titanfall::Bsp::cmGeoSets.size() - cell.start > 65535)
+                Error("Collision grid-cell count exceeds 16 bits");
             cell.count = Titanfall::Bsp::cmGeoSets.size() - cell.start;
         }
     }
@@ -142,6 +150,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     for( brush_t *brush : modelBrushes )
         Titanfall::EmitBrush( *brush );
 
+    if (Titanfall::Bsp::cmGeoSets.size() > 65535)
+        Error("Collision model-cell start exceeds 16 bits");
     Titanfall::CMGridCell_t &cell = Titanfall::Bsp::cmGridCells.emplace_back();
     cell.start = Titanfall::Bsp::cmGeoSets.size();
 
@@ -159,6 +169,8 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     numPrimitives = Titanfall::Bsp::cmPrimitives.size() - numPrimitives;
     Sys_FPrintf( SYS_VRB, "       Worldspawn model has %li GeoSets and %li Primitives\n", numGeoSets, numPrimitives );
 
+    if (Titanfall::Bsp::cmGeoSets.size() - cell.start > 65535)
+        Error("Collision model-cell count exceeds 16 bits");
     cell.count = Titanfall::Bsp::cmGeoSets.size() - cell.start;
 }
 
@@ -172,6 +184,8 @@ void Titanfall::EmitModelGridCell( entity_t &e ) {
     for( brush_t &brush : e.brushes )
         Titanfall::EmitBrush( brush );
 
+    if (Titanfall::Bsp::cmGeoSets.size() > 65535)
+        Error("Collision model-cell start exceeds 16 bits");
     Titanfall::CMGridCell_t &cell = Titanfall::Bsp::cmGridCells.emplace_back();
     cell.start = Titanfall::Bsp::cmGeoSets.size();
 
@@ -188,6 +202,8 @@ void Titanfall::EmitModelGridCell( entity_t &e ) {
         i++;
     }
 
+    if (Titanfall::Bsp::cmGeoSets.size() - cell.start > 65535)
+        Error("Collision model-cell count exceeds 16 bits");
     cell.count = Titanfall::Bsp::cmGeoSets.size() - cell.start;
 }
 
@@ -196,6 +212,8 @@ void Titanfall::EmitModelGridCell( entity_t &e ) {
     Emits a geo set into bsp
 */
 void Titanfall::EmitGeoSet(MinMax minmax, int index, int flags) {
+    if (index < 0 || index > 65535)
+        Error("Collision shape index exceeds 16 bits");
     Titanfall::CMGeoSet_t &set = Titanfall::Bsp::cmGeoSets.emplace_back();
     set.straddleGroup = 0;
     set.primitiveCount = 1;
@@ -204,9 +222,15 @@ void Titanfall::EmitGeoSet(MinMax minmax, int index, int flags) {
 
     Titanfall::CMBound_t &bound = Titanfall::Bsp::cmGeoSetBounds.emplace_back();
     bound.unknown1 = 128;
-    bound.origin = minmax.origin();
-    // The + 1.0f fixes the infinitely falling in one place while touching a floor bug
-    bound.extents = Vector3(minmax.extents().x() + 2.0f, minmax.extents().y() + 2.0f, minmax.extents().z() + 2.0f);
+    try {
+        for (int axis = 0; axis < 3; ++axis) {
+            const auto encoded = Respawn::quantizeBoundsAxis(minmax.mins[axis], minmax.maxs[axis]);
+            bound.origin[axis] = encoded.origin;
+            bound.extents[axis] = encoded.extent;
+        }
+    } catch (const std::exception &error) {
+        Error("%s", error.what());
+    }
 }
 
 /*
@@ -223,6 +247,8 @@ void Titanfall::EmitBrush(brush_t &brush) {
     }
 
 
+    if (Titanfall::Bsp::cmBrushes.size() > 65535)
+        Error("Collision brush index exceeds 16 bits");
     Titanfall::CMBrush_t &b = Titanfall::Bsp::cmBrushes.emplace_back();
 
     b.extents = brush.minmax.extents();
@@ -230,6 +256,9 @@ void Titanfall::EmitBrush(brush_t &brush) {
     b.index = Titanfall::Bsp::cmBrushes.size() - 1;
     b.planeCount = 0;
     b.unknown = 0;
+    // All brushes need this prefix, including boxes after non-axial brushes.
+    // It also locates the side properties at 6 * brush.index + sidePlaneIndex.
+    b.sidePlaneIndex = Titanfall::Bsp::cmBrushSidePlaneOffsets.size();
 
     std::vector<side_t>  axialSides;
     std::vector<side_t>  cuttingSides;
@@ -247,7 +276,8 @@ void Titanfall::EmitBrush(brush_t &brush) {
     }
 
     // +X -X +Y -Y +Z -Z
-    side_t sortedAxialSides[6];
+    // Sloped brushes can have missing axial faces; these must have null shaders.
+    side_t sortedAxialSides[6]{};
     sortedAxialSides[0].plane=Plane3(+1, 0, 0, 0);
     sortedAxialSides[1].plane=Plane3(-1, 0, 0, 0);
     sortedAxialSides[2].plane=Plane3(0, +1, 0, 0);
@@ -263,32 +293,32 @@ void Titanfall::EmitBrush(brush_t &brush) {
         SnapNormal(normal);
 
         if (normal[0] == 1.0f) {
-            sortedAxialSides[1] = const_cast<side_t&>(side);
+            sortedAxialSides[0] = side;
         } else if (normal[0] == -1.0f) {
-            sortedAxialSides[0] = const_cast<side_t&>(side);
+            sortedAxialSides[1] = side;
         }
 
         if (normal[1] == 1.0f) {
-            sortedAxialSides[3] = const_cast<side_t&>(side);
+            sortedAxialSides[2] = side;
         } else if (normal[1] == -1.0f) {
-            sortedAxialSides[2] = const_cast<side_t&>(side);
+            sortedAxialSides[3] = side;
         }
 
         if (normal[2] == 1.0f) {
-            sortedAxialSides[5] = const_cast<side_t&>(side);
+            sortedAxialSides[4] = side;
         } else if (normal[2] == -1.0f) {
-            sortedAxialSides[4] = const_cast<side_t&>(side);
+            sortedAxialSides[5] = side;
         }
     }
 
-    int test = 0;
     for (int i = 0; i < 6; i++) {
         side_t side = sortedAxialSides[i];
         if (side.shaderInfo != nullptr) {
-            // Titanfall::Bsp::cmBrushSideProperties.emplace_back(Titanfall::EmitTextureData(*side.shaderInfo));
-            Titanfall::Bsp::cmBrushSideProperties.emplace_back(0);
+            const uint32_t texture = Titanfall::EmitTextureData(*side.shaderInfo);
+            if (texture > 0x1ff)
+                Error("Collision side texture index exceeds its 9-bit field");
+            Titanfall::Bsp::cmBrushSideProperties.emplace_back(texture);
         } else {
-            test++;
             Titanfall::Bsp::cmBrushSideProperties.emplace_back(MASK_DISCARD);
             // TODO: ensure BrushSideProperty indexes tools/toolsnodraw
             // -- either always emit nodraw as the first TextureData, or EmitTextureData here & now
@@ -312,8 +342,13 @@ void Titanfall::EmitBrush(brush_t &brush) {
         }
 
         Titanfall::EmitPlane(side.plane);
+        if (b.planeCount == 255)
+            Error("Collision brush has more than 255 non-axial sides");
         b.planeCount++;
-        Titanfall::Bsp::cmBrushSideProperties.emplace_back(Titanfall::EmitTextureData(*side.shaderInfo));
+        const uint32_t texture = Titanfall::EmitTextureData(*side.shaderInfo);
+        if (texture > 0x1ff)
+            Error("Collision side texture index exceeds its 9-bit field");
+        Titanfall::Bsp::cmBrushSideProperties.emplace_back(texture);
 
         uint16_t &so = Titanfall::Bsp::cmBrushSidePlaneOffsets.emplace_back();
         so = 0;
@@ -342,6 +377,8 @@ int Titanfall::EmitUniqueContents(int flags) {
             return i;
     }
 
+    if (Titanfall::Bsp::cmUniqueContents.size() >= 256)
+        Error("Collision contents index exceeds 8 bits");
     Titanfall::Bsp::cmUniqueContents.emplace_back( flags );
 
     return Titanfall::Bsp::cmUniqueContents.size() - 1;

@@ -1,0 +1,24 @@
+name: Respawn format inventory tests
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  inventory:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python -m unittest discover -s tools/respawn -p "test_*.py" -v
+  native-reader:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: cmake -S tools/respawn -B build-respawn
+      - run: cmake --build build-respawn --config Release
+      - run: ctest --test-dir build-respawn -C Release --output-on-failure

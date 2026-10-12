@@ -39,6 +39,12 @@ license, supported asset types and game builds must be recorded at integration.
 | [vpk_qt — Mauler125 and contributors](https://github.com/Mauler125/vpk_qt) | Apex VPK tooling reference |
 | [r5vpk — r-ex contributors](https://github.com/r-ex/r5vpk) | Apex VPK tooling reference |
 | [RePak — r-ex contributors](https://github.com/r-ex/RePak) | RPak compilation; commit `adc52f7` (MIT) builds the Quake test material pak, unmodified apart from a local include-path quoting fix in its project file |
+| [ABStream — RoyalBlue1](https://github.com/RoyalBlue1/ABStream) | STBSP renderer and creator; candidate for real texture-streaming columns (no licence file) |
+| [LightMapExtractor — RoyalBlue1](https://github.com/RoyalBlue1/LightMapExtractor) | Titanfall 2 lightmap and realtime-lightmap extraction (MIT); cross-check for baked SKY/RTL planes |
+| [BSPTricollMeshExport — RoyalBlue1](https://github.com/RoyalBlue1/BSPTricollMeshExport) | Triangle-collision mesh export; reference for unimplemented tricoll emission (no licence file) |
+| [SERE](https://github.com/RoyalBlue1/SERE) / [RuiTemplate — RoyalBlue1](https://github.com/RoyalBlue1/RuiTemplate) | RUI element editor (AGPL-3.0) and RUI library template; loading screens and map UI |
+| [Modelshop — IJARika](https://github.com/IJARika/Modelshop) | Respawn MDL/RMDL parsing and extraction; static-prop import research |
+| [r5sdk](https://github.com/Mauler125/r5sdk) / [Apex-Material-Converter — Mauler125](https://github.com/Mauler125/Apex-Material-Converter) | Apex engine SDK and material shader-data conversion between engine versions |
 | [LibreQuake — LibreQuake contributors](https://github.com/lavenderdotpet/LibreQuake) | BSD-3-Clause textures (commit `4d2da52`) for the Quake test mod; licence shipped as `LICENSE-textures.txt` |
 | [apex-to-titanfall-2 — taskinoz](https://github.com/taskinoz/apex-to-titanfall-2) | Material template, STBSP and probe/shader research reimplemented in `rpak.py`, `stbsp.py` and `lightbake.h` |
 | [bsp_tool — snake-biscuits and contributors](https://github.com/snake-biscuits/bsp_tool) | BSP schema and analysis research |

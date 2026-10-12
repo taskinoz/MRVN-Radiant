@@ -106,6 +106,35 @@ Run from the repository root, choosing a new output directory each time:
 python tools/respawn/build_northstar_test_mod.py --map .local/respawn/map-trials/e1m1-tf2/e1m1.map --copying .local/respawn/map-trials/e1m1-tf2/COPYING --remap install/Release/remap.exe --tf2vpk .local/respawn/tf2vpk.exe --output .local/respawn/northstar-e1m1
 ```
 
+### Textures, lights and sun (0.3.0)
+
+With `--materials`, each Quake texture keeps its own material instead of the
+two Coliseum stand-ins. Build the materials first:
+
+```powershell
+python tools/respawn/build_quake_materials.py --map .local/respawn/map-trials/e1m1-tf2/e1m1.map --textures <LibreQuake>/texture-wads --template-pak <decompressed mp_coliseum.rpak> --repak <RePak build> --license <LibreQuake>/docs/COPYING --output .local/respawn/quake-materials
+python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/quake-materials --sun --output .local/respawn/northstar-e1m1-0.3.0
+```
+
+- **Texture source:** LibreQuake (BSD-3-Clause), since id's textures are not used.
+  Each name is resolved as an exact match, LibreQuake's renamed form
+  (`+` becomes `plus_`, `*` becomes `star_`, optional `_fbr`), or a recorded
+  same-family substitute. For E1M1 that is 21 exact, 5 renamed and 38
+  substitutes; `materials.json` lists every choice and its source file.
+- **Materials:** each clones Coliseum's `world/concrete/concrete_plates_plain_wet_bm`
+  (shader set, uber buffer, depth passes, colpass), with a mipped sRGB albedo and
+  flat normal/gloss/spec maps.
+- **Build:** RePak is built from r-ex/RePak `adc52f7`, the same commit the
+  apex-to-titanfall-2 converter uses. The September 2022 `RePak.exe` release
+  does not support this material JSON. The template pak is a copy of the game's
+  `mp_coliseum.rpak`, decompressed with `rpak_ddecomp`.
+- **Packaging:** the RPak is loaded through `Postload` after the aliased
+  Coliseum pak. A v8.0 STBSP lists every drawn material.
+- **Tools and sky:** `CLIP`, `TRIGGER` and `SKY*` become tool shaders.
+- **Lights:** light entities are now kept (they were previously dropped), so
+  remap bakes them. `--sun` adds a `light_environment`.
+- **Baked maps:** placeholder-lighting removal is skipped for maps remap baked.
+
 The output includes the mod, ZIP, adapted source, compiler log, BSP validation,
 member SHA-256 hashes and independent VPK CRC/readback verification. Dependencies
 and game assets stay outside the distributable mod. The included adapted MAP and

@@ -15,6 +15,7 @@ import subprocess
 import zipfile
 
 from pack_vpk import pack_files
+import stbsp
 from validate_records import validate
 
 LEVEL = "mp_quake_e1m1"
@@ -23,9 +24,13 @@ MATERIAL = "world/concrete/concrete_plates_plain_wet_bm"
 WALL_MATERIAL = "world/boomtown/boomtown_wall_gapconcrete_01"
 
 
-def adapt_map(text, stats=None):
-    """Handle original line-oriented Quake MAP syntax, rejecting other syntax."""
-    depth, brushes, current, spawns, keys = 0, [], [], [], {}
+def adapt_map(text, stats=None, materials=None, sun=False):
+    """Handle original line-oriented Quake MAP syntax, rejecting other syntax.
+
+    With `materials` (build_quake_materials textures entries) each face keeps
+    its own converted material; otherwise floors and walls get two Coliseum
+    materials. Light entities pass through so remap can bake them."""
+    depth, brushes, current, spawns, keys, lights = 0, [], [], [], {}, []
     entity_brushes, discarded = [], {}
     liquid = False
     for line in text.splitlines():
@@ -56,6 +61,8 @@ def adapt_map(text, stats=None):
                         discarded[reason] = discarded.get(reason, 0) + 1
                 if classname in ("info_player_start", "info_player_deathmatch"):
                     spawns.append((keys["origin"], keys.get("angle", "0")))
+                if classname.startswith("light") and "origin" in keys:
+                    lights.append(dict(keys))
             depth -= 1
             if depth < 0:
                 raise ValueError("unbalanced MAP braces")
@@ -73,7 +80,10 @@ def adapt_map(text, stats=None):
             a = [points[0][i] - points[1][i] for i in range(3)]
             b = [points[2][i] - points[1][i] for i in range(3)]
             normal_z = a[0] * b[1] - a[1] * b[0]
-            material = MATERIAL if normal_z > 0 else WALL_MATERIAL
+            if materials is not None:
+                material = (materials.get(match[2]) or {}).get("shader") or WALL_MATERIAL
+            else:
+                material = MATERIAL if normal_z > 0 else WALL_MATERIAL
             current.append(f"{match[1]} {material} {match[3]}")
         else:
             raise ValueError("content outside entity")
@@ -84,6 +94,13 @@ def adapt_map(text, stats=None):
     # Door openings remain open; trigger/liquid volumes never become solid.
     output = '{\n"classname" "worldspawn"\n'
     output += "\n".join(brushes) + "\n}\n"
+    for light in lights:
+        output += "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in light.items()) + "}\n"
+    if sun:
+        output += ('{\n"classname" "light_environment"\n"origin" "0 0 0"\n"pitch" "-60"\n'
+                   '"angles" "60 45 0"\n"_light" "255 240 220 500"\n"_ambient" "150 170 255 80"\n}\n')
+    if stats is not None:
+        stats["light_entities"] = len(lights) + int(sun)
     for origin, yaw in spawns:
         for team in (2, 3):
             for suffix in ("", "_start"):
@@ -99,6 +116,33 @@ def adapt_map(text, stats=None):
                    f'"script_name" "{name}"\n"origin" "{origin}"\n'
                    f'"angles" "0 {yaw} 0"\n"scale" "1"\n}}\n')
     return output, len(brushes), len(spawns) * 4
+
+
+def bsp_lumps(path, *indices):
+    data = path.read_bytes()
+    out = []
+    for index in indices:
+        offset, length, _, _ = struct.unpack_from("<4I", data, 16 + index * 16)
+        out.append(data[offset:offset + length])
+    return out
+
+
+def bsp_material_names(path):
+    """Material names in TEXTURE_DATA, with forward slashes."""
+    textures, strings, table = bsp_lumps(path, 0x02, 0x2B, 0x2C)
+    offsets = [v[0] for v in struct.iter_unpack("<I", table)]
+    names = set()
+    for record in struct.iter_unpack("<3f6i", textures):
+        start = offsets[record[3]]
+        names.add(strings[start:strings.index(0, start)].decode("ascii").replace("\\", "/"))
+    return sorted(names)
+
+
+def bsp_bounds(path):
+    (vertices,) = bsp_lumps(path, 0x03)
+    xs = [v[0] for v in struct.iter_unpack("<3f", vertices)]
+    ys = [v[1] for v in struct.iter_unpack("<3f", vertices)]
+    return (min(xs), min(ys)), (max(xs), max(ys))
 
 
 def remove_foreign_lighting(path):
@@ -128,19 +172,30 @@ def main():
     parser.add_argument("--remap", required=True, type=Path)
     parser.add_argument("--tf2vpk", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--materials", type=Path,
+                        help="build_quake_materials output; keeps each Quake texture as its own material")
+    parser.add_argument("--sun", action="store_true", help="add a light_environment (sun and sky ambient)")
     args = parser.parse_args()
+    materials = None
+    if args.materials:
+        materials = json.loads((args.materials / "materials.json").read_text(encoding="utf-8"))
     original = args.map.read_text(encoding="ascii")
     license_bytes = args.copying.read_bytes()
     conversion = {}
-    geometry, brush_count, spawn_count = adapt_map(original, conversion)
+    geometry, brush_count, spawn_count = adapt_map(
+        original, conversion, materials["textures"] if materials else None, args.sun)
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     work = root / "compile"
     shaders = work / "assets/shaders"
     shaders.mkdir(parents=True)
+    shader_bodies = {name: "$shadertype LitBumpGeneric" for name in (MATERIAL, WALL_MATERIAL)}
+    if materials:
+        shader_bodies.update(json.loads((args.materials / "shaders.json").read_text(encoding="utf-8")))
+        # Texture images give remap the dimensions it needs for UV scale.
+        shutil.copytree(args.materials / "images/textures", work / "assets/textures")
     (shaders / "test.shader").write_text("\n".join(
-        f"textures/{name}\n{{\n $shadertype LitBumpGeneric\n}}\n"
-        for name in (MATERIAL, WALL_MATERIAL)), encoding="ascii")
+        f"textures/{name}\n{{\n {body}\n}}\n" for name, body in shader_bodies.items()), encoding="ascii")
     source = work / (LEVEL + ".map")
     source.write_text(geometry, encoding="ascii")
     with (root / "build.log").open("wb") as log:
@@ -155,8 +210,8 @@ def main():
     mod = root / MOD
     mod.mkdir()
     (mod / "mod.json").write_text(json.dumps({
-        "Name": MOD, "Description": "Experimental E1M1 compiler geometry test; load mp_quake_e1m1 locally.",
-        "Version": "0.2.1", "LoadPriority": 100, "RequiredOnClient": True,
+        "Name": MOD, "Description": "Experimental E1M1 compiler test with baked lighting and LibreQuake textures; load mp_quake_e1m1 locally.",
+        "Version": "0.3.0", "LoadPriority": 100, "RequiredOnClient": True,
         "Scripts": [{"Path": f"mp/levels/{LEVEL}.nut",
                      "RunOn": f"SERVER && MP && MAP_{LEVEL}"}],
     }, indent=2) + "\n")
@@ -170,11 +225,31 @@ def main():
     cfg.parent.mkdir(parents=True)
     cfg.write_text('sv_cheats 1\nmp_gamemode tdm\nmap mp_quake_e1m1\n')
     (mod / "paks").mkdir()
-    (mod / "paks/rpak.json").write_text(json.dumps({"Aliases": {
+    pak_config = {"Aliases": {
         f"{LEVEL}.rpak": "mp_coliseum.rpak",
         f"{LEVEL}_loadscreen.rpak": "mp_coliseum_loadscreen.rpak",
-    }}, indent=2) + "\n")
+    }}
     files = {f"maps/{bsp.name}": bsp.read_bytes()}
+    if materials:
+        pak = Path(materials["pak"])
+        shutil.copyfile(pak, mod / "paks" / pak.name)
+        # Loaded after the aliased Coliseum pak, whose shaders and depth passes it uses.
+        pak_config["Postload"] = {pak.name: "mp_coliseum.rpak"}
+        catalogue = work / f"{LEVEL}.stbsp"
+        names = bsp_material_names(bsp)
+        guids = {name: int(guid, 16) for name, guid in materials["materials"].items()}
+        mins, maxs = bsp_bounds(bsp)
+        stbsp.write(catalogue, [(n, guids[n]) for n in names if n in guids], mins, maxs)
+        if len(stbsp.read(catalogue)["materials"]) != sum(n in guids for n in names):
+            raise ValueError("STBSP round trip lost materials")
+        files[f"maps/{catalogue.name}"] = catalogue.read_bytes()
+        conversion["textures"] = materials["counts"]
+        conversion["stbsp_materials"] = sum(n in guids for n in names)
+        licence = args.materials / "LICENSE-textures.txt"
+        if licence.exists():
+            shutil.copyfile(licence, mod / "LICENSE-textures.txt")
+        shutil.copyfile(args.materials / "materials.json", mod / "materials.json")
+    (mod / "paks/rpak.json").write_text(json.dumps(pak_config, indent=2) + "\n")
     for partition in ("env", "fx", "script", "snd", "spawn"):
         path = work / f"{LEVEL}_{partition}.ent"
         files[f"maps/{path.name}"] = path.read_bytes() if path.exists() else b"ENTITIES01\n\x00"
@@ -209,7 +284,8 @@ def main():
         shutil.copyfile(Path(__file__).with_name(name), source_bundle / name)
     shutil.copyfile(shaders / "test.shader", source_bundle / "test.shader")
     report.update({"brushes_adapted": brush_count, "pilot_spawn_entities": spawn_count,
-                   "conversion": conversion, "baked_lighting": False,
+                   "conversion": conversion,
+                   "baked_lighting": not conversion["removed_placeholder_lighting_bytes"],
                    "level": LEVEL, "ingame_tested": False,
                    "vpk_round_trip": "all members byte-identical via pg9182/tf2vpk",
                    "files": {p: {"bytes": len(b), "sha256": hashlib.sha256(b).hexdigest()}

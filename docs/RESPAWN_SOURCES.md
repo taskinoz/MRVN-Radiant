@@ -38,7 +38,9 @@ license, supported asset types and game builds must be recorded at integration.
 | [TFVPKTool — barnabwhy and contributors](https://github.com/barnabwhy/TFVPKTool) | TypeScript VPK implementation reference |
 | [vpk_qt — Mauler125 and contributors](https://github.com/Mauler125/vpk_qt) | Apex VPK tooling reference |
 | [r5vpk — r-ex contributors](https://github.com/r-ex/r5vpk) | Apex VPK tooling reference |
-| [RePak — r-ex contributors](https://github.com/r-ex/RePak) | RPAK compilation and streaming asset packaging candidate |
+| [RePak — r-ex contributors](https://github.com/r-ex/RePak) | RPak compilation; commit `adc52f7` (MIT) builds the Quake test material pak, unmodified apart from a local include-path quoting fix in its project file |
+| [LibreQuake — LibreQuake contributors](https://github.com/lavenderdotpet/LibreQuake) | BSD-3-Clause textures (commit `4d2da52`) for the Quake test mod; licence shipped as `LICENSE-textures.txt` |
+| [apex-to-titanfall-2 — taskinoz](https://github.com/taskinoz/apex-to-titanfall-2) | Material template, STBSP and probe/shader research reimplemented in `rpak.py`, `stbsp.py` and `lightbake.h` |
 | [bsp_tool — snake-biscuits and contributors](https://github.com/snake-biscuits/bsp_tool) | BSP schema and analysis research |
 | [breki — snake-biscuits and contributors](https://github.com/snake-biscuits/breki) | Map reverse engineering research |
 | [bsp_regen — snake-biscuits and contributors](https://github.com/snake-biscuits/bsp_regen) | Titanfall map conversion research |

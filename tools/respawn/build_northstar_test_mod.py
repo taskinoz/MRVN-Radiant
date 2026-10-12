@@ -102,10 +102,15 @@ def adapt_map(text, stats=None):
 
 
 def remove_foreign_lighting(path):
-    """Remove hard-coded unrelated-map world lights/CSM; no bake is claimed."""
+    """Remove hard-coded unrelated-map world lights/CSM; no bake is claimed.
+
+    Maps baked by remap (they carry RTL data, lump 0x69) keep their lights:
+    their lightmaps and probes reference those world lights."""
     data = bytearray(path.read_bytes())
     if data[:8] != b"rBSP%\0\0\0":
         raise ValueError("expected Titanfall 2 v37 BSP")
+    if struct.unpack_from("<4I", data, 16 + 0x69 * 16)[1]:
+        return {}
     removed = {}
     for index in (54, 99, 100):
         header = 16 + index * 16

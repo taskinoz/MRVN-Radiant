@@ -212,6 +212,12 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   giving `(cos p cos y, cos p sin y, sin p)`. Spot `stopdot`/`stopdot2` are the
   cosines of `_inner_cone`/`_cone`.
 - **Order:** ambient (5), suns (3), spots (2), points (1).
+- **Brightness in practice:** Glitch's short-range realtime points use
+  `_light "255 175 94 5100"`, which gives intensity 20 over 150 units. Quake-style
+  `"light" "200"` keys are therefore scaled by 10, giving about 7.8. A worldspawn
+  `_lightscale` key multiplies every point and spot light. The first in-game E1M1
+  test, with unscaled Quake lights at about 0.8, rendered correctly but looked
+  flat.
 - **`_pbr_falloff 1`:** these lights store intensity ×100000. They are not
   modelled; such lights are treated as `_pbr_falloff 0`.
 

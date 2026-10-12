@@ -81,7 +81,10 @@ V3 QuakeColour(const entity_t &e, double brightness) {
             colour = {std::pow(c[0] * scale, 2.2), std::pow(c[1] * scale, 2.2), std::pow(c[2] * scale, 2.2)};
         }
     }
-    return colour * (brightness / 255.0);
+    // Quake brightness (~200) is far below retail realtime lights, whose
+    // "_light" brightness reaches thousands (Glitch: 5100 -> intensity 20).
+    constexpr double QuakeScale = 10.0;
+    return colour * (brightness / 255.0 * QuakeScale);
 }
 
 /*
@@ -238,8 +241,16 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         auto rank = [](LightType t) { return t == LightType::Ambient ? 0 : t == LightType::Sun ? 1 : t == LightType::Spot ? 2 : 3; };
         return rank(a.light.type) < rank(b.light.type);
     });
+    // Worldspawn "_lightscale" scales every point and spot light.
+    const double lightScale = HasKey(world, "_lightscale") ? DoubleForKey(world, "_lightscale", 1) : 1.0;
+    if (lightScale != 1.0)
+        Sys_Printf("%9.2f light scale\n", lightScale);
     int hardware = 0;
     for (PendingLight &pending : pendingLights) {
+        if (pending.light.type == LightType::Point || pending.light.type == LightType::Spot) {
+            pending.light.intensity = pending.light.intensity * lightScale;
+            pending.record.intensity = Vector3(pending.light.intensity.x, pending.light.intensity.y, pending.light.intensity.z);
+        }
         if (pending.light.type != LightType::Ambient)
             pending.light.hardwareIndex = hardware++;
         Titanfall2::Bsp::worldLights.push_back(pending.record);

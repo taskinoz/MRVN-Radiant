@@ -250,8 +250,25 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    texture UVs from st vectors. Previously every brush face had zero UVs. Bump
    and TS-unlit vertices get tangents.
 
-Only the first `light_environment` is baked. Retail menu stages use a second
-environment selected by `light_environment_volume`, which is not implemented.
+**Light environments and the menu stage.** Surfaces bake against environment 0.
+How the menu stage is lit:
+- **Environment index:** `light_environment` entities carry
+  `"lightEnvironmentIndex" "*N"`.
+- **Stage probes:** a `light_environment_volume` (convex
+  `*trigger_brush_B_plane_P` planes relative to its origin) that contains
+  `info_target_clientside` menu anchors gets a probe grid around them
+  (±128 × ±128, 0–192, 64-unit spacing). Those probes use that environment's sun
+  and ambient plus nearby realtime lights.
+- **Coliseum's rig:** this mirrors retail Coliseum. Its stage probes see the menu
+  sun and link several menu spotlights at weight 255.
+- **Spotlight flags:** realtime lights with `"shadow" "0"` get flag 56 and those
+  with `"realtime_shadows" "2"` get flag 104, as in retail. They are linked from
+  probes but take no RTL slots, since only flags 28 and 24 appear in retail RTL
+  pages.
+- **PBR lights:** `_pbr_falloff 1` records store intensity ×100000.
+- **Entity routing:** Titanfall 2 entities now go through `Titanfall2::EmitEntity`,
+  which writes lights and environments to `_env.ent`, as retail does. Previously
+  they all went into the BSP entity lump through the Titanfall 1 router.
 
 ### Verification so far
 

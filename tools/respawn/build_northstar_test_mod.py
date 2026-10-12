@@ -19,12 +19,64 @@ import stbsp
 from validate_records import validate
 
 LEVEL = "mp_quake_e1m1"
+MENU_SCENE = (8192.0, 8192.0, 0.0)
+# Retail Coliseum's menu_scene_ref; its menu rig is laid out around this point
+# with the same anchor orientation as ours (scene yaw -90, camera 256 units -Y).
+COLISEUM_MENU_SCENE = (-11776.0, 11856.0, 12736.0)
+MENU_RIG_KEYS_DROPPED = ("link_guid", "link_to_guid_0", "framerate")
+
+
+def box_volume(half):
+    keys = {}
+    for i, (normal, d) in enumerate((("-1 0 0", half), ("1 0 0", half), ("0 -1 0", half),
+                                     ("0 1 0", half), ("0 0 -1", half), ("0 0 1", half))):
+        keys[f"*trigger_brush_0_plane_{i}"] = f"{normal} {d}"
+    keys["*trigger_bounds_mins"] = f"{-half} {-half} {-half}"
+    keys["*trigger_bounds_maxs"] = f"{half} {half} {half}"
+    return keys
+
+
+def menu_rig(env_text=None):
+    """Lighting for the pilot/Titan menu stage at MENU_SCENE: light environment 1,
+    its light_environment_volume and spotlights. With a retail Coliseum _env.ent,
+    its menu rig is translated onto MENU_SCENE; otherwise a small authored rig."""
+    def at(x, y, z):
+        return f"{MENU_SCENE[0] + x:g} {MENU_SCENE[1] + y:g} {MENU_SCENE[2] + z:g}"
+    if env_text is None:
+        return [
+            {"classname": "light_environment", "lightEnvironmentIndex": "*1", "origin": at(0, 0, 256),
+             "pitch": "-51", "angles": "51 122 0", "_light": "255 255 255 765", "_ambient": "255 255 255 51",
+             "targetname": "light_environment_1"},
+            {"classname": "light_environment_volume", "lightEnvironmentIndex": "*1", "origin": at(0, 0, 0),
+             **box_volume(3072)},
+            # Key light from the camera's left, rim light from behind the stage.
+            {"classname": "light_spot", "origin": at(-140, -220, 200), "pitch": "-35", "angles": "35 58 0",
+             "_light": "255 236 214 255", "_zero_percent_distance": "500", "_fifty_percent_distance": "350",
+             "_cone": "50", "_inner_cone": "30", "realtime": "1", "shadow": "0"},
+            {"classname": "light_spot", "origin": at(60, 220, 180), "pitch": "-30", "angles": "30 -105 0",
+             "_light": "160 210 255 200", "_zero_percent_distance": "450", "_fifty_percent_distance": "300",
+             "_cone": "45", "_inner_cone": "25", "realtime": "1", "shadow": "0"},
+        ]
+    offset = [MENU_SCENE[i] - COLISEUM_MENU_SCENE[i] for i in range(3)]
+    rig = []
+    for block in re.findall(r"\{[^{}]*\}", env_text):
+        keys = dict(re.findall(r'"([^"]+)" "([^"]*)"', block))
+        origin = [float(v) for v in keys.get("origin", "0 0 0").split()]
+        near = all(abs(origin[i] - COLISEUM_MENU_SCENE[i]) < 4096 for i in range(3))
+        if not near or not keys.get("classname", "").startswith("light"):
+            continue
+        keys = {k: v for k, v in keys.items() if k not in MENU_RIG_KEYS_DROPPED}
+        keys["origin"] = " ".join(f"{origin[i] + offset[i]:g}" for i in range(3))
+        rig.append(keys)
+    if not any(k.get("classname") == "light_environment_volume" for k in rig):
+        raise ValueError("menu rig source has no light_environment_volume near Coliseum's menu stage")
+    return rig
 MOD = "MRVN.QuakeE1M1Test"
 MATERIAL = "world/concrete/concrete_plates_plain_wet_bm"
 WALL_MATERIAL = "world/boomtown/boomtown_wall_gapconcrete_01"
 
 
-def adapt_map(text, stats=None, materials=None, sun=False):
+def adapt_map(text, stats=None, materials=None, sun=False, menu=None):
     """Handle original line-oriented Quake MAP syntax, rejecting other syntax.
 
     With `materials` (build_quake_materials textures entries) each face keeps
@@ -97,10 +149,14 @@ def adapt_map(text, stats=None, materials=None, sun=False):
     for light in lights:
         output += "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in light.items()) + "}\n"
     if sun:
-        output += ('{\n"classname" "light_environment"\n"origin" "0 0 0"\n"pitch" "-60"\n'
-                   '"angles" "60 45 0"\n"_light" "255 240 220 500"\n"_ambient" "150 170 255 80"\n}\n')
+        output += ('{\n"classname" "light_environment"\n"lightEnvironmentIndex" "*0"\n"origin" "0 0 0"\n'
+                   '"pitch" "-60"\n"angles" "60 45 0"\n"_light" "255 240 220 500"\n'
+                   '"_ambient" "150 170 255 80"\n"targetname" "light_environment_1"\n}\n')
+    for keys in menu or []:
+        output += "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in keys.items()) + "}\n"
     if stats is not None:
         stats["light_entities"] = len(lights) + int(sun)
+        stats["menu_rig_entities"] = len(menu or [])
     for origin, yaw in spawns:
         for team in (2, 3):
             for suffix in ("", "_start"):
@@ -110,8 +166,9 @@ def adapt_map(text, stats=None, materials=None, sun=False):
                            '"gamemode_tdm" "1"\n}\n')
     # Client menu scenes instantiate their own environment model. Keep the
     # anchors remote from gameplay, rather than showing that model in corridors.
-    for name, origin, yaw in (("menu_scene_ref", "8192 8192 0", -90),
-                              ("menu_camera_target", "8192 7936 40", 90)):
+    for name, origin, yaw in (("menu_scene_ref", "{:g} {:g} {:g}".format(*MENU_SCENE), -90),
+                              ("menu_camera_target", "{:g} {:g} {:g}".format(
+                                  MENU_SCENE[0], MENU_SCENE[1] - 256, MENU_SCENE[2] + 40), 90)):
         output += ('{\n"classname" "info_target_clientside"\n'
                    f'"script_name" "{name}"\n"origin" "{origin}"\n'
                    f'"angles" "0 {yaw} 0"\n"scale" "1"\n}}\n')
@@ -175,6 +232,9 @@ def main():
     parser.add_argument("--materials", type=Path,
                         help="build_quake_materials output; keeps each Quake texture as its own material")
     parser.add_argument("--sun", action="store_true", help="add a light_environment (sun and sky ambient)")
+    parser.add_argument("--menu-rig", type=Path,
+                        help="retail mp_coliseum_env.ent whose menu-stage lights are moved to this map's menu stage; "
+                             "without it a small authored rig is used")
     args = parser.parse_args()
     materials = None
     if args.materials:
@@ -182,8 +242,10 @@ def main():
     original = args.map.read_text(encoding="ascii")
     license_bytes = args.copying.read_bytes()
     conversion = {}
+    menu = menu_rig(args.menu_rig.read_text(encoding="latin-1") if args.menu_rig else None)
     geometry, brush_count, spawn_count = adapt_map(
-        original, conversion, materials["textures"] if materials else None, args.sun)
+        original, conversion, materials["textures"] if materials else None, args.sun, menu)
+    conversion["menu_rig"] = str(args.menu_rig) if args.menu_rig else "authored"
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     work = root / "compile"

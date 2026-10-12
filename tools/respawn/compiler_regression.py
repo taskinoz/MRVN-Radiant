@@ -64,6 +64,15 @@ LIT_FIXTURE = (
              _light="255 255 255 400", _distance="400", _cone="45", _inner_cone="20")
     + entity(classname="light", origin="256 -256 64", _light="255 200 150 200", _distance="256")
     + entity(classname="light", origin="-256 0 64", _light="255 255 255 255", _distance="256", realtime="0")
+    # Menu stage: environment 1 inside its volume, with a stage spotlight.
+    + entity(classname="light_environment", lightEnvironmentIndex="*1", origin="5000 0 300", pitch="-50",
+             angles="50 120 0", _light="255 255 255 765", _ambient="255 255 255 51")
+    + entity(classname="light_environment_volume", lightEnvironmentIndex="*1", origin="5000 0 0",
+             **{f"*trigger_brush_0_plane_{i}": f"{n} 1024" for i, n in enumerate(
+                 ("-1 0 0", "1 0 0", "0 -1 0", "0 1 0", "0 0 -1", "0 0 1"))})
+    + entity(classname="light_spot", origin="5000 -200 200", pitch="-40", angles="40 90 0",
+             _light="255 255 255 255", _distance="500", _cone="50", shadow="0")
+    + entity(classname="info_target_clientside", script_name="menu_scene_ref", origin="5000 0 0", angles="0 -90 0")
 )
 
 
@@ -141,14 +150,19 @@ def lit_fixture_checks(bsp):
     def probe_near(x, y, z):
         ref = min(references, key=lambda r: (r[0] - x) ** 2 + (r[1] - y) ** 2 + (r[2] - z) ** 2)
         return probes[ref[3]]
-    # Hardware indices: sun 0, spot 1, realtime point 2, static point 3.
-    if probe_near(256, -256, 64)[16] == 0 or 2 not in probe_near(256, -256, 64)[20:24]:
+    # Hardware indices: sun 0, menu sun 1, spot 2, menu spot 3, realtime point 4, static point 5.
+    stage = probe_near(5000, 0, 64)
+    if stage[15] != 8192 or 3 not in stage[20:24]:
+        raise RuntimeError(f"menu-stage probe lacks its environment's sun or spotlight: {stage}")
+    if probe_near(256, -256, 64)[16] == 0 or 4 not in probe_near(256, -256, 64)[20:24]:
         raise RuntimeError("probe beside the realtime point light has no link to it")
     if probe_near(-300, 0, 64)[15] != 0 or probe_near(400, 0, 64)[15] != 8192:
         raise RuntimeError("probe sun visibility does not follow the roof")
-    if any(3 in p[20:24] for p in probes):
+    if any(5 in p[20:24] for p in probes):
         raise RuntimeError("static light was linked from a probe")
-    if [(l[13], l[22]) for l in lights] != [(5, 0), (3, 24), (2, 28), (1, 28), (1, 4)]:
+    if any(i in (1, 3) for page in pages for i in page):
+        raise RuntimeError("menu-stage lights entered the gameplay RTL pages")
+    if [(l[13], l[22]) for l in lights] != [(5, 0), (5, 0), (3, 24), (3, 24), (2, 28), (2, 56), (1, 28), (1, 4)]:
         raise RuntimeError(f"world light order/flags: {[(l[13], l[22]) for l in lights]}")
     texels = sum(w * h for _, w, h in headers)
     if len(sky) != texels * 8 or len(rtl) != texels * 9 or len(headers) != 1:
@@ -184,15 +198,15 @@ def lit_fixture_checks(bsp):
         r, g, b, a = sky[texel(x, y) * 4: texel(x, y) * 4 + 4]
         return r / 255 * (a / 255 * 3.984375 + 0.015625)
 
-    # Hardware indices: sun 0, spot 1, realtime point 2, static point 3.
+    # Hardware indices: sun 0, menu sun 1, spot 2, menu spot 3, realtime point 4, static point 5.
     for x, expected in ((-256, 0), (64, 0), (256, 255), (448, 255)):
         if realtime(x, 0).get(0) != expected:
             raise RuntimeError(f"sun mask at x={x}: {realtime(x, 0)} (expected {expected})")
-    if realtime(256, -256).get(2) != 255:
+    if realtime(256, -256).get(4) != 255:
         raise RuntimeError(f"realtime point light missing below it: {realtime(256, -256)}")
-    if realtime(0, 384).get(1) is None:
+    if realtime(0, 384).get(2) is None:
         raise RuntimeError(f"spotlight missing below it: {realtime(0, 384)}")
-    if any(3 in realtime(x, 0) for x in (-256, -128)):
+    if any(5 in realtime(x, 0) for x in (-256, -128)):
         raise RuntimeError("static light was given an RTL slot")
     if not sky_a(-256, 0) > sky_a(-256, -448) + 0.05:
         raise RuntimeError(f"static light not baked into SKY A: {sky_a(-256, 0)} vs {sky_a(-256, -448)}")

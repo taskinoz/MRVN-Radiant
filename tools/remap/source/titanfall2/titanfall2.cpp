@@ -272,7 +272,7 @@ void CompileR2BSPFile() {
             }
         }
 
-        Titanfall::EmitEntity(entity);
+        Titanfall2::EmitEntity(entity);
 
         #undef ENT_IS
     }

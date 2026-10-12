@@ -135,6 +135,12 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
 - **Tools and sky:** `CLIP`, `TRIGGER` and `SKY*` become tool shaders.
 - **Lights:** light entities are now kept (they were previously dropped), so
   remap bakes them. `--sun` adds a `light_environment`.
+- **Menu stage:** this is always lit. `--menu-rig <mp_coliseum_env.ent>` moves
+  retail Coliseum's menu environment, volume and spotlights onto this map's
+  `menu_scene_ref` at (8192, 8192, 0). Both maps lay out their anchors the same
+  way. The rig is read at build time from your own game files and nothing retail
+  is committed. Without it, a small authored rig is used: environment 1, a volume,
+  a key spotlight and a rim spotlight.
 - **Baked maps:** placeholder-lighting removal is skipped for maps remap baked.
 
 The output includes the mod, ZIP, adapted source, compiler log, BSP validation,

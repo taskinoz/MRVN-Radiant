@@ -31,16 +31,24 @@
 #include "../bspfile_abstract.h"
 #include <chrono>
 #include <cstdio>
+#include <map>
 
 namespace {
 using Respawn::Bake::V3;
 using Respawn::Bake::Light;
 using Respawn::Bake::LightType;
 
-// Retail world-light flags: realtime lights with baked shadow masks, static lights and suns.
+// Retail world-light flags (Coliseum/Glitch): realtime with baked shadow masks,
+// realtime without shadows ("shadow" "0"), realtime with dynamic shadows
+// ("realtime_shadows" "2"), static ("realtime" "0") and suns. Only 28 and 24
+// appear in retail RTL pages.
 constexpr int32_t FlagRealtime = 28;
+constexpr int32_t FlagRealtimeNoShadow = 56;
+constexpr int32_t FlagRealtimeDynamicShadow = 104;
 constexpr int32_t FlagStatic = 4;
 constexpr int32_t FlagSun = 24;
+// Lights with "_pbr_falloff" "1" store intensity x100000 (Coliseum spotlights).
+constexpr double PbrIntensityScale = 100000.0;
 
 constexpr double Pi = 3.14159265358979323846;
 
@@ -141,10 +149,60 @@ void SetFalloff(const entity_t &e, Light &light, Titanfall2::WorldLight_t &recor
 struct PendingLight {
     Titanfall2::WorldLight_t  record;
     Light                     light;
+    int                       environment = 0;  // lightEnvironmentIndex of suns and ambients
 };
 
 std::vector<PendingLight> pendingLights;
+std::vector<int> bakeLightEnvironments;  // parallel to Titanfall2::Bsp::bakeLights
+std::map<int, V3> environmentAmbients;
 int environments = 0;
+
+// "*N" -> N; environments without the key are numbered in order.
+int EnvironmentIndex(const entity_t &e, int fallback) {
+    const char *value = e.valueForKey("lightEnvironmentIndex");
+    if (value && value[0] == '*')
+        return atoi(value + 1);
+    return fallback;
+}
+
+// Convex light_environment_volume brushes: "*trigger_brush_B_plane_P" "nx ny nz d",
+// relative to the entity origin, inside when n.p <= d.
+struct EnvironmentVolume {
+    int environment;
+    std::vector<std::vector<std::array<double, 4>>> brushes;
+
+    bool contains(V3 p) const {
+        for (const auto &brush : brushes) {
+            bool inside = !brush.empty();
+            for (const auto &plane : brush)
+                if (plane[0] * p.x + plane[1] * p.y + plane[2] * p.z > plane[3] + 1e-3) { inside = false; break; }
+            if (inside)
+                return true;
+        }
+        return false;
+    }
+};
+
+EnvironmentVolume ParseVolume(const entity_t &e) {
+    EnvironmentVolume volume{EnvironmentIndex(e, 1), {}};
+    const V3 origin = OriginForEntity(e);
+    for (int b = 0;; b++) {
+        std::vector<std::array<double, 4>> brush;
+        for (int p = 0;; p++) {
+            char key[64];
+            snprintf(key, sizeof(key), "*trigger_brush_%d_plane_%d", b, p);
+            if (!HasKey(e, key))
+                break;
+            double n[4] = {0, 0, 0, 0};
+            sscanf(e.valueForKey(key), "%lf %lf %lf %lf", &n[0], &n[1], &n[2], &n[3]);
+            brush.push_back({n[0], n[1], n[2], n[3] + n[0] * origin.x + n[1] * origin.y + n[2] * origin.z});
+        }
+        if (brush.empty())
+            break;
+        volume.brushes.push_back(brush);
+    }
+    return volume;
+}
 }  // namespace
 
 
@@ -165,32 +223,34 @@ void Titanfall2::CollectLight(const entity_t &e) {
     try {
         if (e.classname_is("light_environment")) {
             const V3 origin = OriginForEntity(e);
-            const bool gameplay = environments++ == 0;
+            const int environment = EnvironmentIndex(e, environments++);
+            const bool gameplay = environment == 0;
             PendingLight ambient;
+            ambient.environment = environment;
             ambient.light.type = LightType::Ambient;
             ambient.light.origin = origin;
             if (ColourForKey(e, "_ambient", ambient.light.intensity)) {
                 ambient.record = BaseRecord(ambient.light, 5);
                 pendingLights.push_back(ambient);
+                environmentAmbients[environment] = ambient.light.intensity;
                 if (gameplay)
                     Titanfall2::Bsp::ambient = ambient.light.intensity;
             }
 
             PendingLight sun;
+            sun.environment = environment;
             sun.light.type = LightType::Sun;
             sun.light.origin = origin;
             sun.light.direction = DirectionForEntity(e, -90);
             if (!ColourForKey(e, "_light", sun.light.intensity))
                 sun.light.intensity = {1, 1, 1};
-            // Only the first environment is baked; later ones (e.g. the menu stage) need volumes.
+            // Surfaces bake against environment 0; other environments (e.g. the
+            // menu stage) light only their light_environment_volume's probes.
             sun.light.realtime = gameplay;
             sun.record = BaseRecord(sun.light, 3);
             sun.record.normal = Vector3(sun.light.direction.x, sun.light.direction.y, sun.light.direction.z);
             sun.record.flags = FlagSun;
             pendingLights.push_back(sun);
-            if (!gameplay)
-                Sys_FPrintf(SYS_WRN, "WARNING: Only the first light_environment is baked; the one at %s is recorded but unbaked\n",
-                            e.valueForKey("origin"));
             return;
         }
 
@@ -206,8 +266,20 @@ void Titanfall2::CollectLight(const entity_t &e) {
             light.intensity = QuakeColour(e, quakeBrightness);
         }
         pending.record = BaseRecord(light, spot ? 2 : 1);
+        if (HasKey(e, "_pbr_falloff") && e.intForKey("_pbr_falloff") == 1)
+            pending.record.intensity = pending.record.intensity * static_cast<float>(PbrIntensityScale);
         SetFalloff(e, light, pending.record, quakeBrightness);
-        pending.record.flags = light.realtime ? FlagRealtime : FlagStatic;
+        if (!light.realtime) {
+            pending.record.flags = FlagStatic;
+        } else if (HasKey(e, "shadow") && e.intForKey("shadow") == 0) {
+            pending.record.flags = FlagRealtimeNoShadow;
+            light.shadowMask = false;
+        } else if (HasKey(e, "realtime_shadows") && e.intForKey("realtime_shadows") == 2) {
+            pending.record.flags = FlagRealtimeDynamicShadow;
+            light.shadowMask = false;
+        } else {
+            pending.record.flags = FlagRealtime;
+        }
 
         if (spot) {
             const double outer = std::clamp(DoubleForKey(e, "_cone", 45), 1.0, 89.0);
@@ -257,6 +329,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
             pending.light.hardwareIndex = hardware++;
         Titanfall2::Bsp::worldLights.push_back(pending.record);
         Titanfall2::Bsp::bakeLights.push_back(pending.light);
+        bakeLightEnvironments.push_back(pending.environment);
     }
 
     // Opaque, non-sky world brushes cast shadows; sky brushes let sun and sky rays out.
@@ -332,6 +405,44 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     } catch (const std::exception &error) {
         Error("Light probe bake failed: %s", error.what());
     }
+    // Other environments: probes around client scene anchors (the menu stage)
+    // inside their light_environment_volume, lit by that environment's sun and
+    // ambient plus nearby realtime lights.
+    std::size_t stageProbes = 0;
+    for (const entity_t &volumeEntity : entities) {
+        if (!volumeEntity.classname_is("light_environment_volume"))
+            continue;
+        const EnvironmentVolume volume = ParseVolume(volumeEntity);
+        std::vector<V3> stage;
+        for (const entity_t &anchor : entities) {
+            if (!anchor.classname_is("info_target_clientside") || !striEqualPrefix(anchor.valueForKey("script_name"), "menu_"))
+                continue;
+            const V3 a = OriginForEntity(anchor);
+            if (!volume.contains(a))
+                continue;
+            for (double z = 0; z <= 192; z += 64)
+                for (double y = -128; y <= 128; y += 64)
+                    for (double x = -128; x <= 128; x += 64)
+                        stage.push_back({a.x + x, a.y + y, a.z + z});
+        }
+        if (stage.empty())
+            continue;
+        std::vector<Light> stageLights = Titanfall2::Bsp::bakeLights;
+        for (std::size_t i = 0; i < stageLights.size(); i++)
+            if (stageLights[i].type == LightType::Sun)
+                stageLights[i].realtime = bakeLightEnvironments[i] == volume.environment;
+        const auto found = environmentAmbients.find(volume.environment);
+        const V3 stageAmbient = found != environmentAmbients.end() ? found->second : V3{};
+        try {
+            const auto baked = Respawn::Bake::bakeProbes(stage, stageLights, stageAmbient, occluders, options);
+            Titanfall2::Bsp::lightprobes.insert(Titanfall2::Bsp::lightprobes.end(), baked.begin(), baked.end());
+            probePoints.insert(probePoints.end(), stage.begin(), stage.end());
+            stageProbes += stage.size();
+        } catch (const std::exception &error) {
+            Error("Light environment %d probe bake failed: %s", volume.environment, error.what());
+        }
+    }
+
     Respawn::Bake::ProbeTree tree = Respawn::Bake::buildProbeTree(probePoints);
     Titanfall2::Bsp::lightprobeTree = std::move(tree.nodes);
     Titanfall2::Bsp::lightprobeReferences = std::move(tree.references);
@@ -345,6 +456,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     Sys_Printf("%9zu lightmap pages, %zu charts\n", pages.size(), Titanfall::Bsp::lightmapCharts.size());
     Sys_Printf("%9zu lit texels, %zu with realtime lights, %zu RTL pages\n", result.chartedTexels,
                result.realtimeTexels, Titanfall2::Bsp::lightmapRtlPages.size());
-    Sys_Printf("%9zu light probes, %zu tree nodes\n", Titanfall2::Bsp::lightprobes.size(), Titanfall2::Bsp::lightprobeTree.size());
+    Sys_Printf("%9zu light probes (%zu for other environments), %zu tree nodes\n", Titanfall2::Bsp::lightprobes.size(),
+               stageProbes, Titanfall2::Bsp::lightprobeTree.size());
     Sys_Printf("%9.1f seconds baking\n", seconds);
 }

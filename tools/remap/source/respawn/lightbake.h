@@ -127,7 +127,8 @@ struct Light {
     double zeroDistance = 0;
     Attenuation attenuation;
     double cosInner = 1, cosOuter = 0;  // spot cone
-    bool realtime = true;   // RTL slot with a baked shadow mask; otherwise baked into SKY A
+    bool realtime = true;   // rendered at runtime; otherwise baked into SKY A
+    bool shadowMask = true; // realtime lights only: gets RTL slots with baked shadow masks
     int hardwareIndex = -1; // index among non-ambient world lights
 };
 
@@ -477,7 +478,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 Slots& out = slots[p][i];
                 for (std::size_t l = 0; l < lights.size(); ++l) {
                     const Light& light = lights[l];
-                    if (!light.realtime || light.type == LightType::Ambient) continue;
+                    if (!light.realtime || !light.shadowMask || light.type == LightType::Ambient) continue;
                     double score;
                     if (light.type == LightType::Sun) {
                         // Suns outrank local lights so their shadow mask is always kept.

@@ -1,10 +1,11 @@
 # Respawn lighting research and tools
 
-The current native compiler does not emit an engine-ready lighting bake. It uses
-placeholder records, lit material sorts have atlas index `-1`, and unbaked
-lightmap UVs are world projections rather than normalized atlas coordinates.
-The new tools separate binary layout research, shader calibration and direct
-lighting math. None claims finished engine lighting, GI, probes or CSM support.
+For Titanfall 2, `remap` now bakes lightmaps whenever a map places light
+entities (see [Compiler bake](#compiler-bake-titanfall-2)). The output matches the
+retail layout and passes structural checks. It has **not yet been tested in-game**,
+and the SKY A brightness scale is a guess. Maps without lights, and the Titanfall 1
+and Apex writers, still emit placeholder records with atlas index `-1`. None of
+this provides GI, light probes or CSM.
 
 ## Attribution
 
@@ -153,13 +154,89 @@ console debug settings, Northstar log, BSP hash and frame conditions. First
 compare zero planes against single RGB/alpha changes. Do not interpret a white
 or dark screen as a successful bake. No installed mod is changed by these tools.
 
+## Compiler bake (Titanfall 2)
+
+Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
+`tools/respawn/lightbake_tests.cpp`) and `titanfall2/titanfall2_lighting.cpp`.
+
+### Plane semantics measured from retail Coliseum and Glitch
+
+- **RTL A:** four 6-bit slots, then the RTL page number in the top byte. Slot 63
+  is unused. Texels without realtime lights are `0xffffffff`. Coliseum uses only
+  `0x00ffffc0` and `0x00ffffc1`.
+- **RTL B:** channel *N* is the shadow visibility for slot *N*. The average
+  visibility of used slots is 207–235.
+- **RTL pages (0x7A):** 63 int16 hardware-light indices, with unused entries
+  zero-filled. Hardware indices count world lights excluding type 5 (ambient).
+  Coliseum's slot 0 is hardware light 0, its gameplay sun.
+- **Which lights get slots:** only suns (flags 24) and point/spot lights with
+  flags 28 appear in RTL pages. Lights with flag 4 (`"realtime" "0"` in the
+  `.ent`) never do, so they are treated as baked-only.
+- **RTL C:** nearly all zero in retail and written as zero here.
+- **SKY B:** alpha is 255 on every charted retail texel. Decoded RGB is a
+  direction whose mean length is about 0.78, consistent with a weighted average
+  of incoming light directions.
+- **SKY A:** small values, with a decoded p95 of about 0.03–0.07. It is warm
+  under a cool sky ambient, which suggests bounced sunlight rather than plain sky
+  ambient. Its exact meaning is not established.
+
+### World lights from `*_env.ent` keys
+
+- **Intensity:** `(channel/255)^2.2 * brightness/255`, from `_light` /
+  `_ambient` "R G B brightness". This matches every Coliseum record checked.
+- **Attenuation:** the quadratic through (0, 1),
+  (`_fifty_percent_distance`, 0.5) and (`_zero_percent_distance`, 0). For
+  example, 300/90 gives `[1, -0.006508, 1.06e-5]`, as stored. Radius is the zero
+  distance.
+- **Direction:** pitch from `pitch` (or `-angles[0]`) and yaw from `angles[1]`,
+  giving `(cos p cos y, cos p sin y, sin p)`. Spot `stopdot`/`stopdot2` are the
+  cosines of `_inner_cone`/`_cone`.
+- **Order:** ambient (5), suns (3), spots (2), points (1).
+- **`_pbr_falloff 1`:** these lights store intensity ×100000. They are not
+  modelled; such lights are treated as `_pbr_falloff 0`.
+
+### What the compiler does
+
+1. Brush faces and patches are unwrapped at 16 units per texel. Patches use
+   their row and column arc length. Islands are packed tallest first into
+   1024² shelf pages with a 2-texel gutter. Islands larger than a page are
+   scaled down. Page sizes are rounded up to powers of two, as retail pages are.
+2. Lit material sorts point at their page, and vertex UVs are normalised to it.
+3. For each texel, the four realtime lights with the highest contribution ×
+   visibility get slots. Suns keep their slot even when fully shadowed, as
+   retail does. Lights behind walls give up their slot. Each chart gets one RTL
+   page holding at most 63 lights.
+4. Shadow masks average four sub-texel rays against opaque, non-sky world
+   brushes. Sky brushes let sun and sky rays through.
+5. SKY A = sky ambient × cosine-weighted sky visibility (16 rays) × 0.05, plus
+   static (`realtime 0`) lights. SKY B is the weighted incoming direction. The
+   0.05 scale was chosen to match retail magnitudes and needs an in-game check.
+
+Only the first `light_environment` is baked. Retail menu stages use a second
+environment selected by `light_environment_volume`, which is not implemented.
+
+### Verification so far
+
+- **Lit regression fixture** (`compiler_regression.py`): world-light
+  order/flags, plane sizes and page binding are correct. The roof's sun shadow
+  falls on the correct side and reaches past the roof edge. Realtime point and
+  spot lights get slots, the static light lands in SKY A, and the roof reduces
+  sky ambient.
+- **Quake E1M1** (198 lights): one 1024² page and 8 RTL pages. Bake time is
+  about 0.3 s. Mask averages are 224–236. Lit vs unlit agrees with the
+  independent Python vertex reference on 82.6% of vertices; that reference used
+  a longer, different falloff. The structural inspector and record validator
+  report no issues.
+
 ## Remaining work
 
-1. Establish channel decode and RTL light-index semantics through controlled
-   engine probes / shader analysis, including alpha and directional terms.
-2. Integrate chart packing, per-page material sorts and dense luxel rasterization.
-3. Transfer the tested occlusion evaluator to luxels; add padding/dilation, sky
-   sampling, indirect transport and energy/brightness calibration.
+1. Load a baked map in Northstar. Confirm the sun and point-light shadows, then
+   calibrate the SKY A scale and the meaning of SKY B against retail-looking
+   output.
+2. Add indirect (bounce) lighting to SKY A, which retail appears to contain, and
+   tangent-space handling for bump-lit surfaces.
+3. Support `light_environment_volume` for menu stages, and splitting oversized
+   charts.
 4. Generate probes, model/parent links, shadow meshes and CSM structures from
    authored data, followed by independent validation and Northstar tests.
 5. Add separate TF1/Online and Apex season profiles. No cross-game bake equivalence

@@ -123,7 +123,10 @@ void WriteR2BSPFile(const char *filename) {
     }
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA_STRING_DATA],  Titanfall::Bsp::textureDataData);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA_STRING_TABLE], Titanfall::Bsp::textureDataTable);
-    AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],              Titanfall2::Bsp::worldLights_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],          Titanfall2::Bsp::worldLights);
+    else
+        AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],          Titanfall2::Bsp::worldLights_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_VERTEX_UNLIT],              Titanfall::Bsp::vertexUnlitVertices);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_LIT_FLAT],           Titanfall::Bsp::vertexLitFlatVertices);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_LIT_BUMP],           Titanfall::Bsp::vertexLitBumpVertices);
@@ -133,7 +136,10 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_MESHES],                    Titanfall::Bsp::meshes);
     AddLump(file, header.lumps[R2_LUMP_MESH_BOUNDS],               Titanfall::Bsp::meshBounds);
     AddLump(file, header.lumps[R2_LUMP_MATERIAL_SORT],             Titanfall::Bsp::materialSorts);
-    AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],          Titanfall2::Bsp::lightMapHeaders_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],      Titanfall2::Bsp::lightmapHeaders);
+    else
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],      Titanfall2::Bsp::lightMapHeaders_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CM_GRID],                   Titanfall::Bsp::cmGrid);
     AddLump(file, header.lumps[R2_LUMP_CM_GRID_CELLS],             Titanfall::Bsp::cmGridCells);
     AddLump(file, header.lumps[R2_LUMP_CM_GEO_SETS],               Titanfall::Bsp::cmGeoSets);
@@ -143,8 +149,13 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_PROPS],       Titanfall::Bsp::cmBrushSideProperties);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_PLANES],      Titanfall::Bsp::cmBrushSidePlaneOffsets);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_TEX_VECS],    Titanfall::Bsp::cmBrushSideTexVecs);
-    AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],         Titanfall2::Bsp::lightMapDataSky_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightmapDataSky);
+    else
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightMapDataSky_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],            Titanfall::Bsp::csmAABBNodes_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS], Titanfall2::Bsp::lightmapDataRtl);
     AddLump(file, header.lumps[R2_LUMP_CELL_BSP_NODES],            Titanfall::Bsp::cellBSPNodes_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CELLS],                     Titanfall::Bsp::cells_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_PORTALS],                   Titanfall::Bsp::portals_stub);  // stub
@@ -161,6 +172,8 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_CELL_AABB_NODES],           Titanfall::Bsp::cellAABBNodes);
     AddLump(file, header.lumps[R2_LUMP_OBJ_REFERENCES],            Titanfall::Bsp::objReferences);
     AddLump(file, header.lumps[R2_LUMP_OBJ_REFERENCE_BOUNDS],      Titanfall::Bsp::objReferenceBounds);
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_RTL_PAGE], Titanfall2::Bsp::lightmapRtlPages);
     AddLump(file, header.lumps[R2_LUMP_LEVEL_INFO],                Titanfall::Bsp::levelInfo);
 
     /* emit bsp size */
@@ -187,6 +200,18 @@ void WriteR2BSPFile(const char *filename) {
 void CompileR2BSPFile() {
     Titanfall2::SetUpGameLump();
 
+    // Bake lightmaps only for maps that place lights; others keep the unlit stubs.
+    Shared::lightmapsEnabled = false;
+    for (const entity_t &entity : entities) {
+        if (Titanfall2::IsLightEntity(entity)) {
+            Shared::lightmapsEnabled = true;
+            break;
+        }
+    }
+    if (Shared::lightmapsEnabled)
+        Shared::lightmapAtlas.reset(Shared::lightmapPageSize, Shared::lightmapPageSize, Shared::lightmapGutter);
+    const entity_t *world = nullptr;
+
     // Cell/Portal planes
     Titanfall::Bsp::planes.emplace_back(Plane3f(0, 1, 0, 0));
     // TODO: set cmGrid.brushSidePlaneOffset here
@@ -198,7 +223,11 @@ void CompileR2BSPFile() {
         #define ENT_IS_PREFIX(classname) striEqualPrefix(pszClassname, classname)
 
         // NOTE: entities' classnames are editorclasses until we call EmitEntity
+        if (Titanfall2::IsLightEntity(entity))
+            Titanfall2::CollectLight(entity);
+
         if (ENT_IS("worldspawn")) { // "worldspawn" is most of the map, should always be the 1st entity
+            world = &entity;
             Titanfall::BeginModel(entity);
 
             Shared::MakeMeshes(entity);
@@ -251,6 +280,9 @@ void CompileR2BSPFile() {
 
     // Emit level info
     Titanfall2::EmitLevelInfo();
+
+    if (Shared::lightmapsEnabled && world)
+        Titanfall2::EmitLighting(*world);
 
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall2::EmitStubs();

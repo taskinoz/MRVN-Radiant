@@ -75,7 +75,7 @@ void Shared::MakeMeshes(const entity_t &e) {
                 x = vector3_dot(vTranslated, texX);
                 y = vector3_dot(vTranslated, texY);
                 // TODO: scale lightmapUV by side.luxelScale
-                lightmapUV = {x / 16, y / 16};
+                lightmapUV = {x / Shared::luxelSize, y / Shared::luxelSize};
                 // TODO: valve 220 st vector projection
                 textureUV[0] = side.texMat[0][0] * x + side.texMat[0][1] * y + side.texMat[0][2];
                 textureUV[1] = side.texMat[1][0] * x + side.texMat[1][1] * y + side.texMat[1][2];
@@ -120,6 +120,23 @@ void Shared::MakeMeshes(const entity_t &e) {
         mesh.shaderInfo = patch->shaderInfo;
         Shared::Island_t  island;
 
+        // Unwrap the grid by average column/row arc length so curved patches
+        // don't fold over themselves in lightmap space.
+        const int  pw = patchMesh.width, ph = patchMesh.height;
+        std::vector<float>  columnU(pw, 0.0f), rowV(ph, 0.0f);
+        for (int x = 1; x < pw; x++) {
+            float  sum = 0.0f;
+            for (int y = 0; y < ph; y++)
+                sum += vector3_length(patchMesh.verts[x + y * pw].xyz - patchMesh.verts[x - 1 + y * pw].xyz);
+            columnU[x] = columnU[x - 1] + sum / ph / Shared::luxelSize;
+        }
+        for (int y = 1; y < ph; y++) {
+            float  sum = 0.0f;
+            for (int x = 0; x < pw; x++)
+                sum += vector3_length(patchMesh.verts[x + y * pw].xyz - patchMesh.verts[x + (y - 1) * pw].xyz);
+            rowV[y] = rowV[y - 1] + sum / pw / Shared::luxelSize;
+        }
+
         // Get vertices
         for (int index = 0; index < (patchMesh.width * patchMesh.height); index++) {
             Shared::Vertex_t &vertex = mesh.vertices.emplace_back();
@@ -128,8 +145,7 @@ void Shared::MakeMeshes(const entity_t &e) {
             vertex.normal       = patchMesh.verts[index].normal;
             vertex.textureUV    = patchMesh.verts[index].st;
             vertex.colour       = {0xFF, 0xFF, 0xFF, 0xFF};  // TODO: patchMesh.verts[index].colour
-            Vector2  lightmapUV = {patchMesh.verts[index].st[0] / 16,
-                                   patchMesh.verts[index].st[1] / 16};  // TODO: patchMesh.luxelScale
+            Vector2  lightmapUV = {columnU[index % pw], rowV[index / pw]};
             vertex.lightmapUV   = lightmapUV;
             vertex.lightmapStep = {0.0f, 0.0f};  // unused
 
@@ -164,7 +180,8 @@ void Shared::MakeMeshes(const entity_t &e) {
     }
 
     // Recalculate lightmapUVs for all vertices
-    // Shared::MakeLightmapUVs();  // enable after engine atlas emission is implemented
+    if (Shared::lightmapsEnabled)
+        Shared::MakeLightmapUVs();
 
     // Combine all meshes based on shaderInfo and AABB tests
     std::size_t index = 0;
@@ -456,27 +473,43 @@ void Shared::MergeVisTree(Shared::visNode_t &node) {
     recalculate lightmap uvs for Shared::meshes
 */
 void Shared::MakeLightmapUVs() {
-    constexpr unsigned pageWidth = 1024;
-    constexpr float pageScale = 1.0f / pageWidth;
-    std::vector<Respawn::LightmapRect> rects;
-    for (const auto& island : Shared::islands)
-        rects.push_back({island.bounds.mins.x(), island.bounds.mins.y(),
-                         island.bounds.maxs.x(), island.bounds.maxs.y()});
-    std::vector<Respawn::LightmapPlacement> placements;
-    try {
-        placements = Respawn::packLightmapRects(rects, pageWidth, pageWidth, 8);
-    } catch (const std::exception& error) {
-        Error("Lightmap packing failed: %s", error.what());
-    }
-    for (std::size_t i = 0; i < placements.size(); ++i) {
-        const auto& placement = placements[i];
-        auto& mesh = Shared::meshes.at(Shared::islands[i].mesh);
+    // Lightmap UVs stay in texel units here; writers normalize them once page
+    // sizes are final.
+    const float  limit = Shared::lightmapPageSize - 2.0f * Shared::lightmapGutter - 2.0f;
+
+    // Shelf packing wastes far less space with islands sorted tallest first.
+    std::vector<const Shared::Island_t*>  order;
+    for (const Shared::Island_t &island : Shared::islands)
+        order.push_back(&island);
+    std::stable_sort(order.begin(), order.end(), [](const Shared::Island_t *a, const Shared::Island_t *b) {
+        const float  ha = a->bounds.maxs.y() - a->bounds.mins.y(), hb = b->bounds.maxs.y() - b->bounds.mins.y();
+        return ha > hb;
+    });
+
+    for (const Shared::Island_t *pIsland : order) {
+        const Shared::Island_t &island = *pIsland;
+        Shared::Mesh_t &mesh = Shared::meshes.at(island.mesh);
+        Vector2  mins = island.bounds.mins, maxs = island.bounds.maxs;
+
+        // Shrink islands larger than a page instead of failing.
+        const float  extent = std::max(maxs.x() - mins.x(), maxs.y() - mins.y());
+        if (extent > limit) {
+            const float  scale = limit / extent;
+            for (Shared::Vertex_t &vertex : mesh.vertices)
+                vertex.lightmapUV = vertex.lightmapUV * scale;
+            mins = mins * scale;
+            maxs = maxs * scale;
+        }
+
+        Respawn::LightmapPlacement  placement{};
+        try {
+            placement = Shared::lightmapAtlas.place({mins.x(), mins.y(), maxs.x(), maxs.y()});
+        } catch (const std::exception &error) {
+            Error("Lightmap packing failed: %s", error.what());
+        }
         mesh.lightmapPage = placement.page;
-        const Vector2 offset(static_cast<float>(placement.offsetX),
-                             static_cast<float>(placement.offsetY));
-        for (auto& vertex : mesh.vertices)
-            vertex.lightmapUV = (vertex.lightmapUV + offset) * pageScale;
+        const Vector2  offset(static_cast<float>(placement.offsetX), static_cast<float>(placement.offsetY));
+        for (Shared::Vertex_t &vertex : mesh.vertices)
+            vertex.lightmapUV = vertex.lightmapUV + offset;
     }
-    Sys_Printf("%9zu lightmap islands packed, %u pages used\n", placements.size(),
-               placements.empty() ? 0u : placements.back().page + 1);
 }

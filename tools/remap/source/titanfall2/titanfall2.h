@@ -53,6 +53,41 @@ namespace Titanfall2 {
     void EmitEntity(const entity_t &e);
     void EmitStubs();
 
+    bool IsLightEntity(const entity_t &e);
+    void CollectLight(const entity_t &e);
+    void EmitLighting(const entity_t &world);
+
+    // 0x36, version 3
+    struct WorldLight_t {
+        Vector3   origin;
+        Vector3   intensity;
+        Vector3   normal;
+        Vector3   shadowOffset;
+        int32_t   viscluster;
+        int32_t   type;
+        int32_t   style;
+        float     stopdot;   // spot inner cone cosine
+        float     stopdot2;  // spot outer cone cosine
+        float     exponent;
+        float     radius;
+        float     constantAttn;
+        float     linearAttn;
+        float     quadraticAttn;
+        int32_t   flags;
+        int32_t   textureData;
+        int32_t   parent;
+        float     unknown[3];
+    };
+    static_assert(sizeof(WorldLight_t) == 112, "R2 v3 world lights are 112 bytes");
+
+    // 0x53
+    struct LightmapHeader_t {
+        uint32_t  type;
+        uint16_t  width;
+        uint16_t  height;
+    };
+    static_assert(sizeof(LightmapHeader_t) == 8, "Lightmap headers are 8 bytes");
+
     // 0x23
     // GameLump is the only lump which isn't just a vector
     // The order in which these structs were defined is the order in which both our and the respawn compiler saves them
@@ -102,6 +137,16 @@ namespace Titanfall2 {
         inline GameLumpPropHeader_t               gameLumpPropHeader;
         inline std::vector<GameLumpProp_t>        gameLumpProps;
         inline GameLumpUnknownHeader_t            gameLumpUnknownHeader;
+        /* Lighting, filled by EmitLighting */
+        inline bool                                   lightingBaked = false;
+        inline std::vector<WorldLight_t>             worldLights;
+        inline std::vector<LightmapHeader_t>         lightmapHeaders;
+        inline std::vector<uint8_t>                  lightmapDataSky;
+        inline std::vector<uint8_t>                  lightmapDataRtl;
+        inline std::vector<std::array<int16_t, 63>>  lightmapRtlPages;
+        inline std::vector<Respawn::Bake::Light>     bakeLights;      // parallel to worldLights
+        inline Respawn::Bake::V3                     ambient;         // first light_environment
+
         /* Stubs */
         inline std::vector<uint8_t>  worldLights_stub;
         inline std::vector<uint8_t>  lightMapHeaders_stub;

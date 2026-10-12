@@ -31,6 +31,109 @@ def brush(x, slope, materials):
     return "\n".join(lines + ["}"])
 
 
+def box(lo, hi, material):
+    (lx, ly, lz), (hx, hy, hz) = lo, hi
+    faces = [
+        ((hx, hy, lz), (lx, hy, lz), (lx, ly, lz)),
+        ((lx, ly, hz), (lx, hy, hz), (hx, hy, hz)),
+        ((lx, ly, hz), (hx, ly, hz), (hx, ly, lz)),
+        ((hx, ly, hz), (hx, hy, hz), (hx, hy, lz)),
+        ((hx, hy, hz), (lx, hy, hz), (lx, hy, lz)),
+        ((lx, hy, hz), (lx, ly, hz), (lx, ly, lz)),
+    ]
+    lines = ["{"]
+    for points in faces:
+        coords = " ".join("( %.6f %.6f %.6f )" % p for p in points)
+        lines.append(f"{coords} compat/{material} 0 0 0 1 1 0 0 0")
+    return "\n".join(lines + ["}"])
+
+
+def entity(**keys):
+    return "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in keys.items()) + "}\n"
+
+
+# A floor with a roof over its x<0 half. The sun travels down at 60 degrees
+# towards +x+y, so the roof's shadow reaches past its edge to about x=+84.
+LIT_FIXTURE = (
+    '{\n"classname" "worldspawn"\n'
+    + box((-512, -512, -16), (512, 512, 0), "bump") + "\n"
+    + box((-512, -512, 256), (0, 512, 272), "bump") + "\n}\n"
+    + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",
+             _light="255 240 220 600", _ambient="150 180 255 100")
+    + entity(classname="light_spot", origin="0 384 200", pitch="-90", angles="90 0 0",
+             _light="255 255 255 400", _distance="400", _cone="45", _inner_cone="20")
+    + entity(classname="light", origin="256 -256 64", _light="255 200 150 200", _distance="256")
+    + entity(classname="light", origin="-256 0 64", _light="255 255 255 255", _distance="256", realtime="0")
+)
+
+
+def lit_fixture_checks(bsp):
+    """Structural and shadow checks on the lit Titanfall 2 fixture."""
+    with bsp.open("rb") as stream:
+        def lump(index):
+            stream.seek(16 + index * 16)
+            offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+            stream.seek(offset)
+            return stream.read(length)
+        lights = list(struct.iter_unpack("<12f3i7f3i3f", lump(0x36)))
+        headers = list(struct.iter_unpack("<I2H", lump(0x53)))
+        sky, rtl, pages = lump(0x62), lump(0x69), list(struct.iter_unpack("<63h", lump(0x7A)))
+        positions = list(struct.iter_unpack("<3f", lump(0x03)))
+        normals = list(struct.iter_unpack("<3f", lump(0x1E)))
+        bump = list(struct.iter_unpack("<2I2f4B4f2i", lump(0x49)))
+        sorts = list(struct.iter_unpack("<4hi", lump(0x52)))
+    if [(l[13], l[22]) for l in lights] != [(5, 0), (3, 24), (2, 28), (1, 28), (1, 4)]:
+        raise RuntimeError(f"world light order/flags: {[(l[13], l[22]) for l in lights]}")
+    texels = sum(w * h for _, w, h in headers)
+    if len(sky) != texels * 8 or len(rtl) != texels * 9 or len(headers) != 1:
+        raise RuntimeError("lightmap planes do not match one header page")
+    if not any(s[1] == 0 for s in sorts) or not pages:
+        raise RuntimeError("no material sort or RTL page is bound to the lightmap")
+    _, width, height = headers[0]
+    # Affine world -> lightmap UV map from three floor-top vertices.
+    floor = [(positions[v[0]], v[8], v[9]) for v in bump
+             if abs(positions[v[0]][2]) < 1e-3 and normals[v[1]][2] > 0.99]
+    if len(floor) < 3:
+        raise RuntimeError("floor vertices missing from the lit bump pool")
+    (p0, u0, v0), (p1, u1, v1), (p2, u2, v2) = floor[:3]
+    det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1])
+
+    def texel(x, y):
+        a = ((x - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (y - p0[1])) / det
+        b = ((p1[0] - p0[0]) * (y - p0[1]) - (x - p0[0]) * (p1[1] - p0[1])) / det
+        u = u0 + a * (u1 - u0) + b * (u2 - u0)
+        v = v0 + a * (v1 - v0) + b * (v2 - v0)
+        return int(v * height) * width + int(u * width)
+
+    def realtime(x, y):
+        i = texel(x, y)
+        word = struct.unpack_from("<I", rtl, i * 4)[0]
+        mask = rtl[texels * 4 + i * 4: texels * 4 + i * 4 + 4]
+        if word == 0xffffffff:
+            return {}
+        page = pages[word >> 24]
+        return {page[(word >> (6 * k)) & 63]: mask[k] for k in range(4) if (word >> (6 * k)) & 63 != 63}
+
+    def sky_a(x, y):
+        r, g, b, a = sky[texel(x, y) * 4: texel(x, y) * 4 + 4]
+        return r / 255 * (a / 255 * 3.984375 + 0.015625)
+
+    # Hardware indices: sun 0, spot 1, realtime point 2, static point 3.
+    for x, expected in ((-256, 0), (64, 0), (256, 255), (448, 255)):
+        if realtime(x, 0).get(0) != expected:
+            raise RuntimeError(f"sun mask at x={x}: {realtime(x, 0)} (expected {expected})")
+    if realtime(256, -256).get(2) != 255:
+        raise RuntimeError(f"realtime point light missing below it: {realtime(256, -256)}")
+    if realtime(0, 384).get(1) is None:
+        raise RuntimeError(f"spotlight missing below it: {realtime(0, 384)}")
+    if any(3 in realtime(x, 0) for x in (-256, -128)):
+        raise RuntimeError("static light was given an RTL slot")
+    if not sky_a(-256, 0) > sky_a(-256, -448) + 0.05:
+        raise RuntimeError(f"static light not baked into SKY A: {sky_a(-256, 0)} vs {sky_a(-256, -448)}")
+    if not sky_a(400, 0) > sky_a(-448, 400) > 0:
+        raise RuntimeError("roof does not reduce sky ambient")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remap", required=True, type=Path)
@@ -130,6 +233,16 @@ def main():
             if sky_report["issues"]:
                 raise RuntimeError(f"sky-only world: {sky_report['issues']}")
             reports.append({"game": game, "fixture": "sky-only", "issues": []})
+        if game == "titanfall2":
+            lit_path = folder / "lit.map"
+            lit_path.write_text(LIT_FIXTURE, encoding="utf-8")
+            with (folder / "lit.log").open("wb") as log:
+                subprocess.run(command[:-1] + [str(lit_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+            lit_report = validate(lit_path.with_suffix(".bsp"))
+            if lit_report["issues"]:
+                raise RuntimeError(f"lit fixture: {lit_report['issues']}")
+            lit_fixture_checks(lit_path.with_suffix(".bsp"))
+            reports.append({"game": game, "fixture": "lit", "issues": []})
     (root / "results.json").write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(reports, indent=2))
 

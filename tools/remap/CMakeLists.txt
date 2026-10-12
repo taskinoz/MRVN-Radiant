@@ -41,6 +41,7 @@ add_executable(remap
                source/titanfall/titanfall.cpp
                source/titanfall/titanfall.h
                source/titanfall2/titanfall2_vis.cpp
+               source/titanfall2/titanfall2_lighting.cpp
                source/titanfall2/titanfall2.cpp
                source/titanfall2/titanfall2.h
                source/brush.cpp
@@ -82,6 +83,7 @@ add_executable(remap
                source/respawn/lump_versions.h
                source/respawn/encoding.h
                source/respawn/lightmap.h
+               source/respawn/lightbake.h
                source/shaders.cpp
                source/shaders.h
                source/surface_extra.cpp

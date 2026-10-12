@@ -28,6 +28,7 @@
 #include <cstdint>
 #include "../remap.h"
 #include "../lump_names.h"
+#include "../respawn/lightbake.h"
 
 
 void LoadR1BSPFile(rbspHeader_t *header, const char *filename);
@@ -62,7 +63,7 @@ namespace Titanfall {
     std::size_t  EmitObjReferences(Shared::visNode_t &node);
     int          EmitVisChildrenOfTreeNode(Shared::visNode_t node);
     void         EmitVisTree();
-    uint16_t     EmitMaterialSort(uint32_t index, int offset, int count);
+    uint16_t     EmitMaterialSort(uint32_t index, int offset, int count, int lightmapHeader = -1);
     void         EmitCollisionGrid(entity_t &e);
     void         EmitModelGridCell(entity_t &e);
     void         EmitBrush(brush_t &e);
@@ -444,6 +445,16 @@ namespace Titanfall {
         inline std::vector<uint8_t>  physicsCollide_stub;
         inline std::vector<uint8_t>  worldLights_stub;
         inline std::vector<uint8_t>  lightmapHeaders_stub;
+
+        // Lightmap bake inputs, recorded by EmitMeshes when Shared::lightmapsEnabled
+        struct LightmapVertexRange {
+            bool           bump;   // vertexLitBumpVertices, otherwise vertexLitFlatVertices
+            std::size_t    first;
+            std::size_t    count;
+            std::uint32_t  page;
+        };
+        inline std::vector<Respawn::Bake::Chart>  lightmapCharts;
+        inline std::vector<LightmapVertexRange>   lightmapVertexRanges;
         inline std::vector<uint8_t>  lightMapDataSky_stub;
         inline std::vector<uint8_t>  csmAABBNodes_stub;
         inline std::vector<CellBspNode_t>      cellBSPNodes_stub;

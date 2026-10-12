@@ -380,4 +380,42 @@ CLIENTS spawnflag must be set
 <group name="func_occluder" color="1 0 1">
 </group>
 
+<!--
+=============================================================================
+ LIGHTING
+ Keys follow retail *_env.ent lights; remap bakes them when any are placed.
+=============================================================================
+-->
+
+<point name="light" color="1 1 .5" box="-8 -8 -8 8 8 8">
+Point light.
+-------- KEYS --------
+<string key="_light" name="Colour and brightness" value="255 255 255 200">R G B brightness, each 0-255. Intensity is (channel / 255)^2.2 * brightness / 255.</string>
+<real key="_zero_percent_distance" name="Zero percent distance" value="300">Distance where the light fades to nothing.</real>
+<real key="_fifty_percent_distance" name="Fifty percent distance" value="90">Distance where the light is at half brightness.</real>
+<boolean key="realtime" name="Realtime" value="1">1: rendered at runtime with a baked shadow mask (up to four per lightmap texel). 0: baked into the lightmap.</boolean>
+</point>
+
+<point name="light_spot" color="1 1 .5" box="-8 -8 -8 8 8 8">
+Spotlight.
+-------- KEYS --------
+<string key="_light" name="Colour and brightness" value="255 255 255 200">R G B brightness, each 0-255.</string>
+<real key="_zero_percent_distance" name="Zero percent distance" value="300">Distance where the light fades to nothing.</real>
+<real key="_fifty_percent_distance" name="Fifty percent distance" value="90">Distance where the light is at half brightness.</real>
+<real key="_cone" name="Outer cone" value="45">Outer cone half-angle in degrees.</real>
+<real key="_inner_cone" name="Inner cone" value="20">Inner cone half-angle in degrees.</real>
+<real key="pitch" name="Pitch" value="-90">Pitch in degrees; -90 points straight down.</real>
+<angles key="angles" name="Pitch Yaw Roll" value="90 0 0">Yaw sets the direction; pitch overrides angles[0].</angles>
+<boolean key="realtime" name="Realtime" value="1">1: rendered at runtime with a baked shadow mask. 0: baked into the lightmap.</boolean>
+</point>
+
+<point name="light_environment" color="1 1 .5" box="-16 -16 -16 16 16 16">
+Sun and sky ambient. Only the first light_environment is baked.
+-------- KEYS --------
+<string key="_light" name="Sun colour and brightness" value="255 240 220 600">R G B brightness for the sun.</string>
+<string key="_ambient" name="Sky ambient" value="150 180 255 100">R G B brightness for sky ambient, baked with sky visibility.</string>
+<real key="pitch" name="Pitch" value="-60">Sun pitch in degrees; negative points down.</real>
+<angles key="angles" name="Pitch Yaw Roll" value="60 0 0">Yaw sets the sun direction; pitch overrides angles[0].</angles>
+</point>
+
 </classes>

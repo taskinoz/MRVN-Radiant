@@ -423,7 +423,11 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
         // Emit texture related structs
         uint32_t  textureIndex = Titanfall::EmitTextureData(*mesh.shaderInfo);
-        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size());
+        // Lit meshes sample the lightmap page their material sort points at.
+        const bool  baked = Shared::lightmapsEnabled && (m.vertexType == 0 || m.vertexType == 2)
+                         && mesh.lightmapPage >= 0;
+        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size(),
+                                                       baked ? mesh.lightmapPage : -1);
         int materialSortOffset = Titanfall::Bsp::materialSorts.at(m.materialOffset).vertexOffset;
         // Both surface queries and triangle indices add the material-sort base.
         m.vertexOffset = vertexOffset - materialSortOffset;
@@ -461,6 +465,19 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         mb.extents = (aabb.maxs - aabb.mins) / 2;
         mb.radius = vector3_length(mb.extents);
         mb.tanYaw = 0.0f;
+
+        if (baked) {
+            Respawn::Bake::Chart &chart = Titanfall::Bsp::lightmapCharts.emplace_back();
+            chart.page = mesh.lightmapPage;
+            for (const Shared::Vertex_t &vertex : mesh.vertices) {
+                chart.positions.push_back({vertex.xyz.x(), vertex.xyz.y(), vertex.xyz.z()});
+                chart.normals.push_back({vertex.normal.x(), vertex.normal.y(), vertex.normal.z()});
+                chart.luxels.push_back({vertex.lightmapUV.x(), vertex.lightmapUV.y()});
+            }
+            chart.triangles.assign(mesh.triangles.begin(), mesh.triangles.end());
+            Titanfall::Bsp::lightmapVertexRanges.push_back({m.vertexType == 2, static_cast<std::size_t>(vertexOffset),
+                                                           mesh.vertices.size(), static_cast<std::uint32_t>(mesh.lightmapPage)});
+        }
     }
 }
 
@@ -469,13 +486,14 @@ void Titanfall::EmitMeshes(const entity_t &e) {
     EmitMaterialSort()
     Tries to create a material sort of the last texture
 */
-uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count) {
+uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int lightmapHeader) {
     if (index > 32767)
         Error("Material-sort texture index exceeds its signed 16-bit field");
     /* Check if the material sort we need already exists */
     std::size_t pos = 0;
     for (Titanfall::MaterialSort_t &ms : Titanfall::Bsp::materialSorts) {
-        if (ms.textureData == index && offset >= ms.vertexOffset && offset - ms.vertexOffset + count <= 65536) {
+        if (ms.textureData == index && ms.lightmapHeader == lightmapHeader
+         && offset >= ms.vertexOffset && offset - ms.vertexOffset + count <= 65536) {
             return pos;
         }
 
@@ -486,7 +504,7 @@ uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count) {
         Error("Material-sort index exceeds 16 bits");
     Titanfall::MaterialSort_t &ms = Titanfall::Bsp::materialSorts.emplace_back();
     ms.textureData = index;
-    ms.lightmapHeader = -1;
+    ms.lightmapHeader = lightmapHeader;
     ms.cubemap = -1;
     ms.vertexOffset = offset;
 

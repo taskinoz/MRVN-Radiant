@@ -50,8 +50,11 @@ void Shared::MakeMeshes(const entity_t &e) {
         }
         if (visible && !translucent) {
             Respawn::Csg::Solid &solid = solids.emplace_back();
-            for (const side_t &side : brush.sides)
-                solid.planes.push_back({{side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z()}, side.plane.dist()});
+            // Bevel sides carry no side.plane; their plane lives in mapplanes.
+            for (const side_t &side : brush.sides) {
+                const Plane3f &plane = mapplanes[side.planenum].plane;
+                solid.planes.push_back({{plane.normal().x(), plane.normal().y(), plane.normal().z()}, plane.dist()});
+            }
             solid.mins = {brush.minmax.mins.x(), brush.minmax.mins.y(), brush.minmax.mins.z()};
             solid.maxs = {brush.minmax.maxs.x(), brush.minmax.maxs.y(), brush.minmax.maxs.z()};
             solid.order = brush_order;

@@ -89,6 +89,8 @@ inline std::vector<Polygon> visibleFragments(const Polygon& face, const Plane& f
         bool skip = false, coplanar = false;
         std::vector<const Plane*> cutting;
         for (const Plane& plane : solid.planes) {
+            if (dot(plane.normal, plane.normal) < 0.5)
+                continue;  // unset plane: every point would lie on it
             const double alignment = dot(plane.normal, facePlane.normal);
             if (alignment > 1 - 1e-6 && std::abs(plane.dist - facePlane.dist) <= eps) {
                 // Shared surface facing the same way: the later solid keeps its face.

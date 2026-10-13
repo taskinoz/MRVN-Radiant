@@ -53,6 +53,13 @@ int main() {
         auto laterFace = visibleFragments(laterTop, up, 1, {box({-128, -128, -16}, {128, 128, 0}, 0)});
         require(std::abs(total(laterFace) - 256.0 * 256) < 1, "Later brush keeps its whole face");
 
+        // An unset plane (zero normal) on the occluder is ignored, not treated as one
+        // every point lies on; that emitted the whole face again as a fragment.
+        Solid withEmpty = later;
+        withEmpty.planes.push_back({{0, 0, 0}, 0});
+        auto emptyPlane = visibleFragments(floorTop, up, 0, {withEmpty});
+        require(std::abs(total(emptyPlane) - 128.0 * 256) < 1, "Zero-normal planes are ignored");
+
         std::cout << "CSG face tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

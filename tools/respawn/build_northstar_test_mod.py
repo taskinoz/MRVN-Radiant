@@ -54,6 +54,33 @@ def sky_rig(env_text):
     raise ValueError("sky source has no skybox_cam_level sky_camera")
 
 
+def box_brush(lo, hi, material):
+    """Axial brush in classic MAP syntax (face winding as remap expects)."""
+    (lx, ly, lz), (hx, hy, hz) = lo, hi
+    faces = [((hx, hy, lz), (lx, hy, lz), (lx, ly, lz)), ((lx, ly, hz), (lx, hy, hz), (hx, hy, hz)),
+             ((lx, ly, hz), (hx, ly, hz), (hx, ly, lz)), ((hx, ly, hz), (hx, hy, hz), (hx, hy, lz)),
+             ((hx, hy, hz), (lx, hy, hz), (lx, hy, lz)), ((lx, hy, hz), (lx, ly, hz), (lx, ly, lz))]
+    return "{\n" + "\n".join(" ".join("( %g %g %g )" % p for p in f) + f" {material} 0 0 0 1 1 0 0 0"
+                             for f in faces) + "\n}"
+
+
+def enclosure(lo, hi, material, margin=512, thickness=64):
+    """Closed shell of sky brushes around the map, as retail maps enclose
+    themselves in a TOOLS\\TOOLSSKYBOX box: the camera never sees the void,
+    hitscan traces into the void hit it, and leaks are sealed."""
+    lo = [v - margin for v in lo]
+    hi = [v + margin for v in hi]
+    t = thickness
+    return [
+        box_brush((lo[0] - t, lo[1] - t, lo[2] - t), (hi[0] + t, hi[1] + t, lo[2]), material),  # floor
+        box_brush((lo[0] - t, lo[1] - t, hi[2]), (hi[0] + t, hi[1] + t, hi[2] + t), material),  # ceiling
+        box_brush((lo[0] - t, lo[1] - t, lo[2]), (lo[0], hi[1] + t, hi[2]), material),          # -x
+        box_brush((hi[0], lo[1] - t, lo[2]), (hi[0] + t, hi[1] + t, hi[2]), material),          # +x
+        box_brush((lo[0], lo[1] - t, lo[2]), (hi[0], lo[1], hi[2]), material),                  # -y
+        box_brush((lo[0], hi[1], lo[2]), (hi[0], hi[1] + t, hi[2]), material),                  # +y
+    ]
+
+
 def menu_rig(env_text=None):
     """Lighting for the pilot/Titan menu stage at MENU_SCENE: light environment 1,
     its light_environment_volume and spotlights. With a retail Coliseum _env.ent,
@@ -94,13 +121,14 @@ MATERIAL = "world/concrete/concrete_plates_plain_wet_bm"
 WALL_MATERIAL = "world/boomtown/boomtown_wall_gapconcrete_01"
 
 
-def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None):
+def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None, shell=None):
     """Handle original line-oriented Quake MAP syntax, rejecting other syntax.
 
     With `materials` (build_quake_materials textures entries) each face keeps
     its own converted material; otherwise floors and walls get two Coliseum
     materials. Light entities pass through so remap can bake them."""
     depth, brushes, current, spawns, keys, lights = 0, [], [], [], {}, []
+    lo, hi = [1e30] * 3, [-1e30] * 3
     entity_brushes, discarded = [], {}
     liquid = False
     for line in text.splitlines():
@@ -147,6 +175,9 @@ def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None):
                 raise ValueError(f"unsupported brush face: {line}")
             liquid |= match[2].startswith("*")
             points = [tuple(map(float, p.split())) for p in re.findall(r'\(([^()]+)\)', match[1])]
+            for point in points:
+                lo = [min(a, b) for a, b in zip(lo, point)]
+                hi = [max(a, b) for a, b in zip(hi, point)]
             a = [points[0][i] - points[1][i] for i in range(3)]
             b = [points[2][i] - points[1][i] for i in range(3)]
             normal_z = a[0] * b[1] - a[1] * b[0]
@@ -162,6 +193,8 @@ def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None):
     if stats is not None:
         stats["discarded_brushes"] = discarded
     # Door openings remain open; trigger/liquid volumes never become solid.
+    if shell:
+        brushes = brushes + enclosure(lo, hi, shell)
     output = '{\n"classname" "worldspawn"\n'
     output += "\n".join(brushes) + "\n}\n"
     for light in lights:
@@ -250,6 +283,8 @@ def main():
     parser.add_argument("--materials", type=Path,
                         help="build_quake_materials output; keeps each Quake texture as its own material")
     parser.add_argument("--sun", action="store_true", help="add a light_environment (sun and sky ambient)")
+    parser.add_argument("--no-enclosure", action="store_true",
+                        help="do not wrap the map in a sky-brush shell (retail maps are enclosed)")
     parser.add_argument("--sky", type=Path,
                         help="retail mp_coliseum_env.ent: add its 3D skybox camera and grave_se vista "
                              "(the model is extracted from --sky-vpk)")
@@ -267,8 +302,13 @@ def main():
     conversion = {}
     menu = menu_rig(args.menu_rig.read_text(encoding="latin-1") if args.menu_rig else None)
     sky = sky_rig(args.sky.read_text(encoding="latin-1")) if args.sky else None
+    shell = None
+    if materials and not args.no_enclosure:
+        shell = next((e["shader"] for n, e in materials["textures"].items()
+                      if n.lower().startswith("sky") and e.get("shader")), None)
     geometry, brush_count, spawn_count = adapt_map(
-        original, conversion, materials["textures"] if materials else None, args.sun, menu, sky)
+        original, conversion, materials["textures"] if materials else None, args.sun, menu, sky, shell)
+    conversion["enclosure"] = shell or "none"
     conversion["menu_rig"] = str(args.menu_rig) if args.menu_rig else "authored"
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -306,6 +346,9 @@ def main():
     level_script.write_text('global function CodeCallback_MapInit\n\nvoid function CodeCallback_MapInit()\n{\n'
                             '\tClassicMP_SetLevelIntro( ClassicMP_DefaultNoIntro_Setup, ClassicMP_DefaultNoIntro_GetLength() )\n'
                             '\tClassicMP_ForceDisableEpilogue( true )\n'
+                            '\t// No navmesh or Titan drop space: replacement Titans would fail to find a\n'
+                            '\t// spawn point (_replacement_titans_drop.gnut, empty array).\n'
+                            '\tRiff_ForceTitanAvailability( eTitanAvailability.Never )\n'
                             '\tprint( "MRVN E1M1 experimental geometry test loaded" )\n}\n')
     cfg = mod / "mod/cfg/mrvn_quake_e1m1.cfg"
     cfg.parent.mkdir(parents=True)

@@ -542,6 +542,16 @@ void Shared::MakeLightmapUVs() {
         Shared::Mesh_t &mesh = Shared::meshes.at(island.mesh);
         Vector2  mins = island.bounds.mins, maxs = island.bounds.maxs;
 
+        // Self-lit sky faces (e.g. the enclosing sky shell) bake to a constant,
+        // so they need almost no lightmap resolution.
+        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY)) {
+            const float  sky = 1.0f / 64.0f;
+            for (Shared::Vertex_t &vertex : mesh.vertices)
+                vertex.lightmapUV = vertex.lightmapUV * sky;
+            mins = mins * sky;
+            maxs = maxs * sky;
+        }
+
         // Shrink islands larger than a page instead of failing.
         const float  extent = std::max(maxs.x() - mins.x(), maxs.y() - mins.y());
         if (extent > limit) {

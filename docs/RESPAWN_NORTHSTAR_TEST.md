@@ -145,6 +145,22 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
   The apex-to-titanfall-2 converter hit the same thing with sky portals and
   fixed it with a textured dome. `--sky` remains available for maps that have a
   real 3D skybox.
+- **Enclosure:** every retail map surveyed (Coliseum, Glitch, Live Fire Stacks,
+  Colony, Homestead) is enclosed by a large `TOOLS\TOOLSSKYBOX` box (60–232
+  triangles) near the ±16384 coordinate limit, with a `sky_camera` and vista
+  models for its 3D skybox. The builder now wraps the map in a closed shell of
+  64-unit sky brushes, 512 units outside its bounds, drawn with the self-lit
+  Quake sky; `--no-enclosure` turns it off. In the harness, traces from the gap
+  stop at the shell (z 800, x 2032, y −944), and views from outside show sky
+  instead of the hall of mirrors. That covers death cameras clipping outside,
+  hitscan into the void and leaky maps.
+- **Sky texture:** Quake sky textures are two layers side by side, with black
+  transparent in the front layer. They are composited into one square texture,
+  since tiling the raw image drew black stripes. Self-lit sky faces get 1/64
+  lightmap density.
+- **Titans:** with no navmesh or `info_spawnpoint_titan`, calling in a Titan hit a
+  script error (`FindSpawnpoint_ForReplacementTitan`, empty array). The level
+  script now calls `Riff_ForceTitanAvailability( eTitanAvailability.Never )`.
 - **3D sky:** `--sky <mp_coliseum_env.ent>` adds Coliseum's `skybox_cam_level`
   `sky_camera`. It also places the `models/vistas/grave_se.mdl` vista at the
   camera origin as a non-solid, shadowless static prop, as retail does. The MDL is

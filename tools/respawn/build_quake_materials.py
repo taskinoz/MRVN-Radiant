@@ -147,6 +147,21 @@ def read_png(path):
     return width, height, bytes(rgba)
 
 
+def composite_sky(width, height, rgba):
+    """Quake skies are two square layers side by side: the left (front) layer
+    with black as transparent, over the right (back) layer. Composite them,
+    as Quake does at runtime, into one square image."""
+    half = width // 2
+    out = bytearray(half * height * 4)
+    for y in range(height):
+        for x in range(half):
+            front = (y * width + x) * 4
+            back = (y * width + half + x) * 4
+            source = front if any(rgba[front:front + 3]) else back
+            out[(y * half + x) * 4:(y * half + x) * 4 + 4] = rgba[source:source + 3] + b"\xff"
+    return bytes(out)
+
+
 def mip_chain(width, height, rgba, limit=13):
     """Box-filtered mips down to 1x1 (at most `limit` levels)."""
     levels = [(width, height, rgba)]
@@ -223,6 +238,8 @@ def build(map_text, library_dir, template_pak, repak, output):
         stem, method = resolve(name, library)
         png = library[stem]
         width, height, rgba = read_png(png)
+        if key.startswith("sky") and width == 2 * height:
+            width, rgba = width // 2, composite_sky(width, height, rgba)
         world = material_name(name)
         albedo = f"texture/quake/{world.rsplit('/', 1)[1]}_col.rpak"
         texture(albedo, mip_chain(width, height, rgba), True)

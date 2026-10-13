@@ -474,7 +474,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     // Character light probes over the lit geometry, found through a KD tree.
     V3 lo{1e30, 1e30, 1e30}, hi{-1e30, -1e30, -1e30};
     for (const Respawn::Bake::Chart &chart : Titanfall::Bsp::lightmapCharts)
-        for (const V3 &p : chart.positions) {
+        for (const V3 &p : chart.constant >= 0 ? std::vector<V3>() : chart.positions) {  // skip self-lit sky shells
             lo = Respawn::Bake::vmin(lo, p);
             hi = Respawn::Bake::vmax(hi, p);
         }

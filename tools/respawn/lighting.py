@@ -2,7 +2,7 @@
 """Original Respawn lighting research, inspection and authored-light tools.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-Schema facts credited in notes/respawn/RESPAWN_LIGHTING.md; no upstream code imported.
+Schema facts credited in docs/respawn/RESPAWN_LIGHTING.md; no upstream code imported.
 RGBA exports expose stored bytes, not a proven shader decode or bake.
 """
 import argparse

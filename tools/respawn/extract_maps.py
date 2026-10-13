@@ -2,7 +2,7 @@
 """Extract map samples through an explicitly supplied tf2vpk executable.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-tf2vpk attribution and the tested revision: docs/RESPAWN_SOURCES.md.
+tf2vpk attribution and the tested revision: docs/respawn/RESPAWN_SOURCES.md.
 """
 import argparse
 import hashlib

@@ -2,7 +2,7 @@
 """Selected R1/R2 cross-lump checks, not an engine compatibility certificate.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-Binary format research credited in docs/RESPAWN_SOURCES.md; original code.
+Binary format research credited in docs/respawn/RESPAWN_SOURCES.md; original code.
 """
 import argparse
 import json

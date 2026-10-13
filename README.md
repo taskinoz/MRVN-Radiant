@@ -19,9 +19,11 @@ MRVN-Radiant is a fork of NetRadiant-custom (GtkRadiant 1.4 &rarr; massive rewri
 
 End-to-end game compatibility is not yet verified. The percentages below are
 historical lump-generation counts, not a measure of playable-map compatibility.
-Research notes (compatibility plan, lighting, samples, crash investigations) are
-kept locally in the gitignored `notes/respawn/` folder. See the
-[source attribution register](docs/RESPAWN_SOURCES.md) for research/tool credits.
+Respawn research notes live in [docs/respawn](docs/respawn): the
+[compatibility plan](docs/respawn/RESPAWN_COMPATIBILITY.md) (current gaps, release
+gates, BSP inspection), [lighting](docs/respawn/RESPAWN_LIGHTING.md), retail
+samples, map trials, crash investigations and the E1M1 test-mod build notes. See the
+[source attribution register](docs/respawn/RESPAWN_SOURCES.md) for research/tool credits.
 These tools do not yet provide a verified engine lightmap bake.
 
 | Game | Coverage | Note |

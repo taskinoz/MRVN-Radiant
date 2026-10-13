@@ -2,7 +2,7 @@
 """Recover selected v29/v37 collision brushes as a partial, editable Radiant map.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-Format research: docs/RESPAWN_SOURCES.md. Original implementation.
+Format research: docs/respawn/RESPAWN_SOURCES.md. Original implementation.
 Does not recover render meshes, props, entities, transforms, lighting or UVs.
 All recovered brushes are placed in worldspawn in their stored coordinates.
 """

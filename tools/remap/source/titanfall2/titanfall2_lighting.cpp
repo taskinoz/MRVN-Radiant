@@ -24,7 +24,7 @@
 /*
     Titanfall 2 lighting: world lights, lightmap atlas pages, SKY/RTL planes and
     RTL pages. Record values follow retail Coliseum/Glitch light entities and
-    their compiled world lights; see notes/respawn/RESPAWN_LIGHTING.md.
+    their compiled world lights; see docs/respawn/RESPAWN_LIGHTING.md.
 */
 
 #include "../remap.h"

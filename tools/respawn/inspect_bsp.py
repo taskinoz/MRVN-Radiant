@@ -2,7 +2,7 @@
 """Read-only rBSP inventory. Python 3.10+, standard library only.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-Format references: docs/RESPAWN_SOURCES.md. No upstream implementation copied.
+Format references: docs/respawn/RESPAWN_SOURCES.md. No upstream implementation copied.
 """
 
 import argparse

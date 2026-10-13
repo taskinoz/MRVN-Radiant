@@ -1,5 +1,5 @@
 /* Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
- * Original bounded rBSP reader. Research attribution: docs/RESPAWN_SOURCES.md.
+ * Original bounded rBSP reader. Research attribution: docs/respawn/RESPAWN_SOURCES.md.
  * Payloads are opaque; this reader does not establish game schema compatibility.
  */
 #pragma once

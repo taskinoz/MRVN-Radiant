@@ -415,9 +415,9 @@ def main():
     (source_bundle / "e1m1-original.map").write_text(original, encoding="ascii")
     shutil.copyfile(source, source_bundle / source.name)
     (mod / "COPYING").write_bytes(license_bytes)
-    documentation = Path(__file__).resolve().parents[2] / "docs/RESPAWN_NORTHSTAR_TEST.md"
-    shutil.copyfile(documentation, mod / "README.md")
-    shutil.copyfile(documentation.with_name("RESPAWN_SOURCES.md"), mod / "SOURCES.md")
+    # Ship only the tester README (quick start, sources, licenses); research notes
+    # stay in docs/respawn.
+    shutil.copyfile(Path(__file__).with_name("mod_readme.md"), mod / "README.md")
     for name in ("build_northstar_test_mod.py", "pack_vpk.py", "validate_records.py", "inspect_bsp.py"):
         shutil.copyfile(Path(__file__).with_name(name), source_bundle / name)
     shutil.copyfile(shaders / "test.shader", source_bundle / "test.shader")

@@ -33,7 +33,9 @@ TOOLS = {
     "clip": ("tools/toolsplayerclip", "$compileflag nodraw\n $contentflag playerclip"),
     "trigger": ("tools/toolstrigger", "$compileflag nodraw"),
 }
-SKY = ("tools/toolsskybox", "$compileflag sky\n $compileflag nodraw\n $surfaceflag sky")
+# Drawn like retail Coliseum's sky faces: unlit tools\toolsskybox meshes with
+# surface flags 0x404. Nodraw sky left a hall-of-mirrors where the sky should be.
+SKY = ("tools/toolsskybox", "$shadertype UnlitGeneric\n $compileflag sky\n $surfaceflag sky")
 
 # Same-family LibreQuake substitutes for id textures LibreQuake does not ship.
 SUBSTITUTES = [

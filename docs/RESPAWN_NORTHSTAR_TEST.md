@@ -56,7 +56,7 @@ these are replacement materials, not original Quake textures.
 An RPAK alias requests the installed Coliseum assets; no Respawn assets are
 redistributed. The custom level script disables the dropship intro (the first
 test produced an empty-dropship-array error) and evac epilogue. Two client menu
-scene/camera anchors sit away from gameplay at approximately `(8192,8192,0)`;
+scene/camera anchors sit away from gameplay (since 0.3.0, at Coliseum's `(-11776,11856,12736)`);
 Northstar creates its existing menu environment/model around those anchors.
 
 The builder removes the compiler's unrelated hard-coded world-light and CSM
@@ -132,12 +132,16 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
   `mp_coliseum.rpak`, decompressed with `rpak_ddecomp`.
 - **Packaging:** the RPak is loaded through `Postload` after the aliased
   Coliseum pak. A v8.0 STBSP lists every drawn material.
-- **Tools and sky:** `CLIP`, `TRIGGER` and `SKY*` become tool shaders.
+- **Tools and sky:** `CLIP` and `TRIGGER` become nodraw tool shaders. `SKY*` faces
+  are drawn as unlit `tools/toolsskybox` meshes (flags `0x404`), as retail
+  Coliseum's are. Nodraw sky left a hall-of-mirrors effect overhead.
 - **Lights:** light entities are now kept (they were previously dropped), so
   remap bakes them. `--sun` adds a `light_environment`.
 - **Menu stage:** this is always lit. `--menu-rig <mp_coliseum_env.ent>` moves
   retail Coliseum's menu environment, volume and spotlights onto this map's
-  `menu_scene_ref` at (8192, 8192, 0). Both maps lay out their anchors the same
+  `menu_scene_ref`, which now sits at Coliseum's own (−11776, 11856, 12736), far
+  above the play space. At (8192, 8192, 0), level with E1M1, the menu pilot and
+  Titan shadows appeared on gameplay floors in-game. Both maps lay out their anchors the same
   way. The rig is read at build time from your own game files and nothing retail
   is committed. Without it, a small authored rig is used: environment 1, a volume,
   a key spotlight and a rim spotlight.

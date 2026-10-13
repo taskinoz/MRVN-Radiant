@@ -19,7 +19,9 @@ import stbsp
 from validate_records import validate
 
 LEVEL = "mp_quake_e1m1"
-MENU_SCENE = (8192.0, 8192.0, 0.0)
+# The menu stage sits far above the play space, at retail Coliseum's own anchor:
+# at z=0 next to E1M1, menu pilot/Titan shadows appeared on gameplay floors.
+MENU_SCENE = (-11776.0, 11856.0, 12736.0)
 # Retail Coliseum's menu_scene_ref; its menu rig is laid out around this point
 # with the same anchor orientation as ours (scene yaw -90, camera 256 units -Y).
 COLISEUM_MENU_SCENE = (-11776.0, 11856.0, 12736.0)

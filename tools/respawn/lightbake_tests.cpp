@@ -122,6 +122,13 @@ int main() {
         require(decodeRGBM(centre).x > 0.3, "Static light is baked into SKY A");
         require(rtlWord(s, texel(6, 6)) == RtlUnusedTexel, "Static light takes no RTL slot");
 
+        // A self-lit (sky dome) chart gets a constant SKY A and no realtime slots.
+        Chart glowing = floorChart();
+        glowing.constant = 0.8;
+        const Result g = bake({glowing}, pages, {sun, point}, {0.8, 0.8, 0.8}, scene, options);
+        const std::array<std::uint8_t, 4> glow{g.sky[shaded * 4], g.sky[shaded * 4 + 1], g.sky[shaded * 4 + 2], g.sky[shaded * 4 + 3]};
+        require(near(decodeRGBM(glow).x, 0.8, 0.02) && rtlWord(g, shaded) == RtlUnusedTexel, "Constant chart is self-lit");
+
         // Probes: one under the roof, one in the open next to a realtime point light.
         require(cube.inside({0, 0, 0}) && !cube.inside({0, 0, 20}), "Point-in-brush test");
         Light lamp2 = point;

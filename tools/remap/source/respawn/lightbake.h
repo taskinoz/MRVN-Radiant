@@ -296,6 +296,7 @@ public:
 --------------------------------------------------------------------------- */
 struct Chart {
     std::uint32_t page = 0;
+    double constant = -1;  // >= 0: SKY A is this constant (self-lit sky dome), no realtime slots
     std::vector<V3> positions, normals;
     std::vector<std::array<double, 2>> luxels;  // texel-space coordinates within the page
     std::vector<std::uint32_t> triangles;
@@ -473,7 +474,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
             for (std::size_t x = 0; x < pages[p].width; ++x) {
                 const std::size_t i = y * pages[p].width + x;
                 const auto& s = samples[p][i];
-                if (s.chart < 0) continue;
+                if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
                 const V3 pos{s.px, s.py, s.pz}, n{s.nx, s.ny, s.nz};
                 Slots& out = slots[p][i];
                 for (std::size_t l = 0; l < lights.size(); ++l) {
@@ -591,7 +592,14 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 std::uint32_t word = RtlUnusedTexel;
                 std::array<std::uint8_t, 4> masks{};
                 const auto& s = samples[p][i];
-                if (s.chart >= 0) {
+                if (s.chart >= 0 && charts[s.chart].constant >= 0) {
+                    charted.fetch_add(1, std::memory_order_relaxed);
+                    const double c = charts[s.chart].constant;
+                    auto a = encodeRGBM({c, c, c});
+                    std::memcpy(skyA + i * 4, a.data(), 4);
+                    auto bd = encodeDirection({0, 0, 0});
+                    std::memcpy(skyB + i * 4, bd.data(), 4);
+                } else if (s.chart >= 0) {
                     charted.fetch_add(1, std::memory_order_relaxed);
                     const V3 pos{s.px, s.py, s.pz}, n{s.nx, s.ny, s.nz};
                     const V3 start = pos + n * options.rayOffset;

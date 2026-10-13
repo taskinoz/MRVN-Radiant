@@ -240,7 +240,7 @@ void Shared::MakeMeshes(const entity_t &e) {
     std::vector<Shared::Mesh_t>  sky_meshes;
 
     for (Shared::Mesh_t &mesh : Shared::meshes) {
-        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY)) {
+        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY) && CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_SKY)) {
             sky_meshes.push_back(mesh);
             // Respawn does this on their skyboxes, seems to work even when kept
             REMOVE_FLAG(mesh.shaderInfo->surfaceFlags, S_MESH_UNKNOWN);

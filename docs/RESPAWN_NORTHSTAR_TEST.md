@@ -133,8 +133,18 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
 - **Packaging:** the RPak is loaded through `Postload` after the aliased
   Coliseum pak. A v8.0 STBSP lists every drawn material.
 - **Tools and sky:** `CLIP` and `TRIGGER` become nodraw tool shaders. `SKY*` faces
-  are drawn as unlit `tools/toolsskybox` meshes (flags `0x404`), as retail
-  Coliseum's are. Nodraw sky left a hall-of-mirrors effect overhead.
+  are drawn as ordinary world geometry with LibreQuake's sky texture and a
+  constant self-lit lightmap. They keep the `sky` compile flag, so collision and
+  the bake still treat them as sky, but not the sky surface flag, so the engine
+  doesn't treat them as skybox meshes. Two earlier attempts both showed a
+  hall-of-mirrors in-game:
+  - nodraw sky faces;
+  - retail-style `tools/toolsskybox` faces with Coliseum's `sky_camera` and vista,
+    where the loadout stage also showed through the sky.
+
+  The apex-to-titanfall-2 converter hit the same thing with sky portals and
+  fixed it with a textured dome. `--sky` remains available for maps that have a
+  real 3D skybox.
 - **3D sky:** `--sky <mp_coliseum_env.ent>` adds Coliseum's `skybox_cam_level`
   `sky_camera`. It also places the `models/vistas/grave_se.mdl` vista at the
   camera origin as a non-solid, shadowless static prop, as retail does. The MDL is

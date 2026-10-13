@@ -522,6 +522,10 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         if (baked) {
             Respawn::Bake::Chart &chart = Titanfall::Bsp::lightmapCharts.emplace_back();
             chart.page = mesh.lightmapPage;
+            // Textured sky (e.g. Quake sky faces drawn as world geometry) glows
+            // at a constant level instead of being lit, like a sky dome.
+            if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY))
+                chart.constant = 1.0;
             for (const Shared::Vertex_t &vertex : mesh.vertices) {
                 chart.positions.push_back({vertex.xyz.x(), vertex.xyz.y(), vertex.xyz.z()});
                 chart.normals.push_back({vertex.normal.x(), vertex.normal.y(), vertex.normal.z()});
@@ -587,7 +591,7 @@ void Titanfall::EmitLevelInfoWorldspawn() {
     // TODO: start from firstTransMeshIndex
     li.firstSkyMeshIndex = 0;
     for (Shared::Mesh_t &mesh : Shared::meshes) {
-        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY)) { break; }
+        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY) && CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_SKY)) { break; }
             li.firstSkyMeshIndex++;
     }
 

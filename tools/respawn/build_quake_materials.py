@@ -33,9 +33,12 @@ TOOLS = {
     "clip": ("tools/toolsplayerclip", "$compileflag nodraw\n $contentflag playerclip"),
     "trigger": ("tools/toolstrigger", "$compileflag nodraw"),
 }
-# Drawn like retail Coliseum's sky faces: unlit tools\toolsskybox meshes with
-# surface flags 0x404. Nodraw sky left a hall-of-mirrors where the sky should be.
-SKY = ("tools/toolsskybox", "$shadertype UnlitGeneric\n $compileflag sky\n $surfaceflag sky")
+# Quake skies are textures: sky faces draw as ordinary world geometry with the
+# sky image and constant (self-lit) lightmap, keeping the sky compile flag for
+# collision and bake transparency. Both nodraw sky and retail-style
+# tools\toolsskybox + sky_camera showed a hall-of-mirrors in E1M1 (as the
+# apex-to-titanfall-2 sky portals did); its working fix was a textured dome.
+SKY_BODY = "$shadertype LitBumpGeneric\n $compileflag sky"
 
 # Same-family LibreQuake substitutes for id textures LibreQuake does not ship.
 SUBSTITUTES = [
@@ -209,8 +212,8 @@ def build(map_text, library_dir, template_pak, repak, output):
 
     for name in map_textures(map_text):
         key = name.lower()
-        if key in TOOLS or key.startswith("sky"):
-            shader, body = SKY if key.startswith("sky") else TOOLS[key]
+        if key in TOOLS:
+            shader, body = TOOLS[key]
             entries[name] = {"shader": shader, "method": "tool"}
             shaders[shader] = body
             continue
@@ -248,7 +251,7 @@ def build(map_text, library_dir, template_pak, repak, output):
             files.append({"_type": "matl", "_path": path})
         entries[name] = {"shader": world, "method": method, "source": f"{png.parent.name}/{png.name}",
                          "width": width, "height": height}
-        shaders[world] = "$shadertype LitBumpGeneric"
+        shaders[world] = SKY_BODY if key.startswith("sky") else "$shadertype LitBumpGeneric"
 
     project = output / "project"
     manifest = {"version": 7, "name": PAK_NAME, "keepDevOnly": True, "assetsDir": str(assets),

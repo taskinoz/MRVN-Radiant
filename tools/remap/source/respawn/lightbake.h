@@ -1,6 +1,6 @@
 /* Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
  * Original Titanfall 2 lightmap baker. Plane encodings and light records were
- * measured from retail Coliseum/Glitch samples; see docs/RESPAWN_LIGHTING.md.
+ * measured from retail Coliseum/Glitch samples; see notes/respawn/RESPAWN_LIGHTING.md.
  *
  * Per page the engine reads:
  *   SKY  A  RGBM: rgb/255 * (a/255 * 3.984375 + 0.015625); a small ambient fill

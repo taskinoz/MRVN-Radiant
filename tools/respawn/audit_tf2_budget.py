@@ -2,7 +2,7 @@
 """Read-only TF2 world-index budget audit for an explicitly identified engine.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
-Research provenance: docs/RESPAWN_GRAVEMIND.md. Original implementation.
+Research provenance: notes/respawn/RESPAWN_GRAVEMIND.md. Original implementation.
 """
 import argparse
 import hashlib

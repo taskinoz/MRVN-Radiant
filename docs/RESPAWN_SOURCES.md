@@ -66,7 +66,7 @@ and build-specific compatibility remain unverified.
 - **pg9182/tf2vpk**, commit
   `b73c54d8e4245075ea207c7e51a2a86fdb94e4ff`, MIT, copyright 2022 pg9182.
   Built locally using its `go.mod`/`go.sum` and used through `list`/`get` to
-  extract the seven maps in [RESPAWN_SAMPLES.md](RESPAWN_SAMPLES.md). Its original
+  extract the seven maps in `RESPAWN_SAMPLES.md` (local research notes). Its original
   license and source are retained under `.local/respawn/upstream`. The binary and
   third-party dependencies are not committed or redistributed. The original
   adapter `tools/respawn/extract_maps.py` invokes the executable; it contains no
@@ -107,7 +107,7 @@ and build-specific compatibility remain unverified.
   file is present at that revision; no source or binary is incorporated or
   bundled. Raw output was preserved alongside separately repaired glTF output.
   Original materialization/postprocess scripts and validation evidence are
-  described in [RESPAWN_MAP_TRIALS.md](RESPAWN_MAP_TRIALS.md).
+  described in `RESPAWN_MAP_TRIALS.md` (local research notes).
 - The new collision `.map` recovery code is original; its plane/addressing facts
   use the bsp_tool research already credited above. It does not derive code from
   bsp2gltf and does not claim full render/entity recovery.
@@ -145,12 +145,12 @@ branch definitions and `bsp_tool/lightmaps/titanfall*.py`. This informed origina
 inspection, point-light record emission, controlled atlas probes and offline
 direct-light tools. No GPL-3.0 implementation was copied or incorporated; the
 research checkout stays ignored. Local TF1 Angel City and TF2 Coliseum/Glitch
-provide byte-size/layout evidence. See [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md)
+provide byte-size/layout evidence. See `RESPAWN_LIGHTING.md` (local research notes)
 for attribution, results, encoding uncertainties and engine-validation limits.
 
 Gravemind's `games/respawn/maps` conversion research was read on 11 October 2026.
 Document IDs, revisions, recorded authors, source workspace references and local
-engine cross-checks are retained in [RESPAWN_GRAVEMIND.md](RESPAWN_GRAVEMIND.md).
+engine cross-checks are retained in `RESPAWN_GRAVEMIND.md` (local research notes).
 Technical findings inform an original read-only TF2 budget auditor and future
 lighting/material/collision work. No conversion source, game assets, or access
 credentials were copied into the project.

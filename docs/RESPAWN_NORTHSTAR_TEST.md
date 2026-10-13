@@ -17,7 +17,7 @@ read inclusively by the engine. Triangle rendering used a separate, correct inde
 path, so the previous build could render while impact/decal queries read outside
 the vertex buffer. The October 7 grapple dump faults at `engine.dll + 0xae74e`;
 its surface record matches mesh 42, whose sort starts at vertex 4,984. The previous
-offset added that base twice. See `RESPAWN_SURFACE_CRASH.md` for the evidence.
+offset added that base twice.
 This fixes the demonstrated invalid range; the earlier explosion/particle crashes
 have not yet been matched to a dump. Retest grapples, bullet impacts, grenade
 explosions and surface particles after restarting Northstar.

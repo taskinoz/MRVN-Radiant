@@ -417,7 +417,6 @@ def main():
     (mod / "COPYING").write_bytes(license_bytes)
     documentation = Path(__file__).resolve().parents[2] / "docs/RESPAWN_NORTHSTAR_TEST.md"
     shutil.copyfile(documentation, mod / "README.md")
-    shutil.copyfile(documentation.with_name("RESPAWN_SURFACE_CRASH.md"), mod / "RESPAWN_SURFACE_CRASH.md")
     shutil.copyfile(documentation.with_name("RESPAWN_SOURCES.md"), mod / "SOURCES.md")
     for name in ("build_northstar_test_mod.py", "pack_vpk.py", "validate_records.py", "inspect_bsp.py"):
         shutil.copyfile(Path(__file__).with_name(name), source_bundle / name)

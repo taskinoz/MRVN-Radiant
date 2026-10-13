@@ -48,3 +48,6 @@ windeps
 libassimp.*
 install/radiant
 install/remap
+
+# Local research notes
+/notes/

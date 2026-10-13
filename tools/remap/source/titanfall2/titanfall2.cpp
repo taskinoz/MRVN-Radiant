@@ -314,7 +314,7 @@ void CompileR2BSPFile() {
 void Titanfall2::CheckWorldIndexBudget(std::size_t firstMesh) {
     // The retail engine compares world indices against 0x300000. Odd triangle
     // counts are padded to pairs; this per-mesh estimate is inherited research,
-    // see docs/RESPAWN_GRAVEMIND.md and tools/respawn/audit_tf2_budget.py.
+    // see notes/respawn/RESPAWN_GRAVEMIND.md and tools/respawn/audit_tf2_budget.py.
     constexpr std::uint64_t capacity = 0x300000;
     std::uint64_t padded = 0;
     for (std::size_t i = firstMesh; i < Titanfall::Bsp::meshes.size(); i++) {

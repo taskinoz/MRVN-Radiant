@@ -1,6 +1,6 @@
 /* Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
  * Versions observed in the local corpus and cross-checked against bsp_tool's
- * Titanfall/Titanfall 2 schemas. See docs/RESPAWN_SAMPLES.md and RESPAWN_SOURCES.md.
+ * Titanfall/Titanfall 2 schemas. See notes/respawn/RESPAWN_SAMPLES.md and docs/RESPAWN_SOURCES.md.
  */
 #pragma once
 #include <cstddef>

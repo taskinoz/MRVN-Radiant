@@ -1,15 +1,32 @@
 # Experimental Northstar E1M1 test
 
-This is a geometry/compiler test, **not a complete playable Quake port**. The BSP
-has selected format validation and independently verified VPK bytes. Engine
-Version 0.1.1 loaded and rendered on the user's Northstar installation, with white
-developer surfaces, incorrect shadows and blocked passages. Version 0.2.0 also
-loaded but crashed when grappling a surface. Version 0.2.1 corrects the mesh
-surface vertex fields described below and still requires an engine retest. The compiler still
-emits placeholder lighting and other incomplete structures; loading can fail or
-crash. No navigation mesh or Quake gameplay is included.
+Quake's E1M1, compiled to a Titanfall 2 BSP by MRVN-Radiant's experimental
+Respawn writer. This is a compiler test, **not a complete Quake port**: Quake's
+doors, lifts, liquids, items and monsters are not included, and there is no
+navigation mesh.
 
-## Installation and testing
+## Quick start (0.4.0)
+
+1. Close Titanfall 2. Unzip so the `MRVN.QuakeE1M1Test` folder sits in
+   `Titanfall2/R2Northstar/mods`, replacing any older copy.
+2. Start Northstar, check that `MRVN.QuakeE1M1Test` is enabled in the Mods menu,
+   and start a private match. Then run `map mp_quake_e1m1` in the console.
+3. Everyone who joins needs the same mod version installed; Northstar does not
+   download it for them.
+
+What to expect:
+- LibreQuake textures, baked lighting with one light bounce, and a static sun.
+- The map is wrapped in a sky shell, like retail maps, so death cameras and
+  shots into gaps hit sky instead of the void.
+- Titans are disabled: without a navmesh, Titanfall's drop code finds no spawn
+  point and the script errors out.
+- Pilot movement, weapons, grapples and grenades work in testing so far.
+
+Please report crashes (with the time and what you were doing), z-fighting or
+flickering surfaces (`cl_showpos 1` shows your position), holes, and areas
+that look wrong or too dark.
+
+## Build history
 
 Version 0.2.1 fixes two compiler errors in surface ranges: `first_vertex` must be
 relative to the material-sort base, and `num_vertices` is the last local index,

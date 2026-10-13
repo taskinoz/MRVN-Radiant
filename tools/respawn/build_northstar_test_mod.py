@@ -337,7 +337,7 @@ def main():
     mod.mkdir()
     (mod / "mod.json").write_text(json.dumps({
         "Name": MOD, "Description": "Experimental E1M1 compiler test with baked lighting and LibreQuake textures; load mp_quake_e1m1 locally.",
-        "Version": "0.3.0", "LoadPriority": 100, "RequiredOnClient": True,
+        "Version": "0.4.0", "LoadPriority": 100, "RequiredOnClient": True,
         "Scripts": [{"Path": f"mp/levels/{LEVEL}.nut",
                      "RunOn": f"SERVER && MP && MAP_{LEVEL}"}],
     }, indent=2) + "\n")

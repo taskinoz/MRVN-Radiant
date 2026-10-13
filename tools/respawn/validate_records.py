@@ -163,6 +163,14 @@ def check_records(records):
         if any(not 0 <= base_vertex + v[0] < len(records[pool])
                for v in indices[first:first + 3 * triangles]):
             error(80, i, "triangle vertex reference outside selected vertex pool")
+        # The runtime reads triangles in pairs (crash at engine.dll+0xae8d3 otherwise):
+        # retail six-aligns every mesh and pads odd ones with a degenerate triangle.
+        if first % 6:
+            error(80, i, "triangle slice not aligned to a triangle pair")
+        if triangles & 1:
+            pad = indices[first + 3 * triangles:first + 3 * triangles + 3]
+            if len(pad) != 3 or len({v[0] for v in pad}) != 1:
+                error(80, i, "odd triangle count without a degenerate padding triangle")
     for pool in (71, 72, 73, 74):
         for i, vertex in enumerate(records[pool]):
             if vertex[0] >= len(records[3]) or vertex[1] >= len(records[30]):

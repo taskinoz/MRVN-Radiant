@@ -285,6 +285,27 @@ How the menu stage is lit:
   a longer, different falloff. The structural inspector and record validator
   report no issues.
 
+### Shadow environments (0x05) and shadow meshes
+
+Retail Coliseum has one 36-byte `SHADOW_ENVIRONMENTS` record per light
+environment: `[first, last)` CSM AABB nodes, CSM object references and shadow
+meshes, then that environment's sun normal. Coliseum has two empty CSM roots
+(min = +FLT_MAX, max = −FLT_MAX). The compiler writes the same layout:
+- **Gameplay (environment 0)** owns the shadow meshes. These are position-only
+  copies of the world model's opaque meshes, with mesh-local uint16 indices.
+- **Other environments** own none.
+
+Without these records, the menu stage's characters cast shadows into gameplay
+in-game. That was not fixed by moving the stage.
+
+### Index padding
+
+The runtime reads world triangles in pairs. Retail six-aligns every mesh and
+follows each odd-sized one with a degenerate triangle (Angel City: all 1,097 odd
+meshes). Without that, a grenade's decal projection read the next mesh's indices
+and crashed at `engine.dll+0xae8d3`, the address apex-to-titanfall-2 also
+recorded. `validate_records.py` now enforces the rule.
+
 ## Remaining work
 
 1. Load a baked map in Northstar. Confirm the sun and point-light shadows,

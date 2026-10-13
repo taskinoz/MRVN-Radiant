@@ -94,8 +94,10 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_PLANES],            Titanfall::Bsp::planes);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA],      Titanfall::Bsp::textureData);
     AddLump(file, header.lumps[R2_LUMP_VERTICES],          Titanfall::Bsp::vertices);
-    if (Titanfall2::Bsp::lightingBaked)
+    if (Titanfall2::Bsp::lightingBaked) {
         AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_PARENT_INFOS], Titanfall2::Bsp::lightprobeParentInfos);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_ENVIRONMENTS],   Titanfall2::Bsp::shadowEnvironments);
+    }
     AddLump(file, header.lumps[R2_LUMP_MODELS],            Titanfall::Bsp::models);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_NORMALS],    Titanfall::Bsp::vertexNormals);
     AddLump(file, header.lumps[R2_LUMP_ENTITY_PARTITIONS], Titanfall::Bsp::entityPartitions);
@@ -155,7 +157,10 @@ void WriteR2BSPFile(const char *filename) {
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightmapDataSky);
     else
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightMapDataSky_stub);  // stub
-    AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],            Titanfall::Bsp::csmAABBNodes_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],        Titanfall2::Bsp::csmAABBNodes);
+    else
+        AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],        Titanfall::Bsp::csmAABBNodes_stub);  // stub
     if (Titanfall2::Bsp::lightingBaked) {
         AddLump(file, header.lumps[R2_LUMP_LIGHTPROBES],           Titanfall2::Bsp::lightprobes);
         AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_TREE],       Titanfall2::Bsp::lightprobeTree);
@@ -182,6 +187,11 @@ void WriteR2BSPFile(const char *filename) {
     if (Titanfall2::Bsp::lightingBaked)
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_RTL_PAGE], Titanfall2::Bsp::lightmapRtlPages);
     AddLump(file, header.lumps[R2_LUMP_LEVEL_INFO],                Titanfall::Bsp::levelInfo);
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESH_OPAQUE_VERTICES], Titanfall2::Bsp::shadowMeshVertices);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESH_INDICES],   Titanfall2::Bsp::shadowMeshIndices);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESHES],         Titanfall2::Bsp::shadowMeshes);
+    }
 
     /* emit bsp size */
     const int size = ftell(file);

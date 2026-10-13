@@ -38,6 +38,22 @@ def box_volume(half):
     return keys
 
 
+SKY_VISTA = "models/vistas/grave_se.mdl"
+
+
+def sky_rig(env_text):
+    """Coliseum's gameplay 3D skybox: its skybox_cam_level sky_camera and, at the
+    camera origin, the grave_se vista as a non-solid, shadowless static prop
+    (as retail places it). The MDL is staged from the user's Coliseum VPK."""
+    for block in re.findall(r"\{[^{}]*\}", env_text):
+        keys = dict(re.findall(r'"([^"]+)" "([^"]*)"', block))
+        if keys.get("classname") == "sky_camera" and keys.get("targetname") == "skybox_cam_level":
+            vista = {"classname": "prop_static", "model": SKY_VISTA, "origin": keys["origin"],
+                     "angles": "0 90 0", "solid": "0", "flags": "84", "_cullradius": "16384"}
+            return [keys, vista]
+    raise ValueError("sky source has no skybox_cam_level sky_camera")
+
+
 def menu_rig(env_text=None):
     """Lighting for the pilot/Titan menu stage at MENU_SCENE: light environment 1,
     its light_environment_volume and spotlights. With a retail Coliseum _env.ent,
@@ -78,7 +94,7 @@ MATERIAL = "world/concrete/concrete_plates_plain_wet_bm"
 WALL_MATERIAL = "world/boomtown/boomtown_wall_gapconcrete_01"
 
 
-def adapt_map(text, stats=None, materials=None, sun=False, menu=None):
+def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None):
     """Handle original line-oriented Quake MAP syntax, rejecting other syntax.
 
     With `materials` (build_quake_materials textures entries) each face keeps
@@ -154,7 +170,7 @@ def adapt_map(text, stats=None, materials=None, sun=False, menu=None):
         output += ('{\n"classname" "light_environment"\n"lightEnvironmentIndex" "*0"\n"origin" "0 0 0"\n'
                    '"pitch" "-60"\n"angles" "60 45 0"\n"_light" "255 240 220 500"\n'
                    '"_ambient" "150 170 255 80"\n"targetname" "light_environment_1"\n}\n')
-    for keys in menu or []:
+    for keys in (menu or []) + (sky or []):
         output += "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in keys.items()) + "}\n"
     if stats is not None:
         stats["light_entities"] = len(lights) + int(sun)
@@ -234,6 +250,11 @@ def main():
     parser.add_argument("--materials", type=Path,
                         help="build_quake_materials output; keeps each Quake texture as its own material")
     parser.add_argument("--sun", action="store_true", help="add a light_environment (sun and sky ambient)")
+    parser.add_argument("--sky", type=Path,
+                        help="retail mp_coliseum_env.ent: add its 3D skybox camera and grave_se vista "
+                             "(the model is extracted from --sky-vpk)")
+    parser.add_argument("--sky-vpk", type=Path,
+                        default=Path("C:/Games/Titanfall2/vpk/englishclient_mp_coliseum.bsp.pak000_dir.vpk"))
     parser.add_argument("--menu-rig", type=Path,
                         help="retail mp_coliseum_env.ent whose menu-stage lights are moved to this map's menu stage; "
                              "without it a small authored rig is used")
@@ -245,8 +266,9 @@ def main():
     license_bytes = args.copying.read_bytes()
     conversion = {}
     menu = menu_rig(args.menu_rig.read_text(encoding="latin-1") if args.menu_rig else None)
+    sky = sky_rig(args.sky.read_text(encoding="latin-1")) if args.sky else None
     geometry, brush_count, spawn_count = adapt_map(
-        original, conversion, materials["textures"] if materials else None, args.sun, menu)
+        original, conversion, materials["textures"] if materials else None, args.sun, menu, sky)
     conversion["menu_rig"] = str(args.menu_rig) if args.menu_rig else "authored"
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -319,6 +341,16 @@ def main():
         files[f"maps/{path.name}"] = path.read_bytes() if path.exists() else b"ENTITIES01\n\x00"
     # Northstar RefreshMapList discovers mod/maps/*.bsp, but does not inspect
     # mod VPKs. Keep identical loose members for discovery and filesystem access.
+    if sky:
+        # Aliasing Coliseum's RPak supplies the vista's GPU assets but does not
+        # mount Coliseum's VPK, so the MDL itself ships loose with the mod.
+        vista = subprocess.run([str(args.tf2vpk.resolve()), "get", str(args.sky_vpk), SKY_VISTA],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+        if not vista.startswith(b"IDST"):
+            raise ValueError(f"{SKY_VISTA} from {args.sky_vpk} is not an MDL")
+        (mod / "mod" / SKY_VISTA).parent.mkdir(parents=True, exist_ok=True)
+        (mod / "mod" / SKY_VISTA).write_bytes(vista)
+        conversion["sky"] = {"camera": sky[0]["origin"], "vista": SKY_VISTA, "source": str(args.sky_vpk)}
     for path, payload in files.items():
         loose = mod / "mod" / path
         loose.parent.mkdir(parents=True, exist_ok=True)

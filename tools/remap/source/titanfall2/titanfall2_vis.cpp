@@ -45,7 +45,10 @@ void Titanfall2::EmitStaticProp(entity_t &e) {
     MinMax minmax;
 
     std::vector<const AssMeshWalker*> meshes = LoadModelWalker( model, 0 );
-    if(meshes.empty()) {
+    // Game-only models (e.g. skybox vistas) need no editor copy: bound them by
+    // "_cullradius" around the origin instead.
+    const float cullRadius = e.floatForKey("_cullradius");
+    if(meshes.empty() && cullRadius <= 0.0f) {
         Sys_Warning("Failed to load model: %s\n", model);
         return;
     }
@@ -91,6 +94,10 @@ void Titanfall2::EmitStaticProp(entity_t &e) {
     prop.modelName = pathIdx;
     prop.solid = 6;
     prop.flags = 84;
+    if (e.valueForKey("solid")[0])
+        prop.solid = e.intForKey("solid");
+    if (e.valueForKey("flags")[0])
+        prop.flags = e.intForKey("flags");
     prop.envCubemap = -1;
     prop.fade_scale = -1.0f;
     prop.cpu_level[0] = -1.0f;
@@ -101,6 +108,10 @@ void Titanfall2::EmitStaticProp(entity_t &e) {
     prop.unk.y() = 0.0f;
     prop.unk.z() = 0.0f;
 
+    if (meshes.empty()) {
+        minmax.extend(origin - Vector3(cullRadius, cullRadius, cullRadius));
+        minmax.extend(origin + Vector3(cullRadius, cullRadius, cullRadius));
+    }
     for ( const auto mesh : meshes )
     {
         mesh->forEachFace( [&minmax, &origin]( const Vector3 ( &xyz )[3], const Vector2 ( &st )[3] ){

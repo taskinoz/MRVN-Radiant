@@ -26,7 +26,7 @@ def fixture():
     r[3] = [(0, 0, 0)]
     r[30] = [(0, 0, 1)]
     r[71] = [(0, 0, 0, 0, 255, 255, 255, 255)]
-    r[79] = [(0,)] * 3
+    r[79] = [(0,)] * 6  # one triangle plus its degenerate pair padding
     r[80] = [(0, 1, 0, 0, 0, 0, -1, -1, -1, 0, 0, 0, 0, 0, 0x400)]
     r[81] = [(0, 0, 0, 2, 1, 1, 1, 0)]
     r[82] = [(0, -1, -1, 0, 0)]
@@ -52,6 +52,15 @@ class RecordTests(unittest.TestCase):
         r[71] *= 2
         r[79][0] = (1,)
         self.assertIn("triangle vertex outside inclusive", str(check_records(r)))
+
+    def test_odd_meshes_need_pair_padding(self):
+        r = fixture()
+        r[79] = [(0,)] * 3
+        self.assertIn("degenerate padding triangle", str(check_records(r)))
+        r = fixture()
+        r[79] = [(0,)] * 9
+        r[80].append(r[80][0][:0] + (3,) + r[80][0][1:])
+        self.assertIn("triangle slice not aligned", str(check_records(r)))
 
     def test_valid_slope_followed_by_box(self):
         self.assertEqual(check_records(fixture()), [])

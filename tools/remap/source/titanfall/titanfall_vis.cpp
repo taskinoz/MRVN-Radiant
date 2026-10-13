@@ -503,6 +503,14 @@ void Titanfall::EmitMeshes(const entity_t &e) {
                 Error("Mesh index exceeds the 16-bit material-sort range");
             Titanfall::Bsp::meshIndices.emplace_back(index);
         }
+        // The runtime reads triangles in pairs: like retail (Angel City, Homestead),
+        // follow odd-sized meshes with a degenerate triangle so every mesh starts on
+        // a six-index boundary. Unpadded, grenade decals read the next mesh's indices
+        // and crashed at engine.dll+0xae8d3. triCount keeps the real count.
+        if (m.triCount & 1) {
+            const uint16_t last = Titanfall::Bsp::meshIndices.back();
+            Titanfall::Bsp::meshIndices.insert(Titanfall::Bsp::meshIndices.end(), 3, last);
+        }
 
         // Save MeshBounds
         Titanfall::MeshBounds_t &mb = Titanfall::Bsp::meshBounds.emplace_back();

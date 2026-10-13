@@ -135,6 +135,13 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
 - **Tools and sky:** `CLIP` and `TRIGGER` become nodraw tool shaders. `SKY*` faces
   are drawn as unlit `tools/toolsskybox` meshes (flags `0x404`), as retail
   Coliseum's are. Nodraw sky left a hall-of-mirrors effect overhead.
+- **3D sky:** `--sky <mp_coliseum_env.ent>` adds Coliseum's `skybox_cam_level`
+  `sky_camera`. It also places the `models/vistas/grave_se.mdl` vista at the
+  camera origin as a non-solid, shadowless static prop, as retail does. The MDL is
+  extracted from your Coliseum VPK (`--sky-vpk`) and shipped loose, because the
+  RPak alias does not mount that VPK. remap now keeps static props whose model it
+  cannot load if they have a `_cullradius` key, and honours their `solid` and
+  `flags` keys.
 - **Lights:** light entities are now kept (they were previously dropped), so
   remap bakes them. `--sun` adds a `light_environment`.
 - **Menu stage:** this is always lit. `--menu-rig <mp_coliseum_env.ent>` moves

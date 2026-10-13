@@ -31,6 +31,7 @@
 #include "../bspfile_abstract.h"
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include <map>
 
 namespace {
@@ -204,6 +205,80 @@ EnvironmentVolume ParseVolume(const entity_t &e) {
     return volume;
 }
 }  // namespace
+
+
+/*
+    EmitShadowEnvironments()
+    One shadow environment and empty CSM root per light environment, as retail
+    Coliseum has. Environment 0 owns opaque world shadow meshes for its sun's
+    cascaded shadows; other environments (the menu stage) own none, so their
+    dynamic shadows stay out of gameplay.
+*/
+static void EmitShadowEnvironments() {
+    std::map<int, Vector3> suns;  // environment -> sun direction
+    for (std::size_t i = 0; i < Titanfall2::Bsp::worldLights.size(); i++)
+        if (Titanfall2::Bsp::worldLights[i].type == 3)
+            suns.emplace(bakeLightEnvironments[i], Titanfall2::Bsp::worldLights[i].normal);
+    if (suns.empty())
+        return;
+
+    // Shadow meshes from the world model's opaque meshes (before decals,
+    // translucent and sky), position-only with mesh-local 16-bit indices.
+    const Titanfall::Model_t &world = Titanfall::Bsp::models.at(0);
+    const uint32_t opaqueEnd = Titanfall::Bsp::levelInfo.empty() ? world.meshCount
+                             : std::min(world.meshCount, Titanfall::Bsp::levelInfo[0].firstDecalMeshIndex);
+    std::map<std::array<float, 3>, uint16_t> lookup;
+    Titanfall2::ShadowMesh_t *current = nullptr;
+    auto flush = [&]() { current = nullptr; lookup.clear(); };
+    for (uint32_t m = world.firstMesh; m < world.firstMesh + opaqueEnd; m++) {
+        const Titanfall::Mesh_t &mesh = Titanfall::Bsp::meshes.at(m);
+        if (mesh.flags & (S_SKY | S_TRANSLUCENT))
+            continue;
+        const int32_t base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
+        for (uint32_t t = 0; t < mesh.triCount; t++) {
+            if (!current || lookup.size() + 3 > 65535) {
+                flush();
+                Titanfall2::Bsp::shadowMeshes.push_back({static_cast<uint32_t>(Titanfall2::Bsp::shadowMeshVertices.size()), 0, 1, -1});
+                current = &Titanfall2::Bsp::shadowMeshes.back();
+            }
+            for (int k = 0; k < 3; k++) {
+                const std::size_t v = base + Titanfall::Bsp::meshIndices.at(mesh.triOffset + t * 3 + k);
+                uint32_t position;
+                switch (mesh.flags & 0x600) {
+                    case S_VERTEX_LIT_BUMP: position = Titanfall::Bsp::vertexLitBumpVertices.at(v).vertexIndex; break;
+                    case S_VERTEX_UNLIT:    position = Titanfall::Bsp::vertexUnlitVertices.at(v).vertexIndex; break;
+                    case S_VERTEX_UNLIT_TS: position = Titanfall::Bsp::vertexUnlitTSVertices.at(v).vertexIndex; break;
+                    default:                position = Titanfall::Bsp::vertexLitFlatVertices.at(v).vertexIndex; break;
+                }
+                const Vector3 &p = Titanfall::Bsp::vertices.at(position);
+                const std::array<float, 3> key{p.x(), p.y(), p.z()};
+                auto found = lookup.find(key);
+                if (found == lookup.end()) {
+                    found = lookup.emplace(key, static_cast<uint16_t>(Titanfall2::Bsp::shadowMeshVertices.size() - current->vertexOffset)).first;
+                    Titanfall2::Bsp::shadowMeshVertices.push_back(p);
+                }
+                Titanfall2::Bsp::shadowMeshIndices.push_back(found->second);
+            }
+            current->triangleCount++;
+        }
+    }
+
+    const float big = std::numeric_limits<float>::max();
+    const int32_t meshCount = static_cast<int32_t>(Titanfall2::Bsp::shadowMeshes.size());
+    int32_t node = 0;
+    for (const auto &[environment, normal] : suns) {
+        if (environment != node)
+            Sys_FPrintf(SYS_WRN, "WARNING: light environment indices should be consecutive from 0 (found %d)\n", environment);
+        Titanfall::CellAABBNode_t &root = Titanfall2::Bsp::csmAABBNodes.emplace_back();
+        root = {};
+        root.mins = Vector3(big, big, big);
+        root.maxs = Vector3(-big, -big, -big);
+        const bool gameplay = environment == 0;
+        Titanfall2::Bsp::shadowEnvironments.push_back({node, 0, gameplay ? 0 : meshCount,
+                                                       node + 1, 0, meshCount, normal});
+        node++;
+    }
+}
 
 
 /*
@@ -450,6 +525,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeReferences.size()),
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
 
+    EmitShadowEnvironments();
+
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     Sys_Printf("%9zu world lights (%d hardware)\n", Titanfall2::Bsp::worldLights.size(), hardware);
     Sys_Printf("%9zu occluding brushes\n", occluders.size());
@@ -458,5 +535,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                result.realtimeTexels, Titanfall2::Bsp::lightmapRtlPages.size());
     Sys_Printf("%9zu light probes (%zu for other environments), %zu tree nodes\n", Titanfall2::Bsp::lightprobes.size(),
                stageProbes, Titanfall2::Bsp::lightprobeTree.size());
+    Sys_Printf("%9zu shadow environments, %zu shadow meshes (%zu triangles)\n", Titanfall2::Bsp::shadowEnvironments.size(),
+               Titanfall2::Bsp::shadowMeshes.size(), Titanfall2::Bsp::shadowMeshIndices.size() / 3);
     Sys_Printf("%9.1f seconds baking\n", seconds);
 }

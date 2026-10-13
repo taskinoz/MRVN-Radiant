@@ -100,6 +100,29 @@ namespace Titanfall2 {
     };
     static_assert(sizeof(LightprobeParentInfo_t) == 28, "Light probe parent infos are 28 bytes");
 
+    // 0x05: per light environment, [first, last) ranges of CSM AABB nodes, CSM object
+    // references and shadow meshes, plus that environment's sun direction.
+    struct ShadowEnvironment_t {
+        int32_t   firstCsmAabbNode;
+        int32_t   firstCsmObjReference;
+        int32_t   firstShadowMesh;
+        int32_t   lastCsmAabbNode;
+        int32_t   lastCsmObjReference;
+        int32_t   lastShadowMesh;
+        Vector3   sunNormal;
+    };
+    static_assert(sizeof(ShadowEnvironment_t) == 36, "Shadow environments are 36 bytes");
+
+    // 0x7F: opaque meshes index SHADOW_MESH_OPAQUE_VERTICES (0x7C) with mesh-local
+    // uint16 indices (0x7E); each mesh's indices follow the previous mesh's.
+    struct ShadowMesh_t {
+        uint32_t  vertexOffset;
+        uint32_t  triangleCount;
+        int16_t   opaque;
+        int16_t   materialSort;
+    };
+    static_assert(sizeof(ShadowMesh_t) == 12, "Shadow meshes are 12 bytes");
+
     // 0x23
     // GameLump is the only lump which isn't just a vector
     // The order in which these structs were defined is the order in which both our and the respawn compiler saves them
@@ -157,6 +180,11 @@ namespace Titanfall2 {
         inline std::vector<uint8_t>                  lightmapDataRtl;
         inline std::vector<std::array<int16_t, 63>>  lightmapRtlPages;
         inline std::vector<LightprobeParentInfo_t>   lightprobeParentInfos;
+        inline std::vector<ShadowEnvironment_t>      shadowEnvironments;
+        inline std::vector<Titanfall::CellAABBNode_t>  csmAABBNodes;
+        inline std::vector<Vector3>                  shadowMeshVertices;
+        inline std::vector<uint16_t>                 shadowMeshIndices;
+        inline std::vector<ShadowMesh_t>             shadowMeshes;
         inline std::vector<Respawn::Bake::Probe>     lightprobes;
         inline std::vector<std::array<uint32_t, 2>>  lightprobeTree;
         inline std::vector<Respawn::Bake::ProbeReference>  lightprobeReferences;

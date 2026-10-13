@@ -268,6 +268,54 @@ public:
         return false;
     }
 
+    // First brush hit along a -> b: fraction along the segment and the normal of
+    // the face entered. Returns false when nothing is hit.
+    bool firstHit(V3 a, V3 b, double& fraction, V3& normal) const {
+        if (m_nodes.empty()) return false;
+        const V3 d = b - a;
+        double best = 2;
+        int stack[128];
+        int top = 0;
+        stack[top++] = 0;
+        while (top) {
+            const Node& node = m_nodes[stack[--top]];
+            if (!segmentHitsBox(a, d, node.mins, node.maxs)) continue;
+            if (node.left < 0) {
+                for (int i = node.first; i < node.first + node.count; ++i) {
+                    double enter = 0, exit = 1;
+                    V3 entered{};
+                    bool hit = true;
+                    for (const auto& pl : m_brushes[m_order[i]].planes) {
+                        const V3 n{pl[0], pl[1], pl[2]};
+                        const double da = dot(n, a) - pl[3], db = dot(n, b) - pl[3];
+                        constexpr double eps = 1e-6;
+                        if (da > -eps && db > -eps) { hit = false; break; }
+                        if (da <= -eps && db <= -eps) continue;
+                        const double t = da / (da - db);
+                        if (da > -eps) {
+                            if (t > enter) { enter = t; entered = n; }
+                        } else {
+                            exit = std::min(exit, t);
+                        }
+                        if (enter >= exit) { hit = false; break; }
+                    }
+                    if (hit && enter > 0 && enter < best) {
+                        best = enter;
+                        normal = entered;
+                    }
+                }
+            } else if (top + 2 <= 128) {
+                stack[top++] = node.left;
+                stack[top++] = node.right;
+            } else {
+                throw std::runtime_error("Occluder hierarchy is too deep");
+            }
+        }
+        if (best > 1) return false;
+        fraction = best;
+        return true;
+    }
+
     bool blocked(V3 a, V3 b) const {
         if (m_nodes.empty()) return false;
         const V3 d = b - a;
@@ -297,6 +345,7 @@ public:
 struct Chart {
     std::uint32_t page = 0;
     double constant = -1;  // >= 0: SKY A is this constant (self-lit sky dome), no realtime slots
+    V3 albedo{0.5, 0.5, 0.5};  // linear diffuse reflectance, for bounce lighting
     std::vector<V3> positions, normals;
     std::vector<std::array<double, 2>> luxels;  // texel-space coordinates within the page
     std::vector<std::uint32_t> triangles;
@@ -312,15 +361,104 @@ struct Options {
     // client-checked Phase Runner fill (0.025-0.032).
     double ambientScale = 0.04;
     double luxelSize = 16.0;       // world units per texel, for sub-texel shadow samples
+    int bounceSamples = 16;        // cosine-weighted gather rays per texel for one diffuse bounce (0: off)
+    // Multiplier on gathered indirect light. 3 brings Quake E1M1 (dark textures,
+    // sparse lights) into retail Coliseum's SKY A range (mean ~0.02, p95 ~0.07).
+    double bounceScale = 3.0;
+    double bounceCell = 32.0;      // radiance grid cell size
+    double bounceDistance = 2048;  // gather ray length
     double rayOffset = 0.5;        // start rays off the surface along its normal
     unsigned threads = 0;          // 0: hardware concurrency
 };
+
+/*
+    Outgoing diffuse radiance (albedo x direct irradiance) of lit surfaces, in a
+    sparse grid with six bins per cell by surface facing, so gathers read the
+    side of a thin wall they actually hit.
+*/
+class RadianceGrid {
+    struct Cell { V3 sum; double count = 0; };
+    std::unordered_map<std::uint64_t, Cell> m_cells;
+    double m_size = 32;
+
+    static int bin(V3 n) {
+        const double ax = std::abs(n.x), ay = std::abs(n.y), az = std::abs(n.z);
+        if (ax >= ay && ax >= az) return n.x >= 0 ? 0 : 1;
+        if (ay >= az) return n.y >= 0 ? 2 : 3;
+        return n.z >= 0 ? 4 : 5;
+    }
+    std::uint64_t key(V3 p, int b, int dx = 0, int dy = 0, int dz = 0) const {
+        const auto c = [&](double v, int o) { return std::uint64_t(std::int64_t(std::floor(v / m_size)) + o + (1 << 20)) & 0x1fffff; };
+        return (c(p.x, dx) << 43) | (c(p.y, dy) << 22) | (c(p.z, dz) << 1) | 0;
+    }
+    std::uint64_t binned(std::uint64_t k, int b) const { return k * 6 + std::uint64_t(b); }
+
+public:
+    explicit RadianceGrid(double size = 32) : m_size(size) {}
+    bool empty() const { return m_cells.empty(); }
+    void add(V3 p, V3 n, V3 radiance) {
+        Cell& c = m_cells[binned(key(p, 0), bin(n))];
+        c.sum = c.sum + radiance;
+        c.count += 1;
+    }
+    // Radiance of surfaces facing `n` near `p`, widening to neighbouring cells.
+    bool lookup(V3 p, V3 n, V3& radiance) const {
+        const int b = bin(n);
+        auto it = m_cells.find(binned(key(p, 0), b));
+        if (it != m_cells.end()) { radiance = it->second.sum * (1.0 / it->second.count); return true; }
+        V3 sum{};
+        double count = 0;
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    auto found = m_cells.find(binned(key(p, 0, dx, dy, dz), b));
+                    if (found != m_cells.end()) { sum = sum + found->second.sum; count += found->second.count; }
+                }
+        if (count <= 0) return false;
+        radiance = sum * (1.0 / count);
+        return true;
+    }
+};
+
+// One diffuse bounce at a point: cosine-weighted gather from the radiance grid.
+inline V3 gatherBounce(V3 start, V3 n, const Occluders& occluders, const RadianceGrid& grid, int samples,
+                       double distance, std::uint32_t seed, bool sphere = false) {
+    if (samples <= 0 || grid.empty()) return {};
+    V3 t, b;
+    {
+        t = normalize(std::abs(n.z) < 0.9 ? cross(n, {0, 0, 1}) : cross(n, {1, 0, 0}));
+        b = cross(n, t);
+    }
+    const double rotate = (seed & 0xffff) / 65536.0;
+    V3 sum{};
+    for (int k = 0; k < samples; ++k) {
+        V3 dir;
+        const double phi = 2 * 3.14159265358979323846 * std::fmod(k * 0.6180339887498949 + rotate, 1.0);
+        if (sphere) {
+            const double z = 1 - 2 * (k + 0.5) / samples, r = std::sqrt(std::max(0.0, 1 - z * z));
+            dir = {r * std::cos(phi), r * std::sin(phi), z};
+        } else {
+            const double u = (k + 0.5) / samples, r = std::sqrt(u);
+            dir = t * (r * std::cos(phi)) + b * (r * std::sin(phi)) + n * std::sqrt(1 - u);
+        }
+        double fraction;
+        V3 hitNormal;
+        if (!occluders.firstHit(start, start + dir * distance, fraction, hitNormal)) continue;
+        const V3 hit = start + dir * (distance * fraction) - dir * 1.0;
+        V3 radiance;
+        if (grid.lookup(hit, hitNormal, radiance)) sum = sum + radiance;
+    }
+    // Cosine-weighted estimator of irradiance / pi times pi: mean outgoing radiance.
+    // A sphere gather averages both hemispheres, so it is doubled to match.
+    return sum * ((sphere ? 2.0 : 1.0) / samples);
+}
 
 struct Result {
     std::vector<std::uint8_t> sky;   // per page: A then B
     std::vector<std::uint8_t> rtl;   // per page: A, B, then C
     std::vector<std::array<std::int16_t, RtlPageSize>> rtlPages;
     std::size_t chartedTexels = 0, realtimeTexels = 0;
+    RadianceGrid bounce;  // direct radiance for probe bounce gathers
 };
 
 namespace detail {
@@ -577,8 +715,13 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     result.sky.assign(skyBytes, 0);
     result.rtl.assign(rtlBytes, 0);
 
-    // Pass 2: rays and encoding.
+    // Pass 2: rays and encoding. SKY A is finalised in pass 3 once bounce is known.
     const int ambientSamples = std::max(1, options.ambientSamples);
+    std::vector<std::vector<V3>> bakedSky(pages.size()), directLight(pages.size());
+    for (std::size_t p = 0; p < pages.size(); ++p) {
+        bakedSky[p].resize(samples[p].size());
+        directLight[p].resize(samples[p].size());
+    }
     std::atomic<std::size_t> charted{0}, realtime{0};
     for (std::size_t p = 0; p < pages.size(); ++p) {
         const std::size_t texels = std::size_t(pages[p].width) * pages[p].height;
@@ -630,6 +773,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         }
                         const double fraction = visible / ambientSamples;
                         baked = baked + ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+                        directLight[p][i] = directLight[p][i] + ambient * fraction;
                         sky = visible > 0 ? normalize(openDirection) * std::cbrt(fraction) : V3{};
                     }
 
@@ -645,10 +789,10 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         const double scale = falloff(light, d) * lambert * spotFactor(light, -l3);
                         if (!(scale > 0) || occluders.blocked(start, light.origin)) continue;
                         baked = baked + light.intensity * scale;
+                        directLight[p][i] = directLight[p][i] + light.intensity * scale;
                     }
 
-                    auto a = encodeRGBM(baked);
-                    std::memcpy(skyA + i * 4, a.data(), 4);
+                    bakedSky[p][i] = baked;
                     auto bd = encodeDirection(sky);
                     std::memcpy(skyB + i * 4, bd.data(), 4);
 
@@ -665,6 +809,18 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                             slotIds[used] = static_cast<std::uint8_t>(found->second);
                             masks[used] = slots[p][i].visible[k];
                             ++used;
+                            // Realtime light reaching the surface, for bounce.
+                            const Light& light = lights[l];
+                            double reach;
+                            if (light.type == LightType::Sun) {
+                                reach = std::max(0.0, dot(n, -light.direction));
+                            } else {
+                                const V3 toLight = light.origin - pos;
+                                const double d = length(toLight);
+                                const V3 l3 = toLight * (1.0 / std::max(d, 1e-6));
+                                reach = falloff(light, d) * std::max(0.0, dot(n, l3)) * spotFactor(light, -l3);
+                            }
+                            directLight[p][i] = directLight[p][i] + light.intensity * (reach * masks[used - 1] / 255.0);
                         }
                         if (used) {
                             word = packRtlWord(slotIds, static_cast<std::uint8_t>(page));
@@ -677,6 +833,35 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
             }
         });
     }
+
+    // Radiance grid of directly lit surfaces, then pass 3: one diffuse bounce into SKY A.
+    RadianceGrid grid(options.bounceCell);
+    if (options.bounceSamples > 0)
+        for (std::size_t p = 0; p < pages.size(); ++p)
+            for (std::size_t i = 0; i < samples[p].size(); ++i) {
+                const auto& s = samples[p][i];
+                if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0) continue;
+                const V3 a = charts[s.chart].albedo;
+                const V3 e = directLight[p][i];
+                grid.add({s.px, s.py, s.pz}, {s.nx, s.ny, s.nz}, {a.x * e.x, a.y * e.y, a.z * e.z});
+            }
+    for (std::size_t p = 0; p < pages.size(); ++p) {
+        std::uint8_t* skyA = result.sky.data() + skyOffset[p];
+        detail::parallelFor(pages[p].height, options.threads, [&](std::size_t y) {
+            for (std::size_t x = 0; x < pages[p].width; ++x) {
+                const std::size_t i = y * pages[p].width + x;
+                const auto& s = samples[p][i];
+                if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
+                const V3 n{s.nx, s.ny, s.nz};
+                const V3 start = V3{s.px, s.py, s.pz} + n * options.rayOffset;
+                const V3 bounce = gatherBounce(start, n, occluders, grid, options.bounceSamples, options.bounceDistance,
+                                               detail::hash(std::uint32_t(i * 2246822519u + p)));
+                auto a = encodeRGBM(bakedSky[p][i] + bounce * options.bounceScale);
+                std::memcpy(skyA + i * 4, a.data(), 4);
+            }
+        });
+    }
+    result.bounce = std::move(grid);
     result.chartedTexels = charted;
     result.realtimeTexels = realtime;
     return result;
@@ -731,7 +916,8 @@ inline std::vector<V3> probePositions(const Occluders& occluders, V3 lo, V3 hi, 
 }
 
 inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::vector<Light>& lights, V3 ambient,
-                                     const Occluders& occluders, const Options& options = {}) {
+                                     const Occluders& occluders, const Options& options = {},
+                                     const RadianceGrid* bounce = nullptr) {
     V3 lo = occluders.empty() ? V3{} : occluders.mins(), hi = occluders.empty() ? V3{} : occluders.maxs();
     for (const V3& p : points) { lo = vmin(lo, p); hi = vmax(hi, p); }
     const double far = length(hi - lo) * 2 + 1024;
@@ -762,7 +948,10 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
             if (!occluders.blocked(p, p + d * far)) { visible += 1; bent = bent + d; }
         const double fraction = visible / sky.size();
         const V3 direction = visible > 0 ? normalize(bent) : V3{};
-        const V3 fill = ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+        V3 fill = ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+        if (bounce)
+            fill = fill + gatherBounce(p, {0, 0, 1}, occluders, *bounce, options.bounceSamples * 2, options.bounceDistance,
+                                       detail::hash(std::uint32_t(i * 3266489917u)), true) * options.bounceScale;
 
         Probe& probe = probes[i];
         // Up to four visible realtime local lights, strongest first.

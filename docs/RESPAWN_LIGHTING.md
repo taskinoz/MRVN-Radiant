@@ -298,6 +298,39 @@ meshes, then that environment's sun normal. Coliseum has two empty CSM roots
 Without these records, the menu stage's characters cast shadows into gameplay
 in-game. That was not fixed by moving the stage.
 
+### Bounce lighting
+
+SKY A now includes one diffuse bounce:
+1. Each texel's direct irradiance is recorded: realtime lights and the sun
+   (scaled by their baked shadow masks), static lights and sky ambient times sky
+   visibility.
+2. Outgoing radiance (albedo × direct irradiance) is splatted into a sparse
+   32-unit grid. Each cell has six bins by surface facing, so a gather reads the
+   side of a thin wall it actually hit.
+3. Each texel casts 16 cosine-weighted rays to the first brush hit and averages
+   the radiance stored there.
+
+Albedo is the shader's average texture colour, linearised and clamped to
+0.02–0.9. Probes gather the same grid over the full sphere. The bounce scale
+defaults to 3, which brings E1M1's SKY A (median 0.0032 → 0.0215, p90 0.0069 → 0.057) into
+retail Coliseum's range. Worldspawn `_bouncescale` overrides it, and 0 turns
+bounce off. Harness captures show darker walls lifted: in the `start-back` view,
+near-black pixels dropped from 43% to 36%.
+
+### Hidden brush faces
+
+Respawn writers emit brush faces directly, so `respawn/csg.h` removes faces
+hidden by other solid, visible, non-translucent brushes:
+- faces lying entirely inside another brush, or flush against it facing in, are
+  removed;
+- coplanar faces facing the same way, which z-fight, are trimmed, and the later
+  brush keeps the shared area;
+- partly buried faces are kept whole, because depth testing hides the buried
+  part and trimming would only fragment them.
+
+In E1M1 this removes 2,238 faces and trims 272, cutting it from 13,610 to
+10,898 triangles. It also fixed the z-fighting light fixture.
+
 ### Index padding
 
 The runtime reads world triangles in pairs. Retail six-aligns every mesh and

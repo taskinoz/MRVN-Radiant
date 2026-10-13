@@ -55,7 +55,9 @@ def entity(**keys):
 # A floor with a roof over its x<0 half. The sun travels down at 60 degrees
 # towards +x+y, so the roof's shadow reaches past its edge to about x=+84.
 LIT_FIXTURE = (
-    '{\n"classname" "worldspawn"\n'
+    # Bounce is off so the roof check below isolates sky occlusion; bounce has
+    # its own unit test in lightbake_tests.cpp.
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
     + box((-512, -512, -16), (512, 512, 0), "bump") + "\n"
     + box((-512, -512, 256), (0, 512, 272), "bump") + "\n}\n"
     + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",

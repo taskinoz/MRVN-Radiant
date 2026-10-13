@@ -526,6 +526,14 @@ void Titanfall::EmitMeshes(const entity_t &e) {
             // at a constant level instead of being lit, like a sky dome.
             if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY))
                 chart.constant = 1.0;
+            // Bounce albedo: the texture's average colour, linearised and kept to a
+            // plausible diffuse range (q3map2 averages 0-255 pixels, or a 0-1 colour).
+            const Color4f &average = mesh.shaderInfo->averageColor;
+            const float range = std::max({average[0], average[1], average[2]}) > 1.0f ? 255.0f : 1.0f;
+            if (average[0] + average[1] + average[2] > 0.0f) {
+                auto linear = [&](float c) { return std::clamp(std::pow(c / range, 2.2), 0.02, 0.9); };
+                chart.albedo = {linear(average[0]), linear(average[1]), linear(average[2])};
+            }
             for (const Shared::Vertex_t &vertex : mesh.vertices) {
                 chart.positions.push_back({vertex.xyz.x(), vertex.xyz.y(), vertex.xyz.z()});
                 chart.normals.push_back({vertex.normal.x(), vertex.normal.y(), vertex.normal.z()});

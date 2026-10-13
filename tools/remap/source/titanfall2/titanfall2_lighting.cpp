@@ -453,6 +453,12 @@ void Titanfall2::EmitLighting(const entity_t &world) {
 
     Respawn::Bake::Options options;
     options.luxelSize = Shared::luxelSize;
+    // Worldspawn "_bouncescale" scales the one-bounce indirect light (0 disables it).
+    if (HasKey(world, "_bouncescale")) {
+        options.bounceScale = DoubleForKey(world, "_bouncescale", 1);
+        if (options.bounceScale <= 0)
+            options.bounceSamples = 0;
+    }
     Respawn::Bake::Result result;
     try {
         result = Respawn::Bake::bake(Titanfall::Bsp::lightmapCharts, pages, Titanfall2::Bsp::bakeLights,
@@ -476,7 +482,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     try {
         probePoints = Respawn::Bake::probePositions(occluders, lo, hi);
         Titanfall2::Bsp::lightprobes = Respawn::Bake::bakeProbes(probePoints, Titanfall2::Bsp::bakeLights,
-                                                                  Titanfall2::Bsp::ambient, occluders, options);
+                                                                  Titanfall2::Bsp::ambient, occluders, options,
+                                                                  &result.bounce);
     } catch (const std::exception &error) {
         Error("Light probe bake failed: %s", error.what());
     }

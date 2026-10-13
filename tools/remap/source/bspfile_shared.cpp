@@ -24,6 +24,7 @@
 #include "remap.h"
 #include "bspfile_abstract.h"
 #include "respawn/lightmap.h"
+#include "respawn/csg.h"
 
 
 /*
@@ -35,9 +36,35 @@ void Shared::MakeMeshes(const entity_t &e) {
     Shared::meshes.clear();
     Shared::islands.clear();
 
+    // Solid, visible brushes hide faces buried in or flush against them (see
+    // respawn/csg.h). Clip, trigger and translucent brushes hide nothing.
+    std::vector<Respawn::Csg::Solid>  solids;
+    int brush_order = 0;
+    for (const brush_t &brush : e.brushes) {
+        bool visible = false, translucent = false;
+        for (const side_t &side : brush.sides) {
+            if (side.bevel || !side.shaderInfo)
+                continue;
+            visible |= !(side.shaderInfo->compileFlags & C_NODRAW);
+            translucent |= (side.shaderInfo->compileFlags & C_TRANSLUCENT) != 0;
+        }
+        if (visible && !translucent) {
+            Respawn::Csg::Solid &solid = solids.emplace_back();
+            for (const side_t &side : brush.sides)
+                solid.planes.push_back({{side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z()}, side.plane.dist()});
+            solid.mins = {brush.minmax.mins.x(), brush.minmax.mins.y(), brush.minmax.mins.z()};
+            solid.maxs = {brush.minmax.maxs.x(), brush.minmax.maxs.y(), brush.minmax.maxs.z()};
+            solid.order = brush_order;
+        }
+        brush_order++;
+    }
+    std::size_t hidden_faces = 0, split_faces = 0;
+
     int mesh_index = 0;
+    brush_order = 0;
     // Loop through brushes
     for (const brush_t &brush : e.brushes) {
+        const int owner = brush_order++;
         // Loop through sides
         for (const side_t &side : brush.sides) {
             // Skip bevels & check flags
@@ -52,68 +79,87 @@ void Shared::MakeMeshes(const entity_t &e) {
                 continue;
             }
 
-            Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
-            mesh.shaderInfo = side.shaderInfo;
-            Shared::Island_t  island;
+            Respawn::Csg::Polygon face;
+            for (const Vector3 &vertex : side.winding)
+                face.push_back({vertex.x(), vertex.y(), vertex.z()});
+            const Respawn::Csg::Plane facePlane{{side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z()},
+                                                side.plane.dist()};
+            const std::vector<Respawn::Csg::Polygon> fragments = Respawn::Csg::visibleFragments(face, facePlane, owner, solids);
+            if (fragments.empty())
+                hidden_faces++;
+            else if (fragments.size() > 1 || fragments[0].size() != face.size())
+                split_faces++;
 
-            Vector3 normal = side.plane.normal();
+            for (const Respawn::Csg::Polygon &fragment : fragments) {
+                winding_t winding;
+                for (const Respawn::Csg::Point &p : fragment)
+                    winding.push_back(Vector3(p[0], p[1], p[2]));
 
-            // Loop through vertices
-            for (const Vector3 &vertex : side.winding) {
-                // Extend AABB
-                mesh.minmax.extend(vertex);
+                Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
+                mesh.shaderInfo = side.shaderInfo;
+                Shared::Island_t  island;
 
-                // Texturing
-                // This is taken from surface.cpp, It somewhat works
-                // TODO: Make this work better
-                Vector2  textureUV, lightmapUV;
-                Vector3  vTranslated, texX, texY;
-                float    x, y;
-                ComputeAxisBase(side.plane.normal(), texX, texY);
-                vTranslated = vertex + e.originbrush_origin;
-                // st vectors -> uv coords
-                x = vector3_dot(vTranslated, texX);
-                y = vector3_dot(vTranslated, texY);
-                // TODO: scale lightmapUV by side.luxelScale
-                lightmapUV = {x / Shared::luxelSize, y / Shared::luxelSize};
-                if (g_brushType == EBrushType::Bp) {
-                    textureUV[0] = side.texMat[0][0] * x + side.texMat[0][1] * y + side.texMat[0][2];
-                    textureUV[1] = side.texMat[1][0] * x + side.texMat[1][1] * y + side.texMat[1][2];
+                Vector3 normal = side.plane.normal();
+
+                // Loop through vertices
+                for (const Vector3 &vertex : winding) {
+                    // Extend AABB
+                    mesh.minmax.extend(vertex);
+
+                    // Texturing
+                    // This is taken from surface.cpp, It somewhat works
+                    // TODO: Make this work better
+                    Vector2  textureUV, lightmapUV;
+                    Vector3  vTranslated, texX, texY;
+                    float    x, y;
+                    ComputeAxisBase(side.plane.normal(), texX, texY);
+                    vTranslated = vertex + e.originbrush_origin;
+                    // st vectors -> uv coords
+                    x = vector3_dot(vTranslated, texX);
+                    y = vector3_dot(vTranslated, texY);
+                    // TODO: scale lightmapUV by side.luxelScale
+                    lightmapUV = {x / Shared::luxelSize, y / Shared::luxelSize};
+                    if (g_brushType == EBrushType::Bp) {
+                        textureUV[0] = side.texMat[0][0] * x + side.texMat[0][1] * y + side.texMat[0][2];
+                        textureUV[1] = side.texMat[1][0] * x + side.texMat[1][1] * y + side.texMat[1][2];
+                    } else {
+                        // Quake and Valve 220 maps carry st vectors instead of a texture matrix.
+                        textureUV[0] = (side.vecs[0][3] + vector3_dot(side.vecs[0].vec3(), vTranslated)) / side.shaderInfo->shaderWidth;
+                        textureUV[1] = (side.vecs[1][3] + vector3_dot(side.vecs[1].vec3(), vTranslated)) / side.shaderInfo->shaderHeight;
+                    }
+
+                    Shared::Vertex_t &sv = mesh.vertices.emplace_back();
+                    sv.xyz          = vertex;
+                    sv.normal       = normal;
+                    sv.textureUV    = textureUV;
+                    sv.colour       = {0xFF, 0xFF, 0xFF, 0xFF};
+                    sv.lightmapUV   = lightmapUV;
+                    sv.lightmapStep = {0.0f, 0.0f};  // unused
+
+                    island.bounds.extend(lightmapUV);
+                }
+
+                if ((mesh.shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
+                    island.mesh = mesh_index;
+                    Shared::islands.push_back(island);
                 } else {
-                    // Quake and Valve 220 maps carry st vectors instead of a texture matrix.
-                    textureUV[0] = (side.vecs[0][3] + vector3_dot(side.vecs[0].vec3(), vTranslated)) / side.shaderInfo->shaderWidth;
-                    textureUV[1] = (side.vecs[1][3] + vector3_dot(side.vecs[1].vec3(), vTranslated)) / side.shaderInfo->shaderHeight;
+                    mesh.lightmapPage = -1;
                 }
 
-                Shared::Vertex_t &sv = mesh.vertices.emplace_back();
-                sv.xyz          = vertex;
-                sv.normal       = normal;
-                sv.textureUV    = textureUV;
-                sv.colour       = {0xFF, 0xFF, 0xFF, 0xFF};
-                sv.lightmapUV   = lightmapUV;
-                sv.lightmapStep = {0.0f, 0.0f};  // unused
-
-                island.bounds.extend(lightmapUV);
-            }
-
-            if ((mesh.shaderInfo->surfaceFlags & 0x600) < 0x400) {  // mesh is lit
-                island.mesh = mesh_index;
-                Shared::islands.push_back(island);
-            } else {
-                mesh.lightmapPage = -1;
-            }
-
-            // Create triangles for side
-            for (std::size_t i = 0; i < side.winding.size() - 2; i++) {
-                for (int j = 0; j < 3; j++) {
-                    int vert_index = (j == 0) ? 0 : i + j;
-                    mesh.triangles.emplace_back(vert_index);
+                // Create triangles for side
+                for (std::size_t i = 0; i < winding.size() - 2; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        int vert_index = (j == 0) ? 0 : i + j;
+                        mesh.triangles.emplace_back(vert_index);
+                    }
                 }
-            }
 
-            mesh_index++;
+                mesh_index++;
+            }
         }
     }
+    if (hidden_faces || split_faces)
+        Sys_FPrintf(SYS_VRB, "%9zu hidden brush faces removed, %zu partly hidden faces trimmed\n", hidden_faces, split_faces);
 
     // Loop through patches
     parseMesh_t *patch;

@@ -103,3 +103,47 @@ the distinction between established binary defects/checks and pending game tests
 Existing conversion articles remain unchanged. The articles link to their
 research sources and cite project-relative evidence; no credentials, game assets
 or raw crash dumps were uploaded.
+
+## Continuation on 22 October 2026
+
+Re-read the conversion project's binary-formats revision 2 and lighting revision
+3 (updated by `agent:Claude`), plus task-context excerpts covering newer collision,
+visibility and case-study research. Existing native baking/probe/shadow work from
+the intervening MRVN-Radiant commits was retained.
+
+New original retail/static-prop work is recorded in
+[RESPAWN_GAME_LUMP.md](RESPAWN_GAME_LUMP.md) and Gravemind document
+`gm_01m5ff8n2jve9yj4xpp0jdv7sz`, path
+`games/respawn/mrvn-radiant/tf2-game-lumps-and-props.md`, revision 1, draft.
+Five retail maps establish bounded v13 placement parsing and conditional unused
+lighting-origin bytes. The native compiler now preserves prop scale/skin and
+transforms visibility bounds. Full runtime compatibility remains unverified.
+
+## Continuation on 24 October 2026
+
+Collision revision 4, binary-formats revision 2 and visibility-and-limits
+revision 3 informed independent TF2 tricoll/portal research. New original
+findings, implementation details, source attribution and native smoke traces
+were published as `games/respawn/mrvn-radiant/tf2-tricoll-and-portals.md`,
+document `gm_01m5mg5pms4q0qxqyngak18c2d`, revision 1, draft.
+See [RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md). Five retail maps
+pass the dedicated inspectors; native patch ray/hull and doorway/wall traces
+completed. Hull clearance parity and visual culling remain unresolved; Origin
+disconnected the local session after initialization. Existing conversion
+articles were left unchanged.
+
+## Continuation on 25 October 2026
+
+Original bounded decompile/preservation/native-compile work and three-map test
+evidence are published in `games/respawn/mrvn-radiant/tf2-decompile-and-rebuild.md`,
+document `gm_01m5ryx1by6amxbyz0444t0c9e`, revision 1, draft. See
+[RESPAWN_DECOMPILE.md](RESPAWN_DECOMPILE.md).
+
+Search found an earlier `align16(LEVEL_INFO[2])` claim in the shared static-prop
+article revision 3, updated by `agent:Claude`. Five retail maps, native engine
+instructions and an isolated mp_box renderer crash establish **align64** instead.
+A correction was appended to that article as revision 4, retaining all earlier
+authors' content: `gm_01m5ff8n2jve9yj4xpp0jdv7sz`. Native evidence includes engine
+RVA `0xcb2db` (add 63) and `0xcb2e6` (AND `0xffffffc0`); the local document records
+the engine hash and paired runtime tests. No credentials, game assets, engine
+binaries or crash dumps were uploaded.

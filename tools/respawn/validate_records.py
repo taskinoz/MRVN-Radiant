@@ -12,11 +12,15 @@ import struct
 import sys
 
 from inspect_bsp import FormatError, HEADER_SIZE, inspect
+from game_lump import inspect_game_lump
+from tricoll import check_tricoll_records
+from portals import check_portal_records
 
 # Exact versions only. Apex collision and vertex layouts need separate schemas.
 SCHEMAS = {
     1: ("4f", 1), 2: ("3f6i", 1), 3: ("3f", 0),
     14: ("6f2I", 0), 30: ("3f", 0),
+    66: ("I", 2), 68: ("4I", 1), 69: ("6H4i4f", 1),
     71: ("2I2f4B", 0), 72: ("2I2f4B4f", 1),
     73: ("2I2f4B4f2I", 1), 74: ("2I2f4B2I", 0),
     79: ("H", 0), 80: ("I4H4b2h2BHI", 0),
@@ -25,7 +29,34 @@ SCHEMAS = {
     89: ("I", 0), 90: ("8h", 0), 91: ("I", 0),
     92: ("3fBBH3fI", 0), 93: ("H", 0), 94: ("H", 0),
     95: ("8f", 0),
+    96: ("H", 0), 97: ("I", 0),
+    106: ("iI", 0), 107: ("3Hh", 0), 108: ("4B2HI", 0),
+    109: ("3f", 0), 110: ("2H", 0), 111: ("8h", 0),
+    112: ("H", 0), 113: ("H", 0), 114: ("8h", 0), 115: ("8h", 0), 116: ("2I", 0),
+    119: ("3fBBH3fHH", 0), 120: ("H", 0), 121: ("3fI3fI", 0),
+    123: ("4I3f", 0),
 }
+
+
+def check_tf2_object_references(records, prop_count):
+    """TF2 uses a 64-aligned non-sky mesh block before static-prop objects."""
+    issues = []
+    def error(lump, index, message):
+        issues.append({'severity':'error','lump':lump,'record':index,'message':message})
+    if len(records[123]) != 1 or not records[14]:
+        error(123,None,'TF2 object references require one LEVEL_INFO and a world model')
+        return issues
+    level = records[123][0]
+    first_sky, world_meshes = level[2], records[14][0][7]
+    if not 0 <= level[0] <= level[1] <= first_sky <= world_meshes:
+        error(123,0,'invalid world mesh category ranges')
+    if level[3] != prop_count:
+        error(123,0,'LEVEL_INFO prop count differs from GAME_LUMP')
+    base = (first_sky + 63) & ~63
+    for i,(ref,) in enumerate(records[120]):
+        if ref >= base + prop_count or (world_meshes <= ref < base):
+            error(120,i,'object reference outside world mesh/static prop namespace')
+    return issues
 
 
 def load_records(path, inventory):
@@ -93,7 +124,8 @@ def check_records(records):
             error(lump, i, "contents reference outside CM_UNIQUE_CONTENTS")
         if kind == 0 and index >= len(brushes):
             error(lump, i, "brush reference outside CM_BRUSHES")
-        # Triangle/prop collision payloads are outside this selected validator.
+        if kind == 0x40 and index >= len(records[69]):
+            error(lump, i, "triangle collision reference outside TRICOLL_HEADERS")
 
     for i, (_, count, word) in enumerate(sets):
         if count == 1:
@@ -191,9 +223,18 @@ def validate(path):
     if structural:
         raise FormatError("structural inventory failed; run inspect_bsp.py for details")
     records = load_records(path, inventory)
-    return {"path": str(Path(path).resolve()), "version": inventory["version_raw"],
+    report = {"path": str(Path(path).resolve()), "version": inventory["version_raw"],
             "counts": {str(i): len(v) for i, v in records.items()},
             "issues": check_records(records)}
+    if inventory["version_raw"] == 37:
+        report["game_lump"] = inspect_game_lump(path, inventory=inventory)
+        # Minimal synthetic fixtures may have no visibility data at all.
+        if records[123] or records[120]:
+            prop_count = sum(e.get('placement_count',0) for e in report['game_lump']['entries'])
+            report['issues'].extend(check_tf2_object_references(records,prop_count))
+        report["issues"].extend(check_tricoll_records(records))
+        report["issues"].extend(check_portal_records(records))
+    return report
 
 
 def main(argv=None):

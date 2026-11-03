@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from inspect_bsp import FormatError, HEADER_SIZE, inspect
-from validate_records import SCHEMAS, check_records, load_records, validate
+from validate_records import SCHEMAS, check_records, check_tf2_object_references, load_records, validate
 
 
 def fixture():
@@ -34,6 +34,19 @@ def fixture():
 
 
 class RecordTests(unittest.TestCase):
+    def test_static_prop_objects_follow_aligned_non_sky_mesh_block(self):
+        r = fixture()
+        r[14][0] = (*r[14][0][:7],65)
+        r[123] = [(61,61,62,77,0,0,-1)]
+        r[120] = [(64,),(140,)]
+        self.assertEqual(check_tf2_object_references(r,77),[])
+        r[120].append((141,)) # old unaligned world-mesh-count + last prop
+        self.assertIn('object reference outside',str(check_tf2_object_references(r,77)))
+        r[14][0] = (*r[14][0][:7],49)
+        r[123] = [(42,43,43,3,0,0,-1)]
+        r[120] = [(49,)] # alignment padding is not a prop slot
+        self.assertTrue(check_tf2_object_references(r,3))
+
     def test_surface_range_uses_sort_base_and_inclusive_last(self):
         r = fixture()
         r[71] *= 4

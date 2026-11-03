@@ -12,6 +12,9 @@ import subprocess
 
 from inspect_bsp import inspect
 from validate_records import load_records, validate
+from game_lump import inspect_game_lump, relocate_bsp
+from portals import locate_cell, connected
+from tricoll import triangle_indices
 
 
 def brush(x, slope, materials):
@@ -50,6 +53,83 @@ def box(lo, hi, material):
 
 def entity(**keys):
     return "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in keys.items()) + "}\n"
+
+
+def portal_fixture(closed=False, sky=False):
+    walls = [((-272, -144, -16), (272, 144, 0)),
+             ((-272, -144, 256), (272, 144, 272)),
+             ((-272, -144, 0), (-256, 144, 256)),
+             ((256, -144, 0), (272, 144, 256)),
+             ((-256, -144, 0), (256, -128, 256)),
+             ((-256, 128, 0), (256, 144, 256))]
+    divider = [((-8, -128, 0), (8, 128, 256))] if closed else [
+        ((-8, -128, 0), (8, -48, 256)), ((-8, 48, 0), (8, 128, 256)),
+        ((-8, -48, 128), (8, 48, 256))]
+    return ('{\n"classname" "worldspawn"\n"_viewportals" "1"\n' +
+            '\n'.join(box(lo, hi, 'sky' if sky and i == 1 else 'bump')
+                      for i, (lo, hi) in enumerate(walls + divider)) + '\n}\n')
+
+
+PATCH = '''{
+patchDef2
+{
+compat/bump
+( 3 3 0 0 0 )
+(
+( ( -128 -128 0 0 0 ) ( -128 0 16 0 0.5 ) ( -128 128 0 0 1 ) )
+( ( 0 -128 16 0.5 0 ) ( 0 0 64 0.5 0.5 ) ( 0 128 16 0.5 1 ) )
+( ( 128 -128 0 1 0 ) ( 128 0 16 1 0.5 ) ( 128 128 0 1 1 ) )
+)
+}
+}'''
+
+
+def collision_portal_fixtures(folder, command, reports):
+    for name, source in [('patch', '{\n"classname" "worldspawn"\n' + PATCH + '\n}\n'),
+                         ('portal-open', portal_fixture()),
+                         ('portal-closed', portal_fixture(True)),
+                         ('portal-sky', portal_fixture(sky=True))]:
+        path = folder / (name + '.map')
+        path.write_text(source, encoding='utf-8')
+        with path.with_suffix('.log').open('wb') as log:
+            subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+        bsp = path.with_suffix('.bsp')
+        report = validate(bsp)
+        if report['issues']:
+            raise RuntimeError(f'{name}: {report["issues"]}')
+        r = load_records(bsp, inspect(bsp))
+        if name == 'patch':
+            if len(r[69]) != 4 or len(r[66]) != 8 or r[68] or len(r[96]) != 8:
+                raise RuntimeError('patch collision did not use four node-free quad headers')
+            if not any(word >> 24 == 0x40 for _, _, word in r[87]):
+                raise RuntimeError('patch collision is absent from the collision grid')
+            # Independently compare emitted render triangles with collision positions.
+            rendered = []
+            for mesh in r[80]:
+                first, count, sort = mesh[0], mesh[1], mesh[-2]
+                base = r[82][sort][4]
+                pool = r[73]  # LitBump
+                for t in range(count):
+                    rendered.append(tuple(r[3][pool[base + r[79][first + t*3 + j][0]][0]] for j in range(3)))
+            collision = [tuple(r[3][h[6] + v] for v in triangle_indices(word))
+                         for h in r[69] for (word,) in r[66][h[7]:h[7]+h[4]]]
+            if sorted(rendered) != sorted(collision):
+                raise RuntimeError('patch render and collision triangulations differ')
+        else:
+            a, b = (locate_cell(r, point) for point in ((-128, 0, 64), (128, 0, 64)))
+            if a == b or connected(r, a, b) != (name != 'portal-closed'):
+                raise RuntimeError(f'{name}: room separation/connectivity incorrect ({a}, {b})')
+            if name == 'portal-sky' and not any(p[1] == 1 for p in r[108]):
+                raise RuntimeError('authored sky aperture has no sky portal')
+            for cell, (count, first, _, _) in enumerate(r[107]):
+                for p in r[108][first:first+count]:
+                    if p[1] != 0:
+                        continue
+                    other = r[107][p[5]]
+                    if not any(q[1] == 0 and q[5] == cell and q[0] != p[0] and q[6] == p[6]
+                               for q in r[108][other[1]:other[1]+other[0]]):
+                        raise RuntimeError('missing reciprocal cell portal')
+        reports.append({'game': 'titanfall2', 'fixture': name, 'issues': []})
 
 
 # A floor with a roof over its x<0 half. The sun travels down at 60 degrees
@@ -166,6 +246,9 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("menu-stage lights entered the gameplay RTL pages")
     if [(l[13], l[22]) for l in lights] != [(5, 0), (5, 0), (3, 24), (3, 24), (2, 28), (2, 56), (1, 28), (1, 4)]:
         raise RuntimeError(f"world light order/flags: {[(l[13], l[22]) for l in lights]}")
+    if any(any(l[9:12]) or (l[13] == 5 and any(l[6:9])) or
+           (l[13] == 1 and l[6:9] != (1.0, 0.0, 0.0)) for l in lights):
+        raise RuntimeError('Unused world-light vectors contain uninitialized values')
     texels = sum(w * h for _, w, h in headers)
     if len(sky) != texels * 8 or len(rtl) != texels * 9 or len(headers) != 1:
         raise RuntimeError("lightmap planes do not match one header page")
@@ -317,6 +400,58 @@ def main():
                 raise RuntimeError(f"sky-only world: {sky_report['issues']}")
             reports.append({"game": game, "fixture": "sky-only", "issues": []})
         if game == "titanfall2":
+            collision_portal_fixtures(folder, command, reports)
+            submodel_path = folder / 'submodel-bounds.map'
+            submodel_path.write_text('{\n"classname" "worldspawn"\n' +
+                box((0,0,0),(64,64,64),'bump') + '\n}\n' +
+                '{\n"classname" "func_brush"\n' +
+                box((8192,0,0),(8256,64,64),'bump') + '\n}\n')
+            with submodel_path.with_suffix('.log').open('wb') as log:
+                subprocess.run(command[:-1]+[str(submodel_path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+            sub_bsp = submodel_path.with_suffix('.bsp')
+            sub_report = validate(sub_bsp)
+            submodels = load_records(sub_bsp,inspect(sub_bsp))[14]
+            if sub_report['issues'] or len(submodels) != 2 or submodels[1][:6] != (8192,0,0,8256,64,64):
+                raise RuntimeError(f'Submodel inherited world bounds: {submodels}')
+            reports.append({'game':game,'fixture':'submodel-bounds','issues':[]})
+            models = root / "assets/models/compat"
+            models.mkdir(parents=True)
+            (models / "prop.obj").write_text("v 0 0 0\nv 8 0 0\nv 0 0 4\nf 1 2 3\n", encoding="ascii")
+            prop_path = folder / "static-prop.map"
+            prop_path.write_text(geometry + entity(classname="prop_static", model="models/compat/prop.obj",
+                                                  origin="256 128 16", angle="90", modelscale="2.5", skin="7"),
+                                 encoding="utf-8")
+            with (folder / "static-prop.log").open("wb") as log:
+                subprocess.run(command[:-1] + [str(prop_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+            prop_bsp = prop_path.with_suffix(".bsp")
+            prop_report = validate(prop_bsp)
+            placement = inspect_game_lump(prop_bsp, True)["entries"][0]["placements"][0]
+            if prop_report["issues"] or placement["scale"] != 2.5 or placement["skin"] != 7 or placement["angles_raw"] != (0, 90, 0):
+                raise RuntimeError(f"static prop placement fields: {placement}")
+            inv = inspect(prop_bsp)
+            with prop_bsp.open("rb") as stream:
+                entry = inv["lumps"][120]
+                stream.seek(entry["offset"])
+                references = [r[0] for r in struct.iter_unpack("<H", stream.read(entry["length"]))]
+                entry = inv["lumps"][121]  # OBJ_REFERENCE_BOUNDS, one record per reference
+                stream.seek(entry["offset"])
+                bounds = list(struct.iter_unpack("<3fI3fI", stream.read(entry["length"])))
+            # Assimp's +90 X conversion followed by native yaw 90, scale 2.5.
+            expected_min, expected_max = (256, 128, 16), (266, 148, 16)
+            with prop_bsp.open('rb') as stream:
+                stream.seek(inv['lumps'][123]['offset'] + 8)
+                first_sky = struct.unpack('<I',stream.read(4))[0]
+            prop_base = (first_sky + 63) & ~63
+            prop_bounds = [b for ref, b in zip(references, bounds) if ref == prop_base]
+            if not prop_bounds or any(abs(b[i] - expected_min[i]) > 0.001 or
+                                      abs(b[i + 4] - expected_max[i]) > 0.001
+                                      for b in prop_bounds for i in range(3)):
+                raise RuntimeError(f"static prop transformed bounds: {prop_bounds}")
+            relocated = folder / "static-prop-relocated.bsp"
+            relocate_bsp(prop_bsp, relocated)
+            if validate(relocated)["issues"] or inspect_game_lump(relocated)["entries"][0]["sha256"] != inspect_game_lump(prop_bsp)["entries"][0]["sha256"]:
+                raise RuntimeError("static prop relocation changed its payload")
+            reports.append({"game": game, "fixture": "static-prop-and-relocation", "issues": []})
             lit_path = folder / "lit.map"
             lit_path.write_text(LIT_FIXTURE, encoding="utf-8")
             with (folder / "lit.log").open("wb") as log:
@@ -326,6 +461,25 @@ def main():
                 raise RuntimeError(f"lit fixture: {lit_report['issues']}")
             lit_fixture_checks(lit_path.with_suffix(".bsp"))
             reports.append({"game": game, "fixture": "lit", "issues": []})
+            sampled_path = folder / 'lit-sky-samples.map'
+            sampled_path.write_text(LIT_FIXTURE.replace('"classname" "worldspawn"',
+                                   '"classname" "worldspawn"\n"_skysamples" "128"', 1))
+            with sampled_path.with_suffix('.log').open('wb') as log:
+                subprocess.run(command[:-1] + [str(sampled_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+            if validate(sampled_path.with_suffix('.bsp'))['issues']:
+                raise RuntimeError('High-sample sky lighting failed structural validation')
+            lit_fixture_checks(sampled_path.with_suffix('.bsp'))
+            reports.append({'game': game, 'fixture': 'lit-sky-samples', 'issues': []})
+            from decompile_bsp import decompile, rebuild, compile_scene
+            project = folder / 'recovered-project'
+            decompile(bsp, project)
+            preserved = rebuild(project, folder / 'preserved-roundtrip')
+            if Path(preserved['bsp']).read_bytes() != bsp.read_bytes():
+                raise RuntimeError('Preservation round trip changed the compiler fixture')
+            recovered = compile_scene(project, folder / 'recompiled-roundtrip', args.remap)
+            if not recovered['prop_fields_equal']:
+                raise RuntimeError('Scene round trip changed static props')
+            reports.append({'game': game, 'fixture': 'decompile-and-rebuild', 'issues': []})
     (root / "results.json").write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(reports, indent=2))
 

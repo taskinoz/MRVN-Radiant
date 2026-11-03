@@ -13,9 +13,9 @@ import zlib
 
 def pack_files(files, folder, name):
     """Write a new English directory VPK and external block; never overwrite."""
-    if not name.startswith("client_") or not name.endswith(".bsp.pak000") or any(
+    if not name.startswith(("client_", "server_")) or not name.endswith(".bsp.pak000") or any(
             c in name for c in "/\\:\0"):
-        raise ValueError("expected client_NAME.bsp.pak000 archive name")
+        raise ValueError("expected client_NAME.bsp.pak000 or server_NAME.bsp.pak000 archive name")
     groups = defaultdict(lambda: defaultdict(list))
     seen = set()
     for path, payload in sorted(files.items()):

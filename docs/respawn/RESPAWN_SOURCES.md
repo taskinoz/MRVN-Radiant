@@ -155,6 +155,40 @@ Technical findings inform an original read-only TF2 budget auditor and future
 lighting/material/collision work. No conversion source, game assets, or access
 credentials were copied into the project.
 
+TF2 GAME_LUMP/sprp work (22 October 2026) uses original code with schema facts
+cross-checked against local native structs, Gravemind binary-formats revision 2,
+and snake-biscuits/bsp_tool commit `655627ea8704353ac14bd753df8ca05c15838eda`
+(GPL-3.0). Upstream layout credits include BobTheBob and DTZxPorter. No upstream
+parser implementation was copied. The five-map retail measurements, conditional
+lighting-origin evidence, affected tools and limitations are recorded in
+[RESPAWN_GAME_LUMP.md](RESPAWN_GAME_LUMP.md).
+
+TF2 tricoll and portal continuation (24 October 2026) uses the inherited
+NetRadiant brush BSP/portal routines with original Respawn serialization and
+Python inspection. Schema facts were cross-checked against the pinned bsp_tool
+revision above, Gravemind collision revision 4 / binary-formats revision 2 /
+visibility-and-limits revision 3, retail Coliseum/Glitch records and independent
+native loader/triangle disassembly. No converter or GPL-3.0 implementation was
+copied. Record evidence, source identities, local tests and remaining runtime
+limits are in [RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md).
+
+BobTheBob's manually ported `mp_box` was audited against the user's matching
+Titanfall Online v29 source on 24 October 2026. Original bounded repair and
+native-baker adapter code restore prop fields and fix ZIP/lighting records;
+BobTheBob retains port credit and Respawn/Nexon retain map/asset credit. The
+pinned bsp_tool v12/v13/probe schemas above were consulted as format references;
+no implementation was copied. Existing tf2vpk verified retained VPK members.
+Evidence, native smoke results and limits are in
+[RESPAWN_MP_BOX.md](RESPAWN_MP_BOX.md). Game/mod assets remain local and ignored.
+
+TF2 scene recovery (25 October 2026) adds an original entity parser, RSM1 render
+interchange, preservation rebuilder and native comparison fixtures. The pinned
+bsp_tool schema reference above informed record interpretation; no implementation
+was copied. Existing NetRadiant compilation and Assimp preview imports retain
+their notices. The pinned MIT tf2vpk tool extracted local Coliseum/lobby samples.
+BobTheBob retains mp_box port credit; Respawn/Nexon retain map/asset credit.
+See [RESPAWN_DECOMPILE.md](RESPAWN_DECOMPILE.md) for exact scope and test evidence.
+
 For each incorporation, add the exact upstream commit/release, original authors,
 license and preserved notice locations, affected local files, modifications,
 target build and validation evidence here. Keep each tool's identity in release

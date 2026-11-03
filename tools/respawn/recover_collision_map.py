@@ -68,5 +68,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bsp', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--project', action='store_true', help='export a complete TF2 recovery project with meshes/entities and preservation data')
     args = parser.parse_args()
-    print(f'Recovered {recover(args.bsp, args.output)} collision brushes into {args.output}')
+    if args.project:
+        from decompile_bsp import decompile
+        result = decompile(args.bsp, args.output)
+        print(f'Recovered TF2 project into {args.output}: {result["render_triangles"]} render triangles, {result["props"]} props')
+    else:
+        print(f'Recovered {recover(args.bsp, args.output)} collision brushes into {args.output}')

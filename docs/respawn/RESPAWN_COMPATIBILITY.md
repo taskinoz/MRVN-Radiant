@@ -39,6 +39,23 @@ runtime geometry test, not complete map compatibility.
 
 ## Implemented foundation
 
+25 October 2026: bounded TF2 scene export, hash-checked preservation rebuild and
+experimental native recompilation now cover local mp_box, mp_coliseum and
+mp_lobby samples. All three pass preservation and selected geometry/contents/
+prop comparisons. Rebuilt Coliseum and lobby reached client/server load tests;
+rebuilt mp_box reached a live healthy client after correcting the aligned static
+prop visibility namespace. These are smoke tests with existing game assets. See
+[RESPAWN_DECOMPILE.md](RESPAWN_DECOMPILE.md) for commands, editing roles and limits.
+
+24 October 2026: TF2 now emits patch-grid triangle collision through the native
+small-mesh path, and opt-in worldspawn `_viewportals "1"` builds structural
+cells/portals and per-cell access trees. Default visibility keeps one cell with
+authored sky polygons. Dedicated read-only inspectors and original compiler
+fixtures check these records. These features remain experimental pending native
+collision/culling verification; packed large-mesh nodes, bevel generation and
+water portals are unfinished. See
+[RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md).
+
 - `tools/remap/source/respawn/bsp_reader.h`: bounded native directory and opaque
   lump reads, default/client external overrides, big-endian metadata and streamed
   version handling. Reads preserve bytes; there is no complete typed map decoder.
@@ -196,6 +213,12 @@ The first vertical slice should be chosen from the supplied runtime builds and
 samples. Work on other versions must not silently inherit an unverified schema.
 
 ## Evidence and attribution
+
+The 22 October 2026 [game-lump/static-placement work](RESPAWN_GAME_LUMP.md)
+adds bounded TF2 `sprp` v13 decoding, conditional lighting-origin interpretation,
+directory relocation and native prop scale/skin/visibility-bound corrections.
+Five retail maps (52,588 placements) and original malformed-input/compiler
+fixtures provide evidence; unknown game-lump versions remain opaque.
 
 Lighting tools and measured corpus evidence are documented in
 [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md): v29/v37 inspection, raw atlas-plane

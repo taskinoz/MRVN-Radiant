@@ -1,0 +1,196 @@
+# Minecraft UMA and Glitch test ports
+
+2 November 2026. Local, editable geometry ports of the user-selected worlds:
+
+| World | Author | Input version | Selected blocks | Generated brushes | Textures |
+| --- | --- | --- | ---: | ---: | ---: |
+| [UMA](https://www.planetminecraft.com/project/ru-titanfall-2-uma/) | BirthdayTrain | Java 1.17.1 | 47,400 | 18,110 | 125 |
+| [Glitch](https://www.planetminecraft.com/project/glitch-titanfall-2/) | Oblivering | Java 1.20.4 | 44,811 | 8,169 | 31 |
+
+Glitch's author describes the Minecraft source as 55% complete and permits
+derivatives with credit. Retain both authors' credits. These conversions are
+local artifacts, not a publication or redistribution of the downloaded worlds.
+Minecraft textures/models come from the official Java 1.20.6 client, SHA-1
+`05b6f1c6b46a29d6ea82b4e0d42190e42402030f`, downloaded from the URL in the
+user's installed launcher manifest. Minecraft assets remain Mojang/Microsoft's;
+Titanfall assets remain Respawn's. Tool code is GPL-2.0-or-later.
+
+## Outputs
+
+Ignored `.local/respawn/minecraft-ports/{uma,glitch}-v5/` contains:
+
+- `mp_minecraft_NAME.map`: editable classic MAP source for MRVN-Radiant.
+- `assets/`: editor textures, shader declarations and native material inputs.
+- `MRVN.MinecraftUma-0.5.1.zip` / `MRVN.MinecraftGlitch-0.5.1.zip`: Northstar mods.
+- Matching `-source-0.5.1.zip`: MAP, editor PNG/shader assets and notes.
+- Conversion, visibility-coverage, BSP-validation and spawn reports.
+
+Delete any older copy of the mod folder, then extract into
+`Titanfall2/R2Northstar/mods`. Load locally with `map mp_minecraft_uma tdm` or
+`map mp_minecraft_glitch tdm`. Both use the installed Coliseum base pak plus their
+own resident texture/material RPaks. They have four start and four respawn
+positions for each team, baked sun/ambient lighting with sun shadows, solid brush
+collision, a Minecraft sky dome and a block-built multiplayer menu stage.
+
+## Converting a world
+
+`tools/respawn/build_minecraft_ports.py` converts any Java world ZIP. It reads palette
+Anvil chunks without extracting arbitrary paths, resolves blockstate variants and
+multipart models, turns nonzero model boxes into brushes, merges full cubes with identical
+faces, converts textures to resident BC1 RPak assets, compiles with remap and packages a
+Northstar mod.
+
+```powershell
+python tools/respawn/build_minecraft_ports.py --name my_map --display-name "My Map (Minecraft)" --author AUTHOR --source-url URL --world WORLD.zip --jar OFFICIAL_CLIENT.jar --output NEW_DIRECTORY --remap install/Release/remap.exe --repak PATH_TO_REPAK.exe --material-template PATH_TO_NATIVE_MATERIAL_BASE
+python -m unittest discover -s tools/respawn -p test_minecraft_ports.py -v
+```
+
+The material template is a paired `_wld.json/.uber` and `_colpass_wld.json/.uber` native TF2
+world material, as used by the Box Genesis builder. Pass the base path before these suffixes.
+
+Unset options are worked out from the world, and printed:
+
+| Option | Default | Set it when |
+| --- | --- | --- |
+| `--bounds X1 Y1 Z1 X2 Y2 Z2` | Largest group of chunks with authored blocks, fullest height band | It picked a test copy or cut part of the build |
+| `--anchor X Y Z` | Centre of the build; Y is the commonest walkable surface | The compile reports too few spawn sites on that floor |
+| `--spawns X1 Z1 X2 Z2` | 15% in from each end of the longest axis | Team starts belong elsewhere |
+| `--kill-z Z` | 768 units below the lowest block | The map has a death pit |
+| `--invisible-block NAME[:MIN_Y]` | `barrier`, plus glass in any layer covering a quarter of the build | Other blocks are the author's containment |
+| `--iron-bar-ziplines` | Off | Iron bar lines stand in for ziplines |
+| `--fill-floor-notches` | Off | The world's terrain is missing a piece at its edge; enclosed pits stay open |
+| `--spawn-open-sky` | Off | Spawns land in sealed rooms; don't use it under roof beams |
+| `--loadscreen IMAGE --loadscreen-template BASE` | Coliseum's image | You have a 1920x1080 capture |
+
+Check each new map in-game. A good loading screen needs a capture from a built map, so build
+twice: once to take the shot (`impulse 200` hides the weapon, `cl_drawhud 0` the HUD), then
+with `--loadscreen`. Presets `uma` and `glitch` hold the inspected settings for those worlds;
+UMA's roof glass is `white_stained_glass:50`.
+
+Coordinates transform to `(X,-Z,Y)` around the anchor at 48 Source units per block, allowing
+a 72-unit pilot under two-block doors.
+
+## Rendering corrections
+
+**Visibility tree.** The first Glitch render exposed missing world geometry. The
+legacy SAH tree could stop with more than 255 direct objects, then silently
+truncate the serialized eight-bit reference count. `Shared::MakeVisTree` is now an
+object BVH: each reference has one owner and leaves hold at most 64. The importer
+checks coverage by traversing serialized nodes, not lump sizes.
+
+**Meshes missing from view.** UMA drew neither its sky nor its menu stage with 10,323
+meshes in 0.2.0. With 3,139 in 0.4.3, whole sections vanished at the reported position with a
+110-degree camera or wider, and returned on turning away, while the same view at 90 degrees was
+intact. A 929-mesh build was intact at every tested width up to 160 degrees. Only about 700
+meshes are in view at 110 degrees, under the audited 2,048 draw batch limit, so the limit behind
+this was not identified. Every traversal reference was present throughout.
+
+- `_meshcluster` (worldspawn, units): `Shared::MakeMeshes` groups faces by material, lightmap page
+  and grid cell, in material order. Unset, the existing AABB merge is unchanged. Sky stays one mesh.
+- The builder compiles at 3,072-unit clusters and doubles the size until the map has at most 1,000
+  meshes, failing if it cannot. That budget is measured, not an engine constant. Coarser clusters
+  frustum cull less, but world indices stay near 11% of capacity.
+- Per-map asset names. Northstar loads every installed mod's Postload pak with
+  Coliseum, so both ports' paks are resident on either map. They shared 24 asset
+  names, including the sky, and one map could draw the other's copy.
+- BC1 textures (below).
+
+**Blurry textures.** 16x nearest upscaling alone was not enough. UMA's 49.5 MB
+uncompressed pak rendered low mips only: with its pak alone, cobblestone and the sky
+were visibly low-resolution after ten seconds. BC1 keeps upscaled texels exact up to
+RGB565 rounding, since each texel fills whole 4x4 blocks. UMA's pak is now 8.5 MB
+and Glitch's 4.3 MB, and both render crisp. The threshold itself was not measured.
+
+**Lighting.** Sky occlusion is on, with brightness 170 ambient. One-bounce light
+stays off: at this density it left green and yellow blotches on flat block faces.
+
+**Sky.** The dome is centred on each build. `sky_texture` is an azimuthal projection
+(radius is angle from the zenith) of a flat 12-block cloud layer, so clouds shrink
+toward the horizon like Minecraft's, with a square sun opposite the light direction.
+It is ordinary constant-lit world geometry, not an engine sky surface, so it writes
+depth and hides anything beyond it. A plain horizon-coloured floor sits under it.
+
+**Menu.** `menu_scene_ref` is at Z 18000, above the gameplay dome, on a grass island
+under its own smaller dome. At Z 8192, inside the dome, the stage and the retail
+`models/menu/default_environment.mdl` were visible overhead from the arena.
+
+The reusable prefab is the `mrvn_mp_menu` point entity, also importable from
+`install/gamepacks/Titanfall2.game/Titanfall2/prefabs/mp_menu.map`. remap expands it
+into the two script anchors, an isolated light environment with its volume, and a
+key light. It adds no scenery. It compiled and ran in both ports; placing it through
+the Radiant UI has not been exercised.
+
+**Falling.** A server script kills pilots below the build, and at Z -192 on Glitch,
+so its pit is a death hole like retail's. A `trigger_hurt` brush with `damage` keys
+compiled but did not hurt in-game.
+
+**Spots in shade.** Sky occlusion used a random ray rotation per texel. Where few
+rays reach the sky, that became blotches. `_skyfixedpattern` (worldspawn) gives every
+texel the same rays, with `_skysamples` 128. Unset, bakes are unchanged. Shadows deep
+in Glitch's pit are still soft blobs, but pilots die above that depth.
+
+**Ziplines.** Glitch's four iron-bar lines are removed and replaced with `move_rope`
+pairs at their ends, using retail `mp_glitch`'s rope keys. A pilot pressing use while
+falling past one rode it (`IsZiplining` true). The client seems to receive ropes only
+near the player, so a free camera far from the player won't show them. UMA's iron bars
+are windows and railings, and stay.
+
+**Loading screens.** A retail loadscreen pak is one 1920x1080 single-mip BC1 texture and
+one `material/loadscreens/LEVEL_widescreen_gen.rpak`. Pass `--loadscreen IMAGE` and
+`--loadscreen-template BASE`, a `.json`/`.uber` pair taken from a decompressed retail pak.
+Northstar loads a mod pak named `LEVEL_loadscreen.rpak` when the level asks for it, so
+the Coliseum alias is dropped. Images are in-game captures composed after the retail
+ones, taken with `impulse 200` to hide the weapon and crosshair. The retail Glitch
+image's leaping pilot is not reproduced. The private match map image (`_lobby`) is not
+built.
+
+**Spawns.** Sites need a clear 5x5 of floor and air, headroom, and eight blocks' line of sight
+toward the middle of the map, which they face. With `--spawn-open-sky` they also need open sky.
+
+**Map names.** The loading screen and menus look up `#<level>`. Each mod adds
+`mod/resource/<level>_english.txt` (UTF-16, listed under `Localisation` in `mod.json`) with the
+name, `_ALLCAPS`, `_CLASSIC` and description tokens. Only English is written.
+
+**Torches.** The builder floods the air reachable from the spawns, casts rays from head-height
+wall spots, and places a torch every six or more blocks where under 20% of rays reach the sky, up
+to 96 per map. Each is two non-solid boxes and a static `light` entity,
+editable in Radiant. Static lights bake with shadows and use no realtime slots, so they light walls;
+how much they light pilots was not measured. Torches sit straight rather than tilted.
+
+**Invisible barrier.** A `_clip` material (`$compileflag nodraw`, `$contentflag playerclip`) adds a
+roof 192 units above the build and four walls around its bounds, down below the kill height. It
+casts no shadow. Launched pilots stopped at the UMA roof and east wall and at the Glitch roof.
+Worlds' `barrier` blocks become clip too: UMA has 193, Glitch none. UMA's white glass from Y 50 up,
+removed in earlier versions, is the author's containment, so it is clip again. Pilots can stand on
+those invisible surfaces and on the outer walls' tops inside the barrier.
+
+## Runtime checks
+
+Both 0.5.1 BSPs loaded in the installed Titanfall 2 build through Northstar 1.31.13
+in an isolated profile, with both mods enabled and switching maps in one session.
+Checked in-game: the reported screenshot positions; eight-way camera sweeps inside
+and above each build with no holes or missing sections; pilot and loadout menus on
+the stage; falling kills; native start-spawn selection for both teams; floor and
+32-by-32-by-72 hull traces at all eight sites per map.
+
+These are load, render and spawn tests. Not tested: other players or real network
+play, full traversal, wallrunning, competitive balance, or GPUs other than this
+machine's. Camera sweeps sample views, so culling elsewhere is not ruled out.
+
+## Scope and approximations
+
+These are pilot-only local test ports. Auto-detection was tried on these two worlds only. No navmesh, Titans, AI, hardpoints,
+CTF positions, audio layout, minimap artwork or multiplayer balancing pass.
+Minecraft commands/redstone and moving mechanisms are not translated.
+Glass and leaves have opaque alpha backing; textures use their first animation
+frame. Per-face model UV rotations/subrectangles use approximate world tiling.
+Model-element rotations use unrotated bounds. Plants, signs/banners and
+zero-thickness elements are omitted; state types are recorded in each report.
+UMA's white-glass upper containment shell is invisible, so its roof looks open to the sky.
+
+The supplied converters were inspected for workflow ideas:
+[minecraft-to-vmf](https://github.com/potato1234x/minecraft-to-vmf),
+[Sourcecraft](https://github.com/Garten/sourcecraft), and
+[mca2vmf](https://github.com/gramx/mca2vmf). They target VMF/Source rather than
+native TF2 materials and packaging. The Python converter explicitly lacks
+brush optimization. No converter implementation was copied into this importer.

@@ -171,8 +171,14 @@ struct PortalGeometry {
                 if (std::find(list.begin(), list.end(), e) == list.end()) list.push_back(e);
             }
         }
-        for (const auto &list : incident) {
-            if (list.size() > 8) Error("Portal vertex has more than eight incident edges");
+        // Retail vertex-edge lists hold only edges ending at the vertex (at most
+        // five in Angel City, Colony, Glitch and Homestead); edges passing through
+        // it as T-junctions are recorded in the intersection tables below.
+        std::vector<std::vector<uint16_t>> endpoints(B::portalVertices_stub.size());
+        for (std::size_t e = 0; e < edgeCount; ++e)
+            for (int k = 0; k < 2; ++k) endpoints[B::portalEdges_stub[e * 2 + k]].push_back(e);
+        for (const auto &list : endpoints) {
+            if (list.size() > 8) Error("Portal vertex ends more than eight edges");
             std::array<int16_t, 8> block;
             block.fill(-1);
             std::copy(list.begin(), list.end(), block.begin());
@@ -270,7 +276,7 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         auto &brush = structural.brushes.emplace_back(source);
         int contents = 0, flags = 0;
         for (const auto &side : brush.sides) {
-            contents |= side.shaderInfo->contentFlags;
+            if (side.shaderInfo) contents |= side.shaderInfo->contentFlags;  // bevel sides have none
             flags |= side.compileFlags;
         }
         brush.detail = (flags & C_DETAIL) || (contents & CONTENTS_DETAIL);

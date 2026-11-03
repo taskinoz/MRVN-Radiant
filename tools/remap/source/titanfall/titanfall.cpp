@@ -299,7 +299,7 @@ void CompileR1BSPFile() {
     // Generate vis tree for worldspawn, we do this here as we'll need portals once we reverse further
     Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
     Shared::MergeVisTree(Shared::visRoot);
-    Titanfall::EmitVisTree();
+    // The cell AABB tree is emitted by EmitVisibility, per portal cell.
 
     // Emit level info
     Titanfall::EmitLevelInfo();
@@ -309,6 +309,10 @@ void CompileR1BSPFile() {
 
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall::EmitStubs();
+    // TF1 shares TF2's cell and portal layouts: sky portals from authored sky
+    // faces, or the full portal graph with worldspawn "_viewportals" "1".
+    if (world)
+        Titanfall2::EmitVisibility(*world);
 }
 
 

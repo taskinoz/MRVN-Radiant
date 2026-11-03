@@ -48,3 +48,9 @@ windeps
 libassimp.*
 install/radiant
 install/remap
+
+# Local Respawn research artefacts: RSX exports, crash dumps, caches
+/exported_files/
+/latest_crash/
+/rsx_cache_db.bin
+tools/respawn/__pycache__/

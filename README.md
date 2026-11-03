@@ -1,5 +1,12 @@
 # MRVN-Radiant
 
+[![AI: generated Respawn tools](.github/badges/ai-generated.svg)](AI.md)
+
+> **This is a fork with AI-generated changes.** The Respawn tools, research notes
+> and compiler changes added here were produced with AI; see [AI.md](AI.md). The
+> original, human-built editor is
+> [MRVN-Radiant/MRVN-Radiant](https://github.com/MRVN-Radiant/MRVN-Radiant).
+
 The open-source, cross-platform level editor for Respawn Entertainment Source based games.
 
 MRVN-Radiant is a fork of NetRadiant-custom (GtkRadiant 1.4 &rarr; massive rewrite &rarr; 1.5 &rarr; NetRadiant &rarr; NetRadiant-custom &rarr; this)

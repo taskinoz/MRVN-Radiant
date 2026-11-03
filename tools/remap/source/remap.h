@@ -627,6 +627,7 @@ struct brush_t {
     indexMap_t          *im;
 
     int                  contentFlags;
+    bool                 recoveredContents = false; // exact primitive mask supplied by scene recovery
     int                  compileFlags;         /* ydnar */
     bool                 detail;
     bool                 opaque;

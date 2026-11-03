@@ -25,6 +25,93 @@
 #include "bspfile_abstract.h"
 #include "respawn/lightmap.h"
 #include "respawn/csg.h"
+#include <map>
+#include <tuple>
+
+namespace {
+// Original RSM1 scene interchange, not a Respawn engine format. Used by the
+// bounded decompiler to preserve recovered render vertices independently of
+// collision brushes. See docs/respawn/RESPAWN_DECOMPILE.md. "_remap_props" holds
+// extra render-only geometry (converted props) drawn alongside the brushes.
+void ReadRecoveredMeshes(const entity_t &entity, const char *key, int &meshIndex) {
+    const char *path = entity.valueForKey(key);
+    if (!path[0]) return;
+    MemBuffer data = vfsLoadFile(path);
+    if (!data || data.size() > 256u * 1024u * 1024u) Error("Missing or oversized recovered mesh %s", path);
+    std::size_t cursor = 0;
+    auto read = [&](void *out, std::size_t size) {
+        if (size > data.size() - cursor) Error("Truncated recovered mesh %s", path);
+        std::memcpy(out, static_cast<const unsigned char *>(data.data()) + cursor, size); cursor += size;
+    };
+    auto u32 = [&]() { uint32_t value; read(&value, 4); return value; };
+    auto number = [&]() { float value; read(&value, 4); if (!std::isfinite(value)) Error("Nonfinite recovered mesh vertex"); return value; };
+    if (u32() != 0x314d5352) Error("Expected RSM1 recovered mesh %s", path);
+    const uint32_t count = u32();
+    // Charts are lightmap islands, merged into far fewer BSP meshes later; this only bounds the file.
+    if (count > 4u * 1024u * 1024u) Error("Too many recovered mesh charts");
+    for (uint32_t m = 0; m < count; ++m) {
+        const uint32_t length = u32();
+        if (!length || length > 255) Error("Invalid recovered mesh material length");
+        std::string material(length, '\0'); read(material.data(), length);
+        if (material.find('\0') != std::string::npos) Error("Embedded NUL in recovered material");
+        const uint32_t nv = u32(), ni = u32();
+        if (!nv || nv > 65535 || !ni || ni > 63000 || ni % 3) Error("Invalid recovered mesh counts");
+        Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
+        mesh.shaderInfo = ShaderInfoForShader(material.c_str());
+        Shared::Island_t island; island.mesh = meshIndex;
+        for (uint32_t v = 0; v < nv; ++v) {
+            Shared::Vertex_t vertex{};
+            for (int a = 0; a < 3; ++a) vertex.xyz[a] = number();
+            for (int a = 0; a < 3; ++a) vertex.normal[a] = number();
+            if (vector3_length(vertex.normal) < 1e-6) Error("Zero recovered mesh normal");
+            for (int a = 0; a < 2; ++a) vertex.textureUV[a] = number();
+            read(&vertex.colour, 4);
+            // RSM1 lightmap coordinates are in 16-unit luxels.
+            for (int a = 0; a < 2; ++a) vertex.lightmapUV[a] = number() * 16.0f / Shared::luxelSize;
+            vertex.lightmapStep = Vector2(0, 0);
+            mesh.vertices.push_back(vertex); mesh.minmax.extend(vertex.xyz); island.bounds.extend(vertex.lightmapUV);
+        }
+        for (uint32_t i = 0; i < ni; ++i) {
+            const uint32_t index = u32();
+            if (index >= nv) Error("Recovered mesh index outside vertex pool");
+            mesh.triangles.push_back(index);
+        }
+        if ((mesh.shaderInfo->surfaceFlags & 0x600) < 0x400) Shared::islands.push_back(island);
+        ++meshIndex;
+    }
+    if (cursor != data.size()) Error("Unexpected recovered mesh tail %s", path);
+}
+// Merges meshes sharing a material, lightmap page and grid cell, in material order.
+// Sky stays one mesh: splitting a dome by cell gains no culling.
+void ClusterMeshes(float size) {
+    using Key = std::tuple<std::string, int, int, int, int>;
+    std::map<Key, std::vector<Shared::Mesh_t>> clusters;
+    for (Shared::Mesh_t &mesh : Shared::meshes) {
+        const Vector3 centre = (mesh.minmax.mins + mesh.minmax.maxs) * 0.5f;
+        const bool sky = CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY);
+        Key key{mesh.shaderInfo->shader.c_str(), mesh.lightmapPage,
+                sky ? 0 : static_cast<int>(std::floor(centre.x() / size)),
+                sky ? 0 : static_cast<int>(std::floor(centre.y() / size)),
+                sky ? 0 : static_cast<int>(std::floor(centre.z() / size))};
+        std::vector<Shared::Mesh_t> &group = clusters[key];
+        if (group.empty() || group.back().triangles.size() + mesh.triangles.size() > 63000
+         || group.back().vertices.size() + mesh.vertices.size() > 60000) {
+            group.push_back(std::move(mesh));
+            continue;
+        }
+        Shared::Mesh_t &out = group.back();
+        const std::size_t base = out.vertices.size();
+        for (uint16_t triIndex : mesh.triangles)
+            out.triangles.emplace_back(static_cast<uint16_t>(triIndex + base));
+        out.vertices.insert(out.vertices.end(), mesh.vertices.begin(), mesh.vertices.end());
+        out.minmax.extend(mesh.minmax);
+    }
+    Shared::meshes.clear();
+    for (auto &[key, group] : clusters)
+        for (Shared::Mesh_t &mesh : group)
+            Shared::meshes.push_back(std::move(mesh));
+}
+} // namespace
 
 
 /*
@@ -35,6 +122,10 @@ void Shared::MakeMeshes(const entity_t &e) {
     // Multiple entities can have meshes, make sure we clear before making new meshes
     Shared::meshes.clear();
     Shared::islands.clear();
+    // Large maps need coarser lightmaps to fit their pages and mesh budget.
+    if (e.floatForKey("_remap_luxelsize") > 0.0f)
+        Shared::luxelSize = e.floatForKey("_remap_luxelsize");
+    Shared::lightmapByMaterial = e.boolForKey("_remap_lightmap_by_material");
 
     // Solid, visible brushes hide faces buried in or flush against them (see
     // respawn/csg.h). Clip, trigger and translucent brushes hide nothing.
@@ -64,9 +155,11 @@ void Shared::MakeMeshes(const entity_t &e) {
     std::size_t hidden_faces = 0, split_faces = 0;
 
     int mesh_index = 0;
+    const bool recoveredMeshes = e.valueForKey("_remap_mesh")[0] != 0;
     brush_order = 0;
     // Loop through brushes
     for (const brush_t &brush : e.brushes) {
+        if (recoveredMeshes) break; // these brushes represent collision only
         const int owner = brush_order++;
         // Loop through sides
         for (const side_t &side : brush.sides) {
@@ -167,8 +260,14 @@ void Shared::MakeMeshes(const entity_t &e) {
     // Loop through patches
     parseMesh_t *patch;
     patch = e.patches;
-    while (patch != NULL) {
+    while (patch != NULL && !recoveredMeshes) {
         mesh_t patchMesh = patch->mesh;
+
+        // Collision-only patches (nodraw) have no render material.
+        if (CHECK_FLAG(patch->shaderInfo->compileFlags, C_NODRAW)) {
+            patch = patch->next;
+            continue;
+        }
 
         Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
         mesh.shaderInfo = patch->shaderInfo;
@@ -233,9 +332,19 @@ void Shared::MakeMeshes(const entity_t &e) {
         mesh_index++;
     }
 
+    ReadRecoveredMeshes(e, "_remap_mesh", mesh_index);
+    ReadRecoveredMeshes(e, "_remap_props", mesh_index);
+
     // Recalculate lightmapUVs for all vertices
     if (Shared::lightmapsEnabled)
         Shared::MakeLightmapUVs();
+
+    // Block worlds have thousands of disjoint faces, so the AABB merge below leaves
+    // too many meshes and materials interleaved. "_meshcluster" instead groups by
+    // material, lightmap page and grid cell, keeping each material's meshes adjacent.
+    const float meshCluster = e.floatForKey("_meshcluster");
+    if (meshCluster > 0.0f)
+        ClusterMeshes(meshCluster);
 
     // Combine all meshes based on shaderInfo and AABB tests
     std::size_t index = 0;
@@ -247,7 +356,7 @@ void Shared::MakeMeshes(const entity_t &e) {
         }
 
         // No more meshes to combine; break from the loop
-        if (iterationsSinceCombine >= Shared::meshes.size()) {
+        if (meshCluster > 0.0f || iterationsSinceCombine >= Shared::meshes.size()) {
             break;
         }
 
@@ -322,6 +431,8 @@ void Shared::MakeVisReferences() {
         Shared::visRef_t &ref = Shared::visRefs.emplace_back();
 
         ref.minmax = mesh.minmax;
+        ref.minmax.mins -= Vector3(1.0f);
+        ref.minmax.maxs += Vector3(1.0f);
         ref.index = i;
     }
 
@@ -397,74 +508,23 @@ Shared::visNode_t Shared::MakeVisTree(std::vector<Shared::visRef_t> refs, float 
 
     node.minmax = minmax;
 
-    // Check if a vis ref is large enough to reference directly
-    std::vector<Shared::visRef_t>  visRefs = refs;
-    refs.clear();
-    for (Shared::visRef_t &ref : visRefs) {
-        if (minmax.surrounds(ref.minmax) && ref.minmax.area() / minmax.area() > 0.8) {
-            node.refs.emplace_back(ref);
-        } else {
-            refs.emplace_back(ref);
-        }
-    }
-
-    // Check all possible ways of splitting
-    float bestCost = 0;
-    float bestPos = 0;
-    int bestAxis = 0;
-
-    bestCost = 1e30f;
-    float pos[1];
-    for (int axis = 0; axis < 3; axis++) {
-        for (std::size_t i = 0; i < refs.size(); i++) {
-            pos[0] = refs.at(i).minmax.mins[axis];
-
-            float cost = CalculateSAH(refs, minmax, axis, pos);
-            // Sys_Printf("%f\n", cost);
-            if (cost < bestCost) {
-                bestCost = cost;
-                bestPos = pos[0];
-                bestAxis = axis;
-            }
-        }
-    }
-
-    if (bestCost >= parentCost) {
-        if (refs.size() > 255) {
-            Sys_FPrintf(SYS_ERR, "CellAABBNode references more than 255 refs\n");
-        }
-
-        for (Shared::visRef_t &ref : refs) {
-            node.refs.emplace_back(ref);
-        }
-
+    // A conservative object BVH: each reference has one owner, so subtree
+    // totals match runtime traversal exactly. Spatial SAH duplication made
+    // overlapping planar material meshes disappear as the camera turned.
+    // Stay well inside the byte-sized direct-reference field.
+    if (refs.size() <= 64) {
+        node.refs = std::move(refs);
         return node;
     }
-
-    MinMax  nodes[2];
-    nodes[0] = minmax;
-    nodes[1] = minmax;
-    std::vector<Shared::visRef_t>  nodeRefs[2];
-
-    nodes[0].maxs[bestAxis] = bestPos;
-    nodes[1].mins[bestAxis] = bestPos;
-
-    for (Shared::visRef_t &ref : refs) {
-        for (int i = 0; i < 2; i++) {
-            if (ref.minmax.test(nodes[i])) {
-                nodeRefs[i].emplace_back(ref);
-            }
-        }
-    }
-
-    // Sys_Printf("%li; %li; %li; %li\n", nodeRefs[0].size(), nodeRefs[1].size(), nodeRefs[2].size(), nodeRefs[3].size());
-
-    for (int i = 0; i < 2; i++) {
-        if (nodeRefs[i].size() != 0) {
-            node.children.emplace_back(Shared::MakeVisTree(nodeRefs[i], bestCost));
-        }
-    }
-
+    int axis = 0;
+    for (int a = 1; a < 3; ++a)
+        if (minmax.maxs[a] - minmax.mins[a] > minmax.maxs[axis] - minmax.mins[axis]) axis = a;
+    std::stable_sort(refs.begin(), refs.end(), [axis](const Shared::visRef_t &a, const Shared::visRef_t &b) {
+        return a.minmax.mins[axis] + a.minmax.maxs[axis] < b.minmax.mins[axis] + b.minmax.maxs[axis];
+    });
+    const auto middle = refs.begin() + refs.size() / 2;
+    node.children.emplace_back(Shared::MakeVisTree(std::vector<Shared::visRef_t>(refs.begin(), middle), 1e30f));
+    node.children.emplace_back(Shared::MakeVisTree(std::vector<Shared::visRef_t>(middle, refs.end()), 1e30f));
     return node;
 }
 
@@ -535,7 +595,14 @@ void Shared::MakeLightmapUVs() {
     std::vector<const Shared::Island_t*>  order;
     for (const Shared::Island_t &island : Shared::islands)
         order.push_back(&island);
+    // Meshes split per material and page, so maps with hundreds of materials can
+    // pack material by material: each material then spans one or two pages.
     std::stable_sort(order.begin(), order.end(), [](const Shared::Island_t *a, const Shared::Island_t *b) {
+        if (Shared::lightmapByMaterial) {
+            const int order = std::strcmp(Shared::meshes.at(a->mesh).shaderInfo->shader.c_str(),
+                                          Shared::meshes.at(b->mesh).shaderInfo->shader.c_str());
+            if (order) return order < 0;
+        }
         const float  ha = a->bounds.maxs.y() - a->bounds.mins.y(), hb = b->bounds.maxs.y() - b->bounds.mins.y();
         return ha > hb;
     });

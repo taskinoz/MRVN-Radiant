@@ -1184,6 +1184,18 @@ static void ParseBrush( bool onlyLights, bool noCollapseGroups, entity_t& mapEnt
 	/* get the content for the entire brush */
 	// SetBrushContents( buildBrush );
 
+	// Recovered scenes retain per-primitive contents independently of render
+	// material names. Ordinary authored maps keep the existing parsing behavior.
+	const std::string recoveredKey = "_remap_contents_" + std::to_string(mapPrimitiveNum);
+	const char *recoveredContents = mapEnt.valueForKey(recoveredKey.c_str());
+	if (g_game->bspVersion == 37 && recoveredContents[0]) {
+		char *end = nullptr;
+		const auto value = std::strtoull(recoveredContents, &end, 10);
+		if (*end || value > 0xffffffffull) Error("Invalid recovered brush contents");
+		buildBrush.contentFlags = static_cast<int>(value);
+		buildBrush.recoveredContents = true;
+	}
+
 	/* allow detail brushes to be removed */
 	if ( nodetail && ( buildBrush.compileFlags & C_DETAIL ) ) {
 		return;

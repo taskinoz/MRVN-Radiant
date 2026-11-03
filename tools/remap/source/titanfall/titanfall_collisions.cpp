@@ -26,6 +26,88 @@
 #include "titanfall.h"
 #include "../respawn/encoding.h"
 
+namespace {
+struct PatchCollision {
+    MinMax bounds;
+    uint16_t header;
+    int contents;
+    bool modelOnly;
+};
+
+// Retail and the native loader have a <=3-triangle path with no packed nodes.
+// Use one quad per header (at most two triangles) until larger-node encoding is
+// independently verified. This is collision for the same sampled patch geometry
+// used by Shared::MakeMeshes, not a convex proxy for the curved surface.
+std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
+    std::vector<PatchCollision> result;
+    if (g_game->bspVersion != 37) return result;
+    for (const parseMesh_t *patch = entity.patches; patch; patch = patch->next) {
+        const shaderInfo_t &shader = *patch->shaderInfo;
+        int contents = shader.contentFlags;
+        const std::string key = "_remap_contents_" + std::to_string(patch->brushNum);
+        const char *overrideValue = entity.valueForKey(key.c_str());
+        if (overrideValue[0]) {
+            char *end = nullptr;
+            const auto value = std::strtoull(overrideValue, &end, 10);
+            if (*end || value > 0xffffffffull) Error("Invalid recovered triangle contents");
+            contents = static_cast<int>(value);
+        }
+        // Respawn shaders encode solidity in contentFlags, unlike Q3's C_SOLID.
+        if (!contents || ((shader.compileFlags & C_SKY) && !overrideValue[0])) continue;
+        const mesh_t &mesh = patch->mesh;
+        for (int y = 0; y + 1 < mesh.height; ++y) for (int x = 0; x + 1 < mesh.width; ++x) {
+            const int first = x + y * mesh.width;
+            const Vector3 points[] = {mesh.verts[first].xyz, mesh.verts[first + mesh.width].xyz,
+                                      mesh.verts[first + mesh.width + 1].xyz, mesh.verts[first + 1].xyz};
+            std::vector<std::array<unsigned, 3>> triangles;
+            for (const auto &tri : {std::array<unsigned, 3>{0, 1, 2}, std::array<unsigned, 3>{0, 2, 3}}) {
+                if (vector3_length(vector3_cross(points[tri[1]] - points[tri[0]], points[tri[2]] - points[tri[0]])) > 1e-6)
+                    triangles.push_back(tri);
+            }
+            if (triangles.empty()) continue;
+            if (Titanfall::Bsp::tricollHeaders.size() > 65535)
+                Error("Tricoll header index exceeds its collision primitive field");
+            PatchCollision out;
+            for (const Vector3 &point : points) {
+                for (int axis = 0; axis < 3; ++axis)
+                    if (!std::isfinite(point[axis])) Error("Nonfinite patch collision vertex");
+                out.bounds.extend(point);
+            }
+            out.header = Titanfall::Bsp::tricollHeaders.size();
+            out.contents = contents;
+            out.modelOnly = (shader.compileFlags & C_SKY) != 0;
+            const uint32_t texture = Titanfall::EmitTextureData(shader);
+            if (texture > 32767) Error("Tricoll texture index exceeds its signed 16-bit field");
+            Titanfall::TricollHeader_t header{};
+            header.texdata = texture;
+            header.texinfoFlags = static_cast<int16_t>(shader.surfaceFlags & 0xffff);
+            header.numVerts = 4;
+            header.numTris = triangles.size();
+            header.firstVert = Titanfall::Bsp::vertices.size();
+            header.firstTri = Titanfall::Bsp::tricollTriangles.size();
+            header.org = Vector3(0);
+            Titanfall::Bsp::vertices.insert(Titanfall::Bsp::vertices.end(), std::begin(points), std::end(points));
+            for (const auto &tri : triangles) {
+                Titanfall::TricollTriangle_t word{};
+                word.idx0 = tri[0];
+                word.idx1 = tri[1] - tri[0];
+                word.idx2 = tri[2] - tri[0];
+                Titanfall::Bsp::tricollTriangles.push_back(word);
+                Titanfall::Bsp::tricollBevelStarts.push_back(0);
+            }
+            Titanfall::Bsp::tricollHeaders.push_back(header);
+            result.push_back(out);
+        }
+    }
+    return result;
+}
+
+void EmitPatchGeoSet(const PatchCollision &patch) {
+    Titanfall::EmitGeoSet(patch.bounds, patch.header, patch.contents);
+    Titanfall::Bsp::cmGeoSets.back().collisionShapeType = 0x40;
+}
+} // namespace
+
 /*
     EmitCollisionGrid()
     Emits brushes of entity into bsp
@@ -35,6 +117,9 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     std::vector<brush_t*> modelBrushes;
 
     MinMax gridSize;
+    const auto patches = EmitPatchCollision(e);
+    bool gridPatches = false;
+    for (const auto &patch : patches) if (!patch.modelOnly) { gridSize.extend(patch.bounds); gridPatches = true; }
 
     // Sort brushes
     for( brush_t &brush : e.brushes ) {
@@ -62,7 +147,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
 
     // Emit grid brushes
     // Sky-only or patch-only worlds have no ordinary grid-brush bounds.
-    if (gridBrushes.empty())
+    if (gridBrushes.empty() && !gridPatches)
         gridSize.extend(Vector3(0, 0, 0));
     // Other models may already have emitted brushes; only index our own.
     const std::size_t firstBrush = Titanfall::Bsp::cmBrushes.size();
@@ -80,6 +165,30 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     y = ceil(size.y() / scale) + 2;
     while( x > 128 || y > 128 ) {
         scale += 16;
+        x = ceil(size.x() / scale) + 2;
+        y = ceil(size.y() / scale) + 2;
+    }
+    // Every primitive gets a GeoSet in each cell it touches, and the cell
+    // ranges are 16 bits. Large maps with big brushes overflow at the smallest
+    // scale, so coarsen the grid until the estimated total fits.
+    std::vector<MinMax> gridBounds;
+    for (std::size_t index = 0; index < gridBrushes.size(); index++) {
+        const Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(firstBrush + index);
+        MinMax bounds;
+        bounds.mins = brush.origin - brush.extents;
+        bounds.maxs = brush.origin + brush.extents;
+        gridBounds.push_back(bounds);
+    }
+    for (const auto &patch : patches) if (!patch.modelOnly) gridBounds.push_back(patch.bounds);
+    const auto estimateGeoSets = [&gridBounds](float cellSize) {
+        std::size_t total = Titanfall::Bsp::cmGeoSets.size();
+        for (const MinMax &bounds : gridBounds)
+            total += (std::size_t)(floor(bounds.maxs.x() / cellSize) - floor(bounds.mins.x() / cellSize) + 1) *
+                     (std::size_t)(floor(bounds.maxs.y() / cellSize) - floor(bounds.mins.y() / cellSize) + 1);
+        return total;
+    };
+    while (estimateGeoSets(scale) > 60000 && scale < 65536) {
+        scale *= 1.25f;
         x = ceil(size.x() / scale) + 2;
         y = ceil(size.y() / scale) + 2;
     }
@@ -137,6 +246,9 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
                 Titanfall::EmitGeoSet(brushMinmax, brush.index, gridBrushes.at(index)->contentFlags);
             }
 
+            for (const auto &patch : patches)
+                if (!patch.modelOnly && cellMinmax.test(patch.bounds)) EmitPatchGeoSet(patch);
+
             if (Titanfall::Bsp::cmGeoSets.size() - cell.start > 65535)
                 Error("Collision grid-cell count exceeds 16 bits");
             cell.count = Titanfall::Bsp::cmGeoSets.size() - cell.start;
@@ -166,6 +278,10 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
 
         Titanfall::EmitGeoSet(brushMinmax, brush.index, modelBrushes.at(i)->contentFlags);
     }
+    // Like sky brushes, recovered sky collision belongs to the global world
+    // cell. Duplicating map-sized sky triangles into every XY cell overflows
+    // native 16-bit cell ranges even for small retail maps.
+    for (const auto &patch : patches) if (patch.modelOnly) EmitPatchGeoSet(patch);
 
     numGeoSets = Titanfall::Bsp::cmGeoSets.size() - numGeoSets;
     numPrimitives = Titanfall::Bsp::cmPrimitives.size() - numPrimitives;
@@ -181,6 +297,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     Emits brushes of entity into bsp
 */
 void Titanfall::EmitModelGridCell( entity_t &e ) {
+    const auto patches = EmitPatchCollision(e);
     std::size_t offset = Titanfall::Bsp::cmBrushes.size();
 
     for( brush_t &brush : e.brushes )
@@ -204,6 +321,7 @@ void Titanfall::EmitModelGridCell( entity_t &e ) {
         i++;
     }
 
+    for (const auto &patch : patches) EmitPatchGeoSet(patch);
     if (Titanfall::Bsp::cmGeoSets.size() - cell.start > 65535)
         Error("Collision model-cell count exceeds 16 bits");
     cell.count = Titanfall::Bsp::cmGeoSets.size() - cell.start;
@@ -262,7 +380,7 @@ void Titanfall::EmitBrush(brush_t &brush) {
     // TODO: The core structs ( entity_t, brush_t parseMest_t, shaderInfo_t, etc... ) need to be rewritten
     // to avoid this
     for( side_t &side : brush.sides ) {
-        if( !side.bevel )
+        if( !side.bevel && !brush.recoveredContents )
             brush.contentFlags |= side.shaderInfo->contentFlags;
             // TODO: collect shader contentClearFlags & mask at the end
     }

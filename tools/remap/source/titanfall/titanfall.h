@@ -158,11 +158,12 @@ namespace Titanfall {
 
     // 0x42
     struct TricollTriangle_t{
-        int32_t unk : 5;
-        int32_t idx0 : 9;
-        int32_t idx1 : 9;
-        int32_t idx2 : 9;
+        uint32_t idx0 : 10; // base vertex
+        uint32_t idx1 : 7;  // positive delta from base
+        uint32_t idx2 : 7;  // positive delta from base
+        uint32_t unk : 8;   // edge/bevel flags, retained by readers
     };
+    static_assert(sizeof(TricollTriangle_t) == 4, "Packed tricoll words are 4 bytes");
 
     // 0x45
     struct TricollHeader_t {
@@ -179,6 +180,7 @@ namespace Titanfall {
         Vector3 org;
         float scale;
     };
+    static_assert(sizeof(TricollHeader_t) == 44, "Tricoll headers are 44 bytes");
 
     // 0x47
     struct VertexUnlit_t {
@@ -414,6 +416,7 @@ namespace Titanfall {
         inline std::vector<uint32_t>              textureDataTable;
         inline std::vector<TricollTriangle_t>     tricollTriangles;
         inline std::vector<TricollHeader_t>       tricollHeaders;
+        inline std::vector<uint16_t>              tricollBevelStarts;
         inline std::vector<VertexUnlit_t>         vertexUnlitVertices;
         inline std::vector<VertexLitFlat_t>       vertexLitFlatVertices;
         inline std::vector<VertexLitBump_t>       vertexLitBumpVertices;

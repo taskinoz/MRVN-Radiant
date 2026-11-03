@@ -124,6 +124,11 @@ V3 OriginForEntity(const entity_t &e) {
 
 Titanfall2::WorldLight_t BaseRecord(const Light &light, int32_t type) {
     Titanfall2::WorldLight_t record{};
+    // Vector3's default constructor leaves its components uninitialized even
+    // inside an otherwise zero-initialized record. These fields are unused by
+    // ambient/point lights and must not contain allocator data.
+    record.normal = Vector3(0);
+    record.shadowOffset = Vector3(0);
     record.origin = Vector3(light.origin.x, light.origin.y, light.origin.z);
     record.intensity = Vector3(light.intensity.x, light.intensity.y, light.intensity.z);
     record.type = type;
@@ -427,6 +432,48 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         out.mins = {brush.minmax.mins.x(), brush.minmax.mins.y(), brush.minmax.mins.z()};
         out.maxs = {brush.minmax.maxs.x(), brush.minmax.maxs.y(), brush.minmax.maxs.z()};
     }
+    if (world.valueForKey("_remap_mesh")[0]) {
+        // A recovered scene's visible detail may have only triangle collision.
+        // Thin closed triangle prisms let the existing convex BVH shadow these
+        // surfaces without inventing render brushes or moving the recovered mesh.
+        const auto &model = Titanfall::Bsp::models.at(0);
+        const uint32_t opaqueEnd = Titanfall::Bsp::levelInfo.empty() ? model.meshCount
+            : std::min(model.meshCount, Titanfall::Bsp::levelInfo[0].firstDecalMeshIndex);
+        for (uint32_t m = model.firstMesh; m < model.firstMesh + opaqueEnd; ++m) {
+            const auto &mesh = Titanfall::Bsp::meshes.at(m);
+            if (mesh.flags & (S_SKY | S_TRANSLUCENT)) continue;
+            const auto base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
+            for (uint32_t t = 0; t < mesh.triCount; ++t) {
+                V3 points[3];
+                for (int k = 0; k < 3; ++k) {
+                    const auto v = base + Titanfall::Bsp::meshIndices.at(mesh.triOffset + t*3 + k);
+                    uint32_t p;
+                    switch (mesh.flags & 0x600) {
+                        case S_VERTEX_LIT_BUMP: p = Titanfall::Bsp::vertexLitBumpVertices.at(v).vertexIndex; break;
+                        case S_VERTEX_UNLIT: p = Titanfall::Bsp::vertexUnlitVertices.at(v).vertexIndex; break;
+                        case S_VERTEX_UNLIT_TS: p = Titanfall::Bsp::vertexUnlitTSVertices.at(v).vertexIndex; break;
+                        default: p = Titanfall::Bsp::vertexLitFlatVertices.at(v).vertexIndex; break;
+                    }
+                    const auto &xyz = Titanfall::Bsp::vertices.at(p);
+                    points[k] = {xyz.x(),xyz.y(),xyz.z()};
+                }
+                const V3 cross = Respawn::Bake::cross(points[1]-points[0],points[2]-points[0]);
+                if (Respawn::Bake::length(cross) < 1e-8) continue;
+                const V3 n = Respawn::Bake::normalize(cross);
+                constexpr double thickness = 0.025;
+                Respawn::Bake::Brush prism;
+                prism.mins = Respawn::Bake::vmin(points[0],Respawn::Bake::vmin(points[1],points[2])) - V3{thickness,thickness,thickness};
+                prism.maxs = Respawn::Bake::vmax(points[0],Respawn::Bake::vmax(points[1],points[2])) + V3{thickness,thickness,thickness};
+                const double d = Respawn::Bake::dot(n,points[0]);
+                prism.planes = {{n.x,n.y,n.z,d+thickness},{-n.x,-n.y,-n.z,-d+thickness}};
+                for (int k = 0; k < 3; ++k) {
+                    const V3 edge = Respawn::Bake::normalize(Respawn::Bake::cross(points[(k+1)%3]-points[k],n));
+                    prism.planes.push_back({edge.x,edge.y,edge.z,Respawn::Bake::dot(edge,points[k])});
+                }
+                brushes.push_back(std::move(prism));
+            }
+        }
+    }
     const Respawn::Bake::Occluders occluders(std::move(brushes));
 
     // Page sizes: used area rounded up to a power of two, as retail pages are.
@@ -453,6 +500,17 @@ void Titanfall2::EmitLighting(const entity_t &world) {
 
     Respawn::Bake::Options options;
     options.luxelSize = Shared::luxelSize;
+    // Authored outdoor test yards can opt out of sampled sky occlusion while
+    // retaining realtime light shadow masks. Keep the existing default bake.
+    if (HasKey(world, "_skyocclusion"))
+        options.ambientOcclusion = DoubleForKey(world, "_skyocclusion", 1) > 0;
+    if (HasKey(world, "_skyfixedpattern"))
+        options.ambientFixedPattern = DoubleForKey(world, "_skyfixedpattern", 0) > 0;
+    if (HasKey(world, "_skysamples")) {
+        const double samples = DoubleForKey(world, "_skysamples", 16);
+        if (!std::isfinite(samples)) Error("Sky sample count must be finite");
+        options.ambientSamples = static_cast<int>(std::clamp(samples, 1.0, 256.0));
+    }
     // Worldspawn "_bouncescale" scales the one-bounce indirect light (0 disables it).
     if (HasKey(world, "_bouncescale")) {
         options.bounceScale = DoubleForKey(world, "_bouncescale", 1);

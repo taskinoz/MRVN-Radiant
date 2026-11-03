@@ -41,6 +41,7 @@ add_executable(remap
                source/titanfall/titanfall.cpp
                source/titanfall/titanfall.h
                source/titanfall2/titanfall2_vis.cpp
+               source/titanfall2/titanfall2_portals.cpp
                source/titanfall2/titanfall2_lighting.cpp
                source/titanfall2/titanfall2.cpp
                source/titanfall2/titanfall2.h

@@ -255,6 +255,17 @@ IIRC move_rope ends can be used to create loose cable ends
     <item name="Menu" value="menu_scene_ref"/>
 </list>
 
+<point name="mrvn_mp_menu" color=".2 .8 1" box="-24 -24 0 24 24 96">
+Reusable multiplayer menu prefab. The compiler creates menu_scene_ref,
+menu_camera_target, an isolated light environment volume and menu lighting.
+Place one per map, outside any sky or walls players can see past. The origin is the pilot stage anchor;
+the angle points toward the camera. Surround it with your own background.
+<angles key="angles" name="Pitch Yaw Roll" value="0 -90 0">Rotate the stage and camera together.</angles>
+<real key="camera_distance" name="Camera distance" value="256">Distance from stage anchor to camera.</real>
+<real key="camera_height" name="Camera height" value="40">Camera elevation above stage.</real>
+<integer key="lightEnvironmentIndex" name="Light environment" value="1">Use a separate consecutive environment index after gameplay (normally 1).</integer>
+</point>
+
 <point name="info_target_clientside" color=".3 .3 1" box="-8 -8 -8 8 8 8">
 can be used to spawn the menu lobby in mp matches with the appropriate script names
 also can be used as a reference for clients

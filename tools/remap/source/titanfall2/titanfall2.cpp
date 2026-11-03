@@ -26,6 +26,7 @@
 #include "../bspfile_abstract.h"
 #include "../respawn/lump_versions.h"
 #include <ctime>
+#include "mp_menu.h"
 
 
 
@@ -145,6 +146,9 @@ void WriteR2BSPFile(const char *filename) {
     else
         AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],      Titanfall2::Bsp::lightMapHeaders_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CM_GRID],                   Titanfall::Bsp::cmGrid);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_TRIS],              Titanfall::Bsp::tricollTriangles);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_HEADERS],           Titanfall::Bsp::tricollHeaders);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_BEVEL_STARTS],      Titanfall::Bsp::tricollBevelStarts);
     AddLump(file, header.lumps[R2_LUMP_CM_GRID_CELLS],             Titanfall::Bsp::cmGridCells);
     AddLump(file, header.lumps[R2_LUMP_CM_GEO_SETS],               Titanfall::Bsp::cmGeoSets);
     AddLump(file, header.lumps[R2_LUMP_CM_GEO_SET_BOUNDS],         Titanfall::Bsp::cmGeoSetBounds);
@@ -215,6 +219,7 @@ void WriteR2BSPFile(const char *filename) {
    Compiles a Titanfall 2 bsp file and sorts entities into ent files
 */
 void CompileR2BSPFile() {
+    ExpandMPMenuPrefabs();
     Titanfall2::SetUpGameLump();
 
     // Bake lightmaps only for maps that place lights; others keep the unlit stubs.
@@ -225,6 +230,9 @@ void CompileR2BSPFile() {
             break;
         }
     }
+    // Large maps fit their lightmaps on fewer, bigger pages.
+    if (!entities.empty() && entities[0].intForKey("_remap_lightmap_pagesize") > 0)
+        Shared::lightmapPageSize = std::min(4096, entities[0].intForKey("_remap_lightmap_pagesize"));
     if (Shared::lightmapsEnabled)
         Shared::lightmapAtlas.reset(Shared::lightmapPageSize, Shared::lightmapPageSize, Shared::lightmapGutter);
     const entity_t *world = nullptr;
@@ -235,6 +243,8 @@ void CompileR2BSPFile() {
 
     for (entity_t &entity : entities) {
         const char *pszClassname = entity.classname();
+
+        if (entity.intForKey("_remap_preview")) continue; // editor-only recovered mesh proxy
 
         #define ENT_IS(classname) striEqual(pszClassname, classname)
         #define ENT_IS_PREFIX(classname) striEqualPrefix(pszClassname, classname)
@@ -258,6 +268,12 @@ void CompileR2BSPFile() {
 
             Titanfall::EmitLevelInfoWorldspawn();
 
+            // Sky meshes render separately; their indices must not be treated
+            // as ordinary world/prop objects by the cell AABB traversal.
+            const uint32_t firstSky = Titanfall::Bsp::levelInfo.back().firstSkyMeshIndex;
+            Shared::visRefs.erase(std::remove_if(Shared::visRefs.begin(), Shared::visRefs.end(),
+                [firstSky](const Shared::visRef_t &ref) { return ref.index >= firstSky; }), Shared::visRefs.end());
+
             Titanfall::EndModel();
         /* props for gamelump */
         } else if (ENT_IS("prop_static")) { // Compile as static props into gamelump
@@ -272,7 +288,7 @@ void CompileR2BSPFile() {
             if( g_bExternalModels && ENT_IS_PREFIX("trigger_") ) {
                 Titanfall::EmitTriggerBrushPlaneKeyValues(entity);
             } else {
-                if( entity.brushes.size() ) {
+                if( entity.brushes.size() || entity.patches || entity.valueForKey("_remap_mesh")[0] ) {
                     Titanfall::BeginModel(entity);
                     Shared::MakeMeshes(entity);
                     Titanfall::EmitMeshes(entity);
@@ -290,10 +306,15 @@ void CompileR2BSPFile() {
     // Write entity partitions we used
     Titanfall::EmitEntityPartitions();
 
-    // Generate vis tree for worldspawn, we do this here as we'll need portals once we reverse further
+    // Build the default visibility tree; selective cells distribute these same refs.
     Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
+    if (Shared::visRefs.empty()) {
+        // A sky-only scene has no ordinary objects, but still needs finite
+        // cell access bounds. Do not reinsert sky meshes as object references.
+        Shared::visRoot.minmax = Titanfall::Bsp::models.at(0).minmax;
+    }
     //Shared::MergeVisTree(Shared::visRoot);
-    Titanfall::EmitVisTree();
+    if (!world) Error("TF2 BSP requires worldspawn");
 
     // Emit level info
     Titanfall2::EmitLevelInfo();
@@ -304,6 +325,8 @@ void CompileR2BSPFile() {
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall2::EmitStubs();
     Titanfall::EmitStubs();
+    // Replace shared legacy portal placeholders only after EmitStubs initializes them.
+    Titanfall2::EmitVisibility(*world);
 }
 
 
@@ -621,6 +644,7 @@ void Titanfall2::EmitEntity(const entity_t &e) {
     StringOutputStream data;
     data << "{\n";
     for (const epair_t &pair : e2.epairs) {  // e2 to get editorclass changes
+        if (striEqualPrefix(pair.key.c_str(), "_remap_")) continue;
         data << "\"" << pair.key.c_str() << "\" \"" << pair.value.c_str() << "\"\n";
     }
     data << "}\n";

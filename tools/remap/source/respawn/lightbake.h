@@ -356,6 +356,7 @@ struct PageSize { std::uint32_t width, height; };
 struct Options {
     int ambientSamples = 16;       // cosine-weighted sky visibility rays per texel
     bool ambientOcclusion = true;  // false: treat the sky as fully visible
+    bool ambientFixedPattern = false;  // same rays per texel: bands, not noise, in deep shade
     // SKY A fill = ambient * scale * (0.4 + 0.6 * sky visibility). The scale gives
     // ~0.03 for a typical 0.8 ambient, matching retail magnitudes and the
     // client-checked Phase Runner fill (0.025-0.032).
@@ -759,7 +760,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                             visible = 0;
                             openDirection = {};
                             const std::uint32_t seed = detail::hash(std::uint32_t(i * 2654435761u + p));
-                            const double rotate = (seed & 0xffff) / 65536.0;
+                            const double rotate = options.ambientFixedPattern ? 0.0 : (seed & 0xffff) / 65536.0;
                             for (int k = 0; k < ambientSamples; ++k) {
                                 const double u = (k + 0.5) / ambientSamples;
                                 const double phi = 2 * 3.14159265358979323846 * std::fmod(k * 0.6180339887498949 + rotate, 1.0);

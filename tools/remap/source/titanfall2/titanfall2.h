@@ -49,6 +49,7 @@ namespace Titanfall2 {
     void EmitStaticProp(entity_t &e);
     void EmitLevelInfo();
     void CheckWorldIndexBudget(std::size_t firstMesh);
+    void EmitVisibility(const entity_t &world);
 
     void EmitEntity(const entity_t &e);
     void EmitStubs();
@@ -148,18 +149,19 @@ namespace Titanfall2 {
         Vector3 origin;
         Vector3 angles;
         float   scale;
-        int16_t modelName;
-        int8_t  solid; // size: 1
-        int8_t  flags; // size: 1
-        int16_t skin; // size: 2
-        int16_t envCubemap; // size: 2
+        uint16_t modelName;
+        uint8_t solid; // size: 1
+        uint8_t flags; // size: 1
+        uint16_t skin; // size: 2
+        uint16_t envCubemap; // 0xffff means none
         float   fade_scale;
         Vector3 unk; // lighting_origin ?
         int8_t  cpu_level[2]; // -1, -1
         int8_t  gpu_level[2]; // -1, -1
-        int8_t  diffuse_modulation[4]; // RGBA, ?
-        int16_t collision_flags[2]; // Always 0, 0??
+        uint8_t diffuse_modulation[4]; // RGBA
+        uint16_t collision_flags[2]; // add/remove masks; semantics remain incomplete
     };
+    static_assert(sizeof(GameLumpProp_t) == 64, "TF2 sprp v13 placements are 64 bytes");
 
     struct GameLumpUnknownHeader_t {
         uint32_t unknown;

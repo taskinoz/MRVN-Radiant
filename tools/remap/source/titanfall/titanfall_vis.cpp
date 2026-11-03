@@ -342,7 +342,7 @@ void Titanfall::EmitVertexLitFlat(Shared::Vertex_t &vertex) {
     EmitVertexLitBump
     Saves a vertex into Titanfall::Bsp::vertexLitBumpVertices
 */
-void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, uint32_t tangent) {
+void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent) {
     Titanfall::VertexLitBump_t &lv = Titanfall::Bsp::vertexLitBumpVertices.emplace_back();
     lv.vertexIndex  = Titanfall::EmitVertex(vertex.xyz);
     lv.normalIndex  = Titanfall::EmitVertexNormal(vertex.normal);
@@ -350,8 +350,8 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, uint32_t tangent) {
     lv.colour       = vertex.colour;
     lv.lightmapUV   = vertex.lightmapUV;
     lv.lightmapStep = vertex.lightmapStep;
-    lv.tangentIndex[0] = tangent;
-    lv.tangentIndex[1] = 0;
+    lv.tangentIndex[0] = tangent[0];
+    lv.tangentIndex[1] = tangent[1];
 }
 
 
@@ -359,14 +359,14 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, uint32_t tangent) {
     EmitVertexUnlitTS
     Saves a vertex into Titanfall::Bsp::vertexUnlitTSVertices
 */
-void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex, uint32_t tangent) {
+void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent) {
     Titanfall::VertexUnlitTS_t &ul = Titanfall::Bsp::vertexUnlitTSVertices.emplace_back();
     ul.vertexIndex = Titanfall::EmitVertex(vertex.xyz);
     ul.normalIndex = Titanfall::EmitVertexNormal(vertex.normal);
     ul.textureUV   = vertex.textureUV;
     ul.colour      = vertex.colour;
-    ul.tangentIndex[0] = tangent;
-    ul.tangentIndex[1] = 0;
+    ul.tangentIndex[0] = tangent[0];
+    ul.tangentIndex[1] = tangent[1];
 }
 
 
@@ -390,9 +390,11 @@ void Titanfall::EmitVertexBlinnPhong(Shared::Vertex_t &vertex) {
     Tangent references for normal-mapped vertices, as retail Coliseum/Glitch
     store them: the vertex-normal index of a unit tangent along +dP/du with the
     normal component removed, and bit 31 set when the bitangent runs against
-    +dP/dv. The second tangent word is always zero.
+    +dP/dv. The second tangent word is always zero. Titanfall 1 (Angel City and
+    the TFO lobby) instead stores two plain indices: the tangent, then the
+    bitangent cross(normal, tangent) flipped to follow +dP/dv.
 */
-static std::vector<uint32_t> MeshTangents(const Shared::Mesh_t &mesh) {
+static std::vector<std::array<uint32_t, 2>> MeshTangents(const Shared::Mesh_t &mesh) {
     std::vector<Vector3>  du(mesh.vertices.size(), Vector3(0, 0, 0)), dv(mesh.vertices.size(), Vector3(0, 0, 0));
     for (std::size_t i = 0; i + 2 < mesh.triangles.size(); i += 3) {
         const uint16_t  t[3] = {mesh.triangles[i], mesh.triangles[i + 1], mesh.triangles[i + 2]};
@@ -410,7 +412,7 @@ static std::vector<uint32_t> MeshTangents(const Shared::Mesh_t &mesh) {
         }
     }
 
-    std::vector<uint32_t>  words;
+    std::vector<std::array<uint32_t, 2>>  words;
     for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
         const Vector3  n = mesh.vertices[i].normal;
         Vector3  tangent = du[i] - n * static_cast<float>(vector3_dot(n, du[i]));
@@ -420,7 +422,12 @@ static std::vector<uint32_t> MeshTangents(const Shared::Mesh_t &mesh) {
         }
         tangent = vector3_normalised(tangent);
         const bool  mirrored = vector3_dot(vector3_cross(n, tangent), dv[i]) < 0;
-        words.push_back(Titanfall::EmitVertexNormal(tangent) | (mirrored ? 0x80000000u : 0u));
+        if (g_game->bspVersion == 29) {
+            Vector3  bitangent = vector3_cross(n, tangent) * (mirrored ? -1.0f : 1.0f);
+            words.push_back({Titanfall::EmitVertexNormal(tangent), Titanfall::EmitVertexNormal(bitangent)});
+        } else {
+            words.push_back({Titanfall::EmitVertexNormal(tangent) | (mirrored ? 0x80000000u : 0u), 0u});
+        }
     }
     return words;
 }
@@ -477,8 +484,8 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         MinMax  aabb;
 
         // Save vertices and vertexnormals
-        const std::vector<uint32_t>  tangents = (m.vertexType == 2 || m.vertexType == 3)
-                                              ? MeshTangents(mesh) : std::vector<uint32_t>();
+        const std::vector<std::array<uint32_t, 2>>  tangents = (m.vertexType == 2 || m.vertexType == 3)
+                                              ? MeshTangents(mesh) : std::vector<std::array<uint32_t, 2>>();
         for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
             Shared::Vertex_t  vertex = mesh.vertices.at(i);
 
@@ -570,7 +577,9 @@ uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int 
     Titanfall::MaterialSort_t &ms = Titanfall::Bsp::materialSorts.emplace_back();
     ms.textureData = index;
     ms.lightmapHeader = lightmapHeader;
-    ms.cubemap = 0;  // retail material sorts all store 0; meshes carry the cubemap
+    // TF2 material sorts all store 0 and meshes carry the cubemap; TF1 sorts
+    // without cubemap data store -1, as the TFO lobby does.
+    ms.cubemap = g_game->bspVersion == 29 ? -1 : 0;
     ms.vertexOffset = offset;
 
     return pos;

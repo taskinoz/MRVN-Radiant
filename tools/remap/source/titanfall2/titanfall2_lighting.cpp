@@ -314,7 +314,10 @@ static void EmitCsmNode(const Shared::visNode_t &node, std::size_t index) {
 
 static bool EmitCsmTree(const Vector3 &sun) {
     if (Titanfall::Bsp::levelInfo.empty()) return false;
-    const uint32_t propBase = (Titanfall::Bsp::levelInfo.at(0).firstSkyMeshIndex + 63u) & ~63u;
+    // TF2 reserves 64-entry blocks of object ids for world meshes; TF1 numbers
+    // static props straight after them.
+    const uint32_t propBase = g_game->bspVersion == 29 ? Titanfall::Bsp::models.at(0).meshCount
+                            : (Titanfall::Bsp::levelInfo.at(0).firstSkyMeshIndex + 63u) & ~63u;
     const Vector3 z = vector3_normalised(-sun);
     Vector3 x(sun.y(), -sun.x(), 0);
     x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
@@ -802,7 +805,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
 
     EmitShadowEnvironments();
-    EmitCubemaps(&occluders, &result.bounce);
+    if (g_game->bspVersion == 37)  // TF1 cubemaps are per-cubemap Source VTFs, not written yet
+        EmitCubemaps(&occluders, &result.bounce);
 
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     Sys_Printf("%9zu world lights (%d hardware)\n", Titanfall2::Bsp::worldLights.size(), hardware);

@@ -159,8 +159,10 @@ LIT_FIXTURE = (
 )
 
 
-def tangent_checks(bsp):
-    """Bump-lit tangents follow retail: unit, along +dP/du, bit 31 = mirrored."""
+def tangent_checks(bsp, titanfall1=False):
+    """Bump-lit tangents follow retail. TF2: unit, along +dP/du, bit 31 = mirrored,
+    second word zero. TF1: plain tangent and bitangent normal indices, the
+    bitangent being cross(normal, tangent) flipped to follow +dP/dv."""
     with bsp.open("rb") as stream:
         def lump(index):
             stream.seek(16 + index * 16)
@@ -193,10 +195,17 @@ def tangent_checks(bsp):
             du = tuple((x * d2[1] - y * d1[1]) / det for x, y in zip(e1, e2))
             dv = tuple((y * d1[0] - x * d2[0]) / det for x, y in zip(e1, e2))
             word, second = bump[a][-2], bump[a][-1]
-            n, tangent = normals[bump[a][1]], normals[word & 0x7fffffff]
-            if second or abs(dot(tangent, tangent) - 1) > 1e-3 or abs(dot(tangent, n)) > 1e-3:
+            n, tangent = normals[bump[a][1]], normals[word & (0xffffffff if titanfall1 else 0x7fffffff)]
+            if (second and not titanfall1) or abs(dot(tangent, tangent) - 1) > 1e-3 or abs(dot(tangent, n)) > 1e-3:
                 raise RuntimeError("tangent is not a unit vector perpendicular to the normal")
-            if dot(tangent, du) <= 0 or (dot(cross(n, tangent), dv) < 0) != bool(word >> 31):
+            if titanfall1:
+                bitangent = normals[second]
+                expected = cross(n, tangent)
+                if dot(cross(n, tangent), dv) < 0:
+                    expected = tuple(-x for x in expected)
+                if dot(tangent, du) <= 0 or dot(bitangent, expected) < 0.999:
+                    raise RuntimeError("TF1 tangent or bitangent disagrees with retail convention")
+            elif dot(tangent, du) <= 0 or (dot(cross(n, tangent), dv) < 0) != bool(word >> 31):
                 raise RuntimeError("tangent direction or handedness bit disagrees with retail convention")
             checked += 1
     if not checked:
@@ -360,7 +369,7 @@ def main():
             if not inventory["lumps"][pool]["length"]:
                 raise RuntimeError(f"{game}: expected populated vertex pool {pool}")
         if game != "apexlegends":
-            tangent_checks(bsp)
+            tangent_checks(bsp, game == "titanfallonline")
             records = load_records(bsp, inventory)
             if not records[92][0][4] or records[92][1][4] or not records[92][1][9]:
                 raise RuntimeError("fixture must contain a sloped brush followed by an axial brush")

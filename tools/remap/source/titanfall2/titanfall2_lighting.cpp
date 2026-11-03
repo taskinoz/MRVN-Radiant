@@ -782,6 +782,10 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         const Vector3 &o = lightingOrigin ? prop.unk : prop.origin;
         propPoints.push_back({o.x(), o.y(), o.z() + (lightingOrigin ? 0.0 : 32.0)});
     }
+    // Titanfall 1 keeps its static props in its own game lump records.
+    if (g_game->bspVersion == 29)
+        for (const Titanfall::GameLumpProp_t &prop : Titanfall::Bsp::gameLumpProps)
+            propPoints.push_back({prop.origin.x(), prop.origin.y(), prop.origin.z() + 32.0});
     try {
         auto propProbes = Respawn::Bake::bakeProbes(propPoints, Titanfall2::Bsp::bakeLights, Titanfall2::Bsp::ambient,
                                                     occluders, options, &result.bounce);

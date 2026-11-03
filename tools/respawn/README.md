@@ -67,6 +67,7 @@ These produce a Northstar mod folder and ZIP, an editable `.map`, and JSON repor
 | Tool | Does |
 | --- | --- |
 | `compiler_regression.py` | Compiles the regression set with a given `remap` and compares |
+| `tfo_harness.py` | Loads a compiled TF1 map in Titanfall Online and runs traces and views ([RESPAWN_TF1_LUMPS.md](../../docs/respawn/RESPAWN_TF1_LUMPS.md)) |
 | `r5_harness.py`, `r5_harnessctl.py`, `r5_harness_smoke.py` | Local R5Reloaded map harness ([RESPAWN_R5_HARNESS.md](../../docs/respawn/RESPAWN_R5_HARNESS.md)) |
 | `test_*.py` | Unit tests: `python -m unittest discover -s tools/respawn -p "test_*.py"` |
 | `CMakeLists.txt`, `*_tests.cpp` | C++ tests for the BSP reader, encodings, lightmap packing, bake and CSG; `relight_bridge.cpp` feeds `repair_tf1_port.py` into the native baker |

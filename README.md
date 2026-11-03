@@ -38,16 +38,17 @@ samples, map trials, crash investigations and the converter notes. See the
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall Online | 45% (34/75) | Brush collision; no triangle collision, no lighting, no portals |
-| Titanfall 2 | 76% (62/81) | Baked lightmaps, light probes and sun shadows; brush and patch collision; sky portals, with experimental view portals (`_viewportals`) |
-| Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals |
+| Titanfall Online | 58% (44/75) | Brush and patch collision; no lighting, probes, cubemaps or portals |
+| Titanfall 2 | 99% (80/81) | Every lump retail fills except triangle collision bevels; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
+| Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals. Not yet recounted for empty lumps |
 
-> Coverage = lumps remap generates / lumps named for that game in
-> `tools/remap/source/lump_names.h`, counting the game lump. Lumps written only as
-> fixed stubs aren't counted, because they're not custom. Titanfall 2's lighting
-> lumps count when lightmaps are enabled.
+> Coverage = lumps remap writes as retail maps do / lumps named for that game in
+> `tools/remap/source/lump_names.h`. A lump counts when remap generates it from the
+> map, or when it is empty in every surveyed retail map and remap writes it empty.
+> Fixed placeholder stubs don't count. Titanfall 2's lighting, probe and shadow
+> lumps are generated when the map has lights.
 
-> NOTE: These values are updated manually. Last counted 2026-11-03 from
+> NOTE: These values are updated manually. Last counted 2026-11-04 from
 > `titanfall.cpp`, `titanfall2.cpp` and `apex_legends.cpp`.
 
 ## Other tools

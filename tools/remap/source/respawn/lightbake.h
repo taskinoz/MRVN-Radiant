@@ -836,16 +836,16 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     }
 
     // Radiance grid of directly lit surfaces, then pass 3: one diffuse bounce into SKY A.
+    // The grid is kept even without bounce: cubemaps and probes read it.
     RadianceGrid grid(options.bounceCell);
-    if (options.bounceSamples > 0)
-        for (std::size_t p = 0; p < pages.size(); ++p)
-            for (std::size_t i = 0; i < samples[p].size(); ++i) {
-                const auto& s = samples[p][i];
-                if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0) continue;
-                const V3 a = charts[s.chart].albedo;
-                const V3 e = directLight[p][i];
-                grid.add({s.px, s.py, s.pz}, {s.nx, s.ny, s.nz}, {a.x * e.x, a.y * e.y, a.z * e.z});
-            }
+    for (std::size_t p = 0; p < pages.size(); ++p)
+        for (std::size_t i = 0; i < samples[p].size(); ++i) {
+            const auto& s = samples[p][i];
+            if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0) continue;
+            const V3 a = charts[s.chart].albedo;
+            const V3 e = directLight[p][i];
+            grid.add({s.px, s.py, s.pz}, {s.nx, s.ny, s.nz}, {a.x * e.x, a.y * e.y, a.z * e.z});
+        }
     for (std::size_t p = 0; p < pages.size(); ++p) {
         std::uint8_t* skyA = result.sky.data() + skyOffset[p];
         detail::parallelFor(pages[p].height, options.threads, [&](std::size_t y) {

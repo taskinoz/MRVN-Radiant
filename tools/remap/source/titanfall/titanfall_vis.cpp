@@ -570,7 +570,7 @@ uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int 
     Titanfall::MaterialSort_t &ms = Titanfall::Bsp::materialSorts.emplace_back();
     ms.textureData = index;
     ms.lightmapHeader = lightmapHeader;
-    ms.cubemap = -1;
+    ms.cubemap = 0;  // retail material sorts all store 0; meshes carry the cubemap
     ms.vertexOffset = offset;
 
     return pos;

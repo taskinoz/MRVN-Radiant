@@ -133,9 +133,15 @@ void WriteR1BSPFile(const char *filename) {
     AddLump(file, header.lumps[R1_LUMP_MATERIAL_SORT],               Titanfall::Bsp::materialSorts);
     AddLump(file, header.lumps[R1_LUMP_LIGHTMAP_HEADERS],            Titanfall::Bsp::lightmapHeaders_stub);  // stub
     AddLump(file, header.lumps[R1_LUMP_CM_GRID],                     Titanfall::Bsp::cmGrid);
+    AddLump(file, header.lumps[R1_LUMP_TRICOLL_TRIS],                Titanfall::Bsp::tricollTriangles);
+    AddLump(file, header.lumps[R1_LUMP_TRICOLL_NODES],               Titanfall::Bsp::tricollNodes);
+    AddLump(file, header.lumps[R1_LUMP_TRICOLL_HEADERS],             Titanfall::Bsp::tricollHeaders);
+    AddLump(file, header.lumps[R1_LUMP_TRICOLL_BEVEL_STARTS],        Titanfall::Bsp::tricollBevelStarts);
     AddLump(file, header.lumps[R1_LUMP_CM_GRID_CELLS],               Titanfall::Bsp::cmGridCells);
     AddLump(file, header.lumps[R1_LUMP_CM_GEO_SETS],                 Titanfall::Bsp::cmGeoSets);
     AddLump(file, header.lumps[R1_LUMP_CM_GEO_SET_BOUNDS],           Titanfall::Bsp::cmGeoSetBounds);
+    AddLump(file, header.lumps[R1_LUMP_CM_PRIMITIVES],             Titanfall::Bsp::cmPrimitives);
+    AddLump(file, header.lumps[R1_LUMP_CM_PRIMITIVE_BOUNDS],       Titanfall::Bsp::cmPrimitiveBounds);
     AddLump(file, header.lumps[R1_LUMP_CM_UNIQUE_CONTENTS],          Titanfall::Bsp::cmUniqueContents);
     AddLump(file, header.lumps[R1_LUMP_CM_BRUSHES],                  Titanfall::Bsp::cmBrushes);
     AddLump(file, header.lumps[R1_LUMP_CM_BRUSH_SIDE_PROPS],         Titanfall::Bsp::cmBrushSideProperties);

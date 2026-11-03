@@ -99,9 +99,10 @@ def collision_portal_fixtures(folder, command, reports):
             raise RuntimeError(f'{name}: {report["issues"]}')
         r = load_records(bsp, inspect(bsp))
         if name == 'patch':
-            if len(r[69]) != 4 or len(r[66]) != 8 or r[68] or len(r[96]) != 8:
-                raise RuntimeError('patch collision did not use four node-free quad headers')
-            if not any(word >> 24 == 0x40 for _, _, word in r[87]):
+            # One header for the patch's eight triangles, with 4 * ((8 + 3) // 6) nodes.
+            if len(r[69]) != 1 or len(r[66]) != 8 or len(r[68]) != 4 or len(r[96]) != 8:
+                raise RuntimeError('patch collision did not use one noded eight-triangle header')
+            if not any(word >> 24 == 0x40 for _, count, word in r[87] if count == 1) and                     not any(word >> 24 == 0x40 for (word,) in r[89]):
                 raise RuntimeError('patch collision is absent from the collision grid')
             # Independently compare emitted render triangles with collision positions.
             rendered = []

@@ -237,7 +237,7 @@ namespace Titanfall {
         uint16_t  vertexOffset;  // relative to material-sort vertexOffset
         uint16_t  vertexCount;   // last local vertex index (inclusive)
         uint8_t   vertexType;
-        uint8_t   unused;
+        int8_t    cubemap;       // CUBEMAPS index, -1 for unlit meshes
         uint32_t  const0;
         uint16_t  unk1;
         uint16_t  unk2;
@@ -417,6 +417,7 @@ namespace Titanfall {
         inline std::vector<TricollTriangle_t>     tricollTriangles;
         inline std::vector<TricollHeader_t>       tricollHeaders;
         inline std::vector<uint16_t>              tricollBevelStarts;
+        inline std::vector<CMBound_t>             tricollNodes;  // 0x44: packed header bounds, see EmitPatchCollision
         inline std::vector<VertexUnlit_t>         vertexUnlitVertices;
         inline std::vector<VertexLitFlat_t>       vertexLitFlatVertices;
         inline std::vector<VertexLitBump_t>       vertexLitBumpVertices;

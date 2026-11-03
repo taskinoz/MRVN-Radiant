@@ -30,6 +30,7 @@
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include <chrono>
+#include <functional>
 #include <cstdio>
 #include <limits>
 #include <map>
@@ -213,11 +214,140 @@ EnvironmentVolume ParseVolume(const entity_t &e) {
 
 
 /*
+    EmitLightprobeBsp()
+    The probe lookup BSP (0x06, 0x07) over LIGHTPROBE_REFERENCES. Each node is a
+    plane and two children: back (n.p - d < 0) first, front second, as retail
+    traversal of every reference to its own leaf shows. A leaf word is
+    0x80000000 | count << 25 | index: count 0 means one reference `index`,
+    otherwise `count` (2-12) reference ids from 0x07 starting at `index`. Retail
+    splits along world planes; this uses axis-aligned median splits.
+*/
+static void EmitLightprobeBsp() {
+    auto &nodes = Titanfall2::Bsp::lightprobeBspNodes;
+    auto &ids = Titanfall2::Bsp::lightprobeBspRefIds;
+    const auto &refs = Titanfall2::Bsp::lightprobeReferences;
+    nodes.clear();
+    ids.clear();
+    if (refs.empty()) return;
+    constexpr std::size_t LeafSize = 8;
+    std::vector<uint32_t> order(refs.size());
+    for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
+    auto position = [&](uint32_t r, int axis) { return axis == 0 ? refs[r].x : (axis == 1 ? refs[r].y : refs[r].z); };
+    std::function<uint32_t(std::size_t, std::size_t, int)> build = [&](std::size_t first, std::size_t count, int depth) -> uint32_t {
+        if (count <= LeafSize || depth > 40) {
+            if (count == 1) return 0x80000000u | order[first];
+            const uint32_t start = static_cast<uint32_t>(ids.size());
+            const std::size_t kept = std::min<std::size_t>(count, 12);
+            ids.insert(ids.end(), order.begin() + first, order.begin() + first + kept);
+            if (start > 0xFFFFFF) Error("Light probe BSP reference ids exceed 24 bits");
+            return 0x80000000u | uint32_t(kept) << 25 | start;
+        }
+        double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+        for (std::size_t i = first; i < first + count; ++i)
+            for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], double(position(order[i], a))); hi[a] = std::max(hi[a], double(position(order[i], a))); }
+        const int axis = (hi[0] - lo[0] >= hi[1] - lo[1] && hi[0] - lo[0] >= hi[2] - lo[2]) ? 0 : (hi[1] - lo[1] >= hi[2] - lo[2] ? 1 : 2);
+        const std::size_t middle = first + count / 2;
+        std::nth_element(order.begin() + first, order.begin() + middle, order.begin() + first + count,
+                         [&](uint32_t a, uint32_t b) { return position(a, axis) < position(b, axis); });
+        float split = position(order[middle], axis);
+        // Points equal to the split go front, so the back half must lie strictly below it.
+        std::size_t back = first;
+        for (std::size_t i = first; i < first + count; ++i)
+            if (position(order[i], axis) < split) std::swap(order[i], order[back++]);
+        if (back == first || back == first + count) {
+            if (count <= 12) return build(first, count, 41);
+            back = middle;  // coincident positions: split the list anyway
+        }
+        const uint32_t index = static_cast<uint32_t>(nodes.size());
+        Titanfall2::LightprobeBspNode_t &node = nodes.emplace_back();
+        node.normal[axis] = 1.0f;
+        node.distance = split;
+        const uint32_t backChild = build(first, back - first, depth + 1);
+        const uint32_t frontChild = build(back, first + count - back, depth + 1);
+        nodes[index].children[0] = backChild;
+        nodes[index].children[1] = frontChild;
+        return index;
+    };
+    const uint32_t root = build(0, order.size(), 0);
+    if (root & 0x80000000u) {
+        // A single leaf still needs a root node; both sides share it.
+        Titanfall2::LightprobeBspNode_t &node = nodes.emplace_back();
+        node.normal[2] = 1.0f;
+        node.children[0] = node.children[1] = root;
+    }
+}
+
+
+/*
+    EmitCsmTree()
+    Cascaded shadow map object tree for one sun: static props (world geometry
+    casts through the shadow meshes) in an AABB tree built in light space, where
+    z is against the sun, x is horizontal and y = z x x, as fitted from retail
+    Colony, Glitch, Homestead and Live Fire Stacks. Nodes use the cell AABB
+    layout; references are object ids, as in OBJ_REFERENCES.
+*/
+static void EmitCsmNode(const Shared::visNode_t &node, std::size_t index) {
+    std::size_t total = 0;
+    std::function<void(const Shared::visNode_t &)> count = [&](const Shared::visNode_t &n) {
+        total += n.refs.size();
+        for (const auto &c : n.children) count(c);
+    };
+    count(node);
+    Titanfall::CellAABBNode_t &out = Titanfall2::Bsp::csmAABBNodes.at(index);
+    out = {};
+    out.mins = node.minmax.mins;
+    out.maxs = node.minmax.maxs;
+    out.childCount = static_cast<uint8_t>(node.children.size());
+    out.totalRefCount = static_cast<uint16_t>(std::min<std::size_t>(total, 65535));
+    if (!node.refs.empty()) {
+        out.objRef = static_cast<uint16_t>(Titanfall2::Bsp::csmObjReferences.size());
+        out.objRefCount = static_cast<uint8_t>(node.refs.size());
+        for (const Shared::visRef_t &ref : node.refs) Titanfall2::Bsp::csmObjReferences.push_back(ref.index);
+    }
+    if (node.children.empty()) return;
+    const std::size_t first = Titanfall2::Bsp::csmAABBNodes.size();
+    Titanfall2::Bsp::csmAABBNodes.resize(first + node.children.size());
+    Titanfall2::Bsp::csmAABBNodes.at(index).firstChild = static_cast<uint16_t>(first);
+    for (std::size_t i = 0; i < node.children.size(); ++i)
+        EmitCsmNode(node.children[i], first + i);
+}
+
+static bool EmitCsmTree(const Vector3 &sun) {
+    if (Titanfall::Bsp::levelInfo.empty()) return false;
+    const uint32_t propBase = (Titanfall::Bsp::levelInfo.at(0).firstSkyMeshIndex + 63u) & ~63u;
+    const Vector3 z = vector3_normalised(-sun);
+    Vector3 x(sun.y(), -sun.x(), 0);
+    x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
+    const Vector3 y = vector3_cross(z, x);
+    std::vector<Shared::visRef_t> refs;
+    for (const Shared::visRef_t &ref : Shared::visRefs) {
+        if (ref.index < propBase) continue;
+        Shared::visRef_t &light = refs.emplace_back();
+        light.index = ref.index;
+        for (int corner = 0; corner < 8; ++corner) {
+            const Vector3 p((corner & 1) ? ref.minmax.maxs.x() : ref.minmax.mins.x(),
+                            (corner & 2) ? ref.minmax.maxs.y() : ref.minmax.mins.y(),
+                            (corner & 4) ? ref.minmax.maxs.z() : ref.minmax.mins.z());
+            light.minmax.extend(Vector3(vector3_dot(p, x), vector3_dot(p, y), vector3_dot(p, z)));
+        }
+    }
+    if (refs.empty()) return false;
+    const Shared::visNode_t root = Shared::MakeVisTree(refs, 1e30f);
+    const std::size_t index = Titanfall2::Bsp::csmAABBNodes.size();
+    Titanfall2::Bsp::csmAABBNodes.emplace_back();
+    EmitCsmNode(root, index);
+    if (Titanfall2::Bsp::csmAABBNodes.size() > 65535 || Titanfall2::Bsp::csmObjReferences.size() > 65535)
+        Error("Cascaded shadow tree exceeds 16-bit node or reference indices");
+    return true;
+}
+
+
+/*
     EmitShadowEnvironments()
-    One shadow environment and empty CSM root per light environment, as retail
-    Coliseum has. Environment 0 owns opaque world shadow meshes for its sun's
-    cascaded shadows; other environments (the menu stage) own none, so their
-    dynamic shadows stay out of gameplay.
+    One shadow environment per light environment. Environment 0 owns opaque and
+    alpha-tested world shadow meshes for its sun's cascaded shadows, plus a
+    light-space tree of static props; other environments (the menu stage) own
+    none, so their dynamic shadows stay out of gameplay.
 */
 static void EmitShadowEnvironments() {
     std::map<int, Vector3> suns;  // environment -> sun direction
@@ -268,20 +398,76 @@ static void EmitShadowEnvironments() {
         }
     }
 
+    // Alpha-tested casters ("surfaceparm alphashadow"): position and texture UV in
+    // SHADOW_MESH_ALPHA_VERTICES (0x7D), one shadow mesh per material sort so the
+    // engine can test the sort's texture alpha. Their indices follow the opaque ones.
+    std::map<uint16_t, std::vector<uint32_t>> alphaMeshes;  // material sort -> meshes
+    for (uint32_t m = world.firstMesh; m < world.firstMesh + world.meshCount; m++) {
+        const Titanfall::Mesh_t &mesh = Titanfall::Bsp::meshes.at(m);
+        if (mesh.flags & S_SKY)
+            continue;
+        const int16_t texture = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).textureData;
+        const uint32_t name = Titanfall::Bsp::textureData.at(texture).name_index;
+        const shaderInfo_t *shader = ShaderInfoForShaderNull(&Titanfall::Bsp::textureDataData.at(Titanfall::Bsp::textureDataTable.at(name)));
+        if (shader && (shader->compileFlags & C_ALPHASHADOW))
+            alphaMeshes[mesh.materialOffset].push_back(m);
+    }
+    for (const auto &[sort, meshes] : alphaMeshes) {
+        Titanfall2::ShadowMesh_t *alpha = nullptr;
+        std::map<std::array<float, 5>, uint16_t> alphaLookup;
+        for (uint32_t m : meshes) {
+            const Titanfall::Mesh_t &mesh = Titanfall::Bsp::meshes.at(m);
+            const int32_t base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
+            for (uint32_t t = 0; t < mesh.triCount; t++) {
+                if (!alpha || alphaLookup.size() + 3 > 65535) {
+                    alphaLookup.clear();
+                    Titanfall2::Bsp::shadowMeshes.push_back({static_cast<uint32_t>(Titanfall2::Bsp::shadowMeshAlphaVertices.size()), 0, 0,
+                                                             static_cast<int16_t>(sort)});
+                    alpha = &Titanfall2::Bsp::shadowMeshes.back();
+                }
+                for (int k = 0; k < 3; k++) {
+                    const std::size_t v = base + Titanfall::Bsp::meshIndices.at(mesh.triOffset + t * 3 + k);
+                    uint32_t position;
+                    Vector2 uv;
+                    switch (mesh.flags & 0x600) {
+                        case S_VERTEX_LIT_BUMP: position = Titanfall::Bsp::vertexLitBumpVertices.at(v).vertexIndex; uv = Titanfall::Bsp::vertexLitBumpVertices.at(v).textureUV; break;
+                        case S_VERTEX_UNLIT:    position = Titanfall::Bsp::vertexUnlitVertices.at(v).vertexIndex; uv = Titanfall::Bsp::vertexUnlitVertices.at(v).textureUV; break;
+                        case S_VERTEX_UNLIT_TS: position = Titanfall::Bsp::vertexUnlitTSVertices.at(v).vertexIndex; uv = Titanfall::Bsp::vertexUnlitTSVertices.at(v).textureUV; break;
+                        default:                position = Titanfall::Bsp::vertexLitFlatVertices.at(v).vertexIndex; uv = Titanfall::Bsp::vertexLitFlatVertices.at(v).textureUV; break;
+                    }
+                    const Vector3 &p = Titanfall::Bsp::vertices.at(position);
+                    const std::array<float, 5> key{p.x(), p.y(), p.z(), uv.x(), uv.y()};
+                    auto found = alphaLookup.find(key);
+                    if (found == alphaLookup.end()) {
+                        found = alphaLookup.emplace(key, static_cast<uint16_t>(Titanfall2::Bsp::shadowMeshAlphaVertices.size() - alpha->vertexOffset)).first;
+                        Titanfall2::Bsp::shadowMeshAlphaVertices.push_back(key);
+                    }
+                    Titanfall2::Bsp::shadowMeshIndices.push_back(found->second);
+                }
+                alpha->triangleCount++;
+            }
+        }
+    }
+
     const float big = std::numeric_limits<float>::max();
     const int32_t meshCount = static_cast<int32_t>(Titanfall2::Bsp::shadowMeshes.size());
-    int32_t node = 0;
+    int32_t expected = 0;
     for (const auto &[environment, normal] : suns) {
-        if (environment != node)
+        if (environment != expected)
             Sys_FPrintf(SYS_WRN, "WARNING: light environment indices should be consecutive from 0 (found %d)\n", environment);
-        Titanfall::CellAABBNode_t &root = Titanfall2::Bsp::csmAABBNodes.emplace_back();
-        root = {};
-        root.mins = Vector3(big, big, big);
-        root.maxs = Vector3(-big, -big, -big);
+        expected++;
+        const int32_t firstNode = static_cast<int32_t>(Titanfall2::Bsp::csmAABBNodes.size());
+        const int32_t firstRef = static_cast<int32_t>(Titanfall2::Bsp::csmObjReferences.size());
         const bool gameplay = environment == 0;
-        Titanfall2::Bsp::shadowEnvironments.push_back({node, 0, gameplay ? 0 : meshCount,
-                                                       node + 1, 0, meshCount, normal});
-        node++;
+        if (!gameplay || !EmitCsmTree(normal)) {
+            Titanfall::CellAABBNode_t &root = Titanfall2::Bsp::csmAABBNodes.emplace_back();
+            root = {};
+            root.mins = Vector3(big, big, big);
+            root.maxs = Vector3(-big, -big, -big);
+        }
+        Titanfall2::Bsp::shadowEnvironments.push_back({firstNode, firstRef, gameplay ? 0 : meshCount,
+                                                       static_cast<int32_t>(Titanfall2::Bsp::csmAABBNodes.size()),
+                                                       static_cast<int32_t>(Titanfall2::Bsp::csmObjReferences.size()), meshCount, normal});
     }
 }
 
@@ -583,14 +769,40 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         }
     }
 
+    // Retail places one probe per static prop first, at its lighting origin, then
+    // the environment's own probes. The parent record's range covers only the
+    // latter, but the KD tree indexes every probe by absolute index. 0x66 maps
+    // each prop to its probe.
+    std::vector<V3> propPoints;
+    for (const Titanfall2::GameLumpProp_t &prop : Titanfall2::Bsp::gameLumpProps) {
+        const bool lightingOrigin = (prop.flags & 0x02) != 0;
+        const Vector3 &o = lightingOrigin ? prop.unk : prop.origin;
+        propPoints.push_back({o.x(), o.y(), o.z() + (lightingOrigin ? 0.0 : 32.0)});
+    }
+    try {
+        auto propProbes = Respawn::Bake::bakeProbes(propPoints, Titanfall2::Bsp::bakeLights, Titanfall2::Bsp::ambient,
+                                                    occluders, options, &result.bounce);
+        Titanfall2::Bsp::lightprobes.insert(Titanfall2::Bsp::lightprobes.begin(), propProbes.begin(), propProbes.end());
+    } catch (const std::exception &error) {
+        Error("Static prop light probe bake failed: %s", error.what());
+    }
+    Titanfall2::Bsp::staticPropLightprobeIndices.clear();
+    for (uint32_t i = 0; i < propPoints.size(); ++i)
+        Titanfall2::Bsp::staticPropLightprobeIndices.push_back(i);
+    const uint32_t propProbeCount = static_cast<uint32_t>(propPoints.size());
+    probePoints.insert(probePoints.begin(), propPoints.begin(), propPoints.end());
+
     Respawn::Bake::ProbeTree tree = Respawn::Bake::buildProbeTree(probePoints);
     Titanfall2::Bsp::lightprobeTree = std::move(tree.nodes);
     Titanfall2::Bsp::lightprobeReferences = std::move(tree.references);
-    Titanfall2::Bsp::lightprobeParentInfos.push_back({0, 0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobes.size()),
+    EmitLightprobeBsp();
+    Titanfall2::Bsp::lightprobeParentInfos.push_back({0, propProbeCount,
+                                                      static_cast<uint32_t>(Titanfall2::Bsp::lightprobes.size()) - propProbeCount,
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeReferences.size()),
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
 
     EmitShadowEnvironments();
+    EmitCubemaps(&occluders, &result.bounce);
 
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     Sys_Printf("%9zu world lights (%d hardware)\n", Titanfall2::Bsp::worldLights.size(), hardware);

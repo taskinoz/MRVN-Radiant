@@ -57,6 +57,8 @@ namespace Titanfall2 {
     bool IsLightEntity(const entity_t &e);
     void CollectLight(const entity_t &e);
     void EmitLighting(const entity_t &world);
+    void CollectCubemap(const entity_t &e);
+    void EmitCubemaps(const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid);
 
     // 0x36, version 3
     struct WorldLight_t {
@@ -124,6 +126,21 @@ namespace Titanfall2 {
     };
     static_assert(sizeof(ShadowMesh_t) == 12, "Shadow meshes are 12 bytes");
 
+    // 0x06: light probe lookup BSP node; see EmitLightprobeBsp.
+    struct LightprobeBspNode_t {
+        float     normal[3] = {0, 0, 0};
+        float     distance = 0;
+        uint32_t  children[2] = {0, 0};  // back, front; bit 31 marks a leaf
+    };
+    static_assert(sizeof(LightprobeBspNode_t) == 24, "Light probe BSP nodes are 24 bytes");
+
+    // 0x2A: env_cubemap origins; the textures are frames of the pakfile's cubemaps.hdr.vtf.
+    struct Cubemap_t {
+        int32_t   origin[3];
+        uint32_t  unknown;   // 0 in every surveyed map
+    };
+    static_assert(sizeof(Cubemap_t) == 16, "Cubemaps are 16 bytes");
+
     // 0x23
     // GameLump is the only lump which isn't just a vector
     // The order in which these structs were defined is the order in which both our and the respawn compiler saves them
@@ -184,16 +201,26 @@ namespace Titanfall2 {
         inline std::vector<LightprobeParentInfo_t>   lightprobeParentInfos;
         inline std::vector<ShadowEnvironment_t>      shadowEnvironments;
         inline std::vector<Titanfall::CellAABBNode_t>  csmAABBNodes;
+        inline std::vector<uint16_t>                 csmObjReferences;  // 0x64: object ids, as OBJ_REFERENCES
         inline std::vector<Vector3>                  shadowMeshVertices;
         inline std::vector<uint16_t>                 shadowMeshIndices;
+        inline std::vector<std::array<float, 5>>     shadowMeshAlphaVertices;  // 0x7D: position, texture UV
         inline std::vector<ShadowMesh_t>             shadowMeshes;
         inline std::vector<Respawn::Bake::Probe>     lightprobes;
+        inline std::vector<Cubemap_t>                cubemaps;
+        inline std::vector<LightprobeBspNode_t>      lightprobeBspNodes;
+        inline std::vector<uint32_t>                 lightprobeBspRefIds;
+        inline std::vector<uint32_t>                 staticPropLightprobeIndices;  // 0x66, per static prop
+        inline std::vector<uint8_t>                  pakfile;
         inline std::vector<std::array<uint32_t, 2>>  lightprobeTree;
         inline std::vector<Respawn::Bake::ProbeReference>  lightprobeReferences;
         inline std::vector<Respawn::Bake::Light>     bakeLights;      // parallel to worldLights
         inline Respawn::Bake::V3                     ambient;         // first light_environment
 
         /* Stubs */
+        // 0x1D: retail TF2 has no world physics model, only the terminating
+        // header (model index -1, sizes 0), as in every surveyed map.
+        inline const std::array<int32_t, 4>  physicsCollide = { -1, -1, 0, 0 };
         inline std::vector<uint8_t>  worldLights_stub;
         inline std::vector<uint8_t>  lightMapHeaders_stub;
         inline std::vector<uint8_t>  lightMapDataSky_stub;

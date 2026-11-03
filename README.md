@@ -24,24 +24,31 @@ MRVN-Radiant is a fork of NetRadiant-custom (GtkRadiant 1.4 &rarr; massive rewri
 
 ## Status
 
-End-to-end game compatibility is not yet verified. The percentages below are
-historical lump-generation counts, not a measure of playable-map compatibility.
-Respawn research notes live in [docs/respawn](docs/respawn): the
+Coverage counts which BSP lumps remap writes from the map rather than as fixed
+placeholders. It is not a measure of playable-map compatibility. Titanfall 2 maps
+compiled with this fork load and play in Northstar, with baked lighting (see the
+[Titanfall 2 Custom Maps](https://github.com/taskinoz/Titanfall-2-Custom-Maps)).
+Titanfall Online and Apex output is less complete and less tested.
+
+Respawn research notes live in [docs/respawn](docs/respawn/README.md): the
 [compatibility plan](docs/respawn/RESPAWN_COMPATIBILITY.md) (current gaps, release
 gates, BSP inspection), [lighting](docs/respawn/RESPAWN_LIGHTING.md), retail
-samples, map trials, crash investigations and the E1M1 test-mod build notes. See the
+samples, map trials, crash investigations and the converter notes. See the
 [source attribution register](docs/respawn/RESPAWN_SOURCES.md) for research/tool credits.
-These tools do not yet provide a verified engine lightmap bake.
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall Online | 38% | No triangle collision, no lighting, no portals |
-| Titanfall 2 | 37% | No triangle collision, no lighting, no portals |
-| Apex Legends | 25% | No collision, no lighting, no portals |
+| Titanfall Online | 45% (34/75) | Brush collision; no triangle collision, no lighting, no portals |
+| Titanfall 2 | 76% (62/81) | Baked lightmaps, light probes and sun shadows; brush and patch collision; sky portals, with experimental view portals (`_viewportals`) |
+| Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals |
 
-> Coverage = Lumps generated / Total lump count. Stubbed lumps arent counted because they're not custom.
+> Coverage = lumps remap generates / lumps named for that game in
+> `tools/remap/source/lump_names.h`, counting the game lump. Lumps written only as
+> fixed stubs aren't counted, because they're not custom. Titanfall 2's lighting
+> lumps count when lightmaps are enabled.
 
-> NOTE: These values are updated manually.
+> NOTE: These values are updated manually. Last counted 2026-11-03 from
+> `titanfall.cpp`, `titanfall2.cpp` and `apex_legends.cpp`.
 
 ## Other tools
 - [bsp_tool](https://github.com/snake-biscuits/bsp_tool)

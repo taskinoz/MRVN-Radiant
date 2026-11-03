@@ -5,7 +5,8 @@ Python and C++ tools for reading, converting, packaging and testing Respawn
 were written with AI; see [AI.md](../../AI.md).
 
 Run them from the repository root with Python 3.10 or later. Most are standard
-library only. The map converters also need Pillow and NumPy. Tools that import
+library only. The map converters also need NumPy and Pillow:
+`python -m pip install -r tools/respawn/requirements.txt`. Tools that import
 each other expect this folder on the path: `$env:PYTHONPATH = 'tools/respawn'`.
 Every tool prints its options with `--help`. The research notes in
 [docs/respawn](../../docs/respawn/README.md) explain what each tool found and how

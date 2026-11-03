@@ -1,0 +1,4 @@
+# Map converters (build_*_ports.py, port_tf2_to_apex.py and their tests).
+# The format readers and inspection tools need only the standard library.
+numpy>=2.2,<3
+Pillow>=12,<13

@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: main
+    branches: [main, respawn-format-research]
   pull_request:
   workflow_dispatch:
 
@@ -102,3 +102,40 @@ jobs:
         name: ${{ env.ARTIFACT_NAME }}
         path: install/
         if-no-files-found: error
+
+
+  # Each push to the fork's working branch replaces the rolling pre-release with
+  # the Windows and Linux builds of that commit.
+  Prerelease:
+    needs: [Windows, Linux]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/respawn-format-research'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: prerelease
+      cancel-in-progress: true
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: artifacts
+
+    - name: Package builds
+      working-directory: artifacts
+      run: |
+        for d in */; do (cd "$d" && zip -qr "../${d%/}.zip" .); done
+        ls -l *.zip
+
+    - name: Publish pre-release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        gh release delete prerelease --cleanup-tag --yes || true
+        notes="Automatic build of [\`${GITHUB_SHA::7}\`](https://github.com/$GH_REPO/commit/$GITHUB_SHA) on \`respawn-format-research\`, replaced on every push. Untested beyond compiling: use it to try the latest Respawn compiler and tool changes.
+
+        On Linux, run \`chmod +x radiant remap\` after extracting, since the archive does not keep file permissions.
+
+        This fork's changes are AI-generated; see [AI.md](https://github.com/$GH_REPO/blob/respawn-format-research/AI.md). The original, human-built editor is [MRVN-Radiant/MRVN-Radiant](https://github.com/MRVN-Radiant/MRVN-Radiant)."
+        gh release create prerelease artifacts/*.zip --prerelease --latest=false \
+          --target "$GITHUB_SHA" --title "Pre-release $(date -u -Idate) (${GITHUB_SHA::7})" --notes "$notes"

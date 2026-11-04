@@ -809,7 +809,9 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
 
     EmitShadowEnvironments();
-    if (g_game->bspVersion == 37)  // TF1 cubemaps are per-cubemap Source VTFs, not written yet
+    if (g_game->bspVersion == 29)
+        EmitCubemapsTF1(&occluders, &result.bounce);
+    else
         EmitCubemaps(&occluders, &result.bounce);
 
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();

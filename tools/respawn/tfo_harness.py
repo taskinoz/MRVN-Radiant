@@ -147,6 +147,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--timeout', type=int, default=300)
     p.add_argument('--attempts', type=int, default=3)
+    p.add_argument('--enable', action='append', default=[], help='Also enable this installed mod, e.g. Titanfall1.Content.Client')
     args = p.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9_]+', args.map):
         raise SystemExit('invalid map name')
@@ -158,6 +159,8 @@ def main():
     try:
         enabled = json.loads(enabled_backup)
         enabled[MOD] = True
+        for name in args.enable:
+            enabled[name] = True
         enabled_path.write_text(json.dumps(enabled, indent=4))
         # TFO.exe requires --authToken even with -noauth; the value is not a credential.
         command = [str(args.game/'Bin/TFO.exe'), '--authToken', 'mrvn-local-noauth', '-noauth', '-novid', '-windowed',

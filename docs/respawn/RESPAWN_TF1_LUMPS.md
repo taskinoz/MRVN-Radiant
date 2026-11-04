@@ -76,9 +76,43 @@ the slots belong to. Writing 255 keeps realtime lights unshadowed by the bake.
   orthogonal to the normal and to each other. TF2 instead stores the tangent with
   a sign bit and a zero second word. With TF2-style tangents, bump-lit TF1 meshes
   crashed TFO at `engine.dll+0x18c77a` while loading the world.
-- **Cubemaps:** material sorts store a cubemap index for envmapped materials and
-  -1 otherwise (Angel City: 533 and 301). remap writes -1 until TF1 cubemaps are
-  supported.
+- **Material sort cubemaps:** sorts of envmapped materials store their cubemap
+  index; others store -1 (Angel City: 533 and 301). Meshes always store 0.
+
+## Cubemaps
+
+TF1 uses Source 1 style cubemaps. Angel City's pakfile holds:
+- **Per cubemap:** `materials/maps/<map>/c<x>_<y>_<z>.vtf` (32x32 DXT5) and
+  `.hdr.vtf` (64x64, Valve's compressed HDR: RGBA8888 with
+  `colour = rgb * a * 16`).
+- **Defaults:** `cubemapdefault.vtf` and `.hdr.vtf`; the HDR default is
+  RGBA16161616F.
+- **Patch VMTs:** one per envmapped material, at
+  `materials/maps/<map>/<material>_<x>_<y>_<z>.vmt`, containing
+  `"patch" { "include" "materials/<original>.vmt" "replace" { "$envmap" "maps/<map>/c<x>_<y>_<z>" } }`.
+  Angel City has 265.
+
+Texture names in the BSP stay unpatched. The engine picks the patch from the
+material sort's cubemap.
+
+remap writes the same set:
+- **Textures:** 64x64 HDR cubemaps as RGBA16161616F and 32x32 LDR copies as
+  RGBA8888. Faces are ray traced from the bake, exactly as TF2's are; the D3D face
+  layout is the same, and Angel City's faces join seamlessly under it (seam error
+  0.007 against 0.063 mirrored).
+- **Default:** `cubemapdefault` is a copy of the first gameplay cubemap.
+- **Material lookup:** remap reads each material's VMT through its filesystem. A
+  material gets a cubemap only if it has a `$envmap` or `$envmap2` value; patches
+  replace both. Point remap at TF1 materials with an extra base path, for
+  example TFORevive's imported content:
+  `-fs_basepath "<TFO>/Mods/Titanfall1.Content.Client" -fs_game mod`.
+  Materials whose VMT is not found get no cubemap.
+
+In game, a test build whose cubemap was replaced with pure red turned the wet
+concrete floor and the weapon view model red. So TFO loads and uses the
+cubemaps and patch VMTs. Run `tfo_harness.py` with
+`--enable Titanfall1.Content.Client --enable Titanfall1.Content.Shared` when a map
+uses those materials.
 
 ## Portals
 
@@ -99,12 +133,6 @@ E1M1 (5,728 cells, 14,864 portals) loads, then crashes the TFO client
 
 ## Still missing
 
-- **Cubemaps (PAKFILE, CUBEMAPS):** TF1 uses Source 1 style cubemaps. Each one is
-  stored as `materials/maps/<map>/c<x>_<y>_<z>.vtf` (32x32 DXT5) and `.hdr.vtf`
-  (64x64), plus `cubemapdefault` copies. Every material using `env_cubemap` gets a
-  patch VMT (`"include"` the original, `"replace" { "$envmap" ... }`); Angel City
-  has 265. Writing these needs each material's VMT to know whether it uses
-  `$envmap`.
 - **PHYSICS_COLLIDE:** retail holds VPhysics world collision (8.4 MB in Angel
   City). remap writes a minimal world model; player and trace collision use the
   CM grid and work without it.

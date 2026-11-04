@@ -52,6 +52,10 @@ retail lump versions.
   the nearest probe's ambient. Retail menu cubemaps store about 5.0, so remap
   writes 5.0 for cubemaps within 2048 units of a menu anchor and 1.0 elsewhere.
   `CRC` is written as 0; it matches no CRC32 of the file.
+- **Path fix:** builds before 4 November 2026 named the texture
+  `materials/maps//cubemaps.hdr.vtf`: remap's `mapName` is empty when no map
+  shader file exists. The engine could not find it, so those cubemaps were
+  never used. The level name now comes from the compiled map's path.
 
 ## Light probes
 

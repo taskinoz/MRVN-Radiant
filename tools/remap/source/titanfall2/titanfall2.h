@@ -59,6 +59,7 @@ namespace Titanfall2 {
     void EmitLighting(const entity_t &world);
     void CollectCubemap(const entity_t &e);
     void EmitCubemaps(const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid);
+    void EmitCubemapsTF1(const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid);
 
     // 0x36, version 3
     struct WorldLight_t {

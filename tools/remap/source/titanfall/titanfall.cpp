@@ -140,6 +140,8 @@ void WriteR1BSPFile(const char *filename) {
         SafeWrite(file, Titanfall::Bsp::gameLumpProps.data(), sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpProps.size());
         SafeWrite(file, &Titanfall::Bsp::gameLumpUnknownHeader, sizeof(Titanfall::GameLumpUnknownHeader_t));
     }
+    AddLump(file, header.lumps[R1_LUMP_PAKFILE],                     Titanfall2::Bsp::pakfile);
+    AddLump(file, header.lumps[R1_LUMP_CUBEMAPS],                    Titanfall2::Bsp::cubemaps);
     AddLump(file, header.lumps[R1_LUMP_TEXTURE_DATA_STRING_DATA],    Titanfall::Bsp::textureDataData);
     AddLump(file, header.lumps[R1_LUMP_TEXTURE_DATA_STRING_TABLE],   Titanfall::Bsp::textureDataTable);
     if (baked)

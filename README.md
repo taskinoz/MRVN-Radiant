@@ -38,7 +38,7 @@ samples, map trials, crash investigations and the converter notes. See the
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall Online | 93% (70/75) | Baked lighting, probes, shadow meshes, brush and patch collision, sky portals; tested in Titanfall Online. Missing cubemaps, VPhysics and physics triangles; see [RESPAWN_TF1_LUMPS.md](docs/respawn/RESPAWN_TF1_LUMPS.md) |
+| Titanfall Online | 96% (72/75) | Baked lighting, probes, shadow meshes, cubemaps, brush and patch collision, sky portals; tested in Titanfall Online. Missing VPhysics, physics triangles and collision bevels; see [RESPAWN_TF1_LUMPS.md](docs/respawn/RESPAWN_TF1_LUMPS.md) |
 | Titanfall 2 | 99% (80/81) | Every lump retail fills except triangle collision bevels; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
 | Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals. Not yet recounted for empty lumps |
 

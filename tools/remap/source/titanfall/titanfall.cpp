@@ -114,7 +114,7 @@ void WriteR1BSPFile(const char *filename) {
     AddLump(file, header.lumps[R1_LUMP_VERTICES],          Titanfall::Bsp::vertices);
     AddLump(file, header.lumps[R1_LUMP_MODELS],            Titanfall::Bsp::models);
     AddLump(file, header.lumps[R1_LUMP_ENTITY_PARTITIONS], Titanfall::Bsp::entityPartitions);
-    AddLump(file, header.lumps[R1_LUMP_PHYSICS_COLLIDE],   Titanfall::Bsp::physicsCollide_stub);  // stub
+    AddLump(file, header.lumps[R1_LUMP_PHYSICS_COLLIDE],   Titanfall::Bsp::physicsCollide.empty() ? Titanfall::Bsp::physicsCollide_stub : Titanfall::Bsp::physicsCollide);
     AddLump(file, header.lumps[R1_LUMP_VERTEX_NORMALS],    Titanfall::Bsp::vertexNormals);
     // GameLump
     {
@@ -270,6 +270,7 @@ void CompileR1BSPFile() {
             Titanfall::EmitMeshes(entity);
 
             Titanfall::EmitCollisionGrid(entity);
+            Titanfall::EmitPhysicsModel(entity, int(Titanfall::Bsp::models.size()) - 1);
 
             Titanfall::EmitLevelInfoWorldspawn();
 
@@ -286,6 +287,7 @@ void CompileR1BSPFile() {
                 Shared::MakeMeshes(entity);
                 Titanfall::EmitMeshes(entity);
                 Titanfall::EmitModelGridCell(entity);
+                Titanfall::EmitPhysicsModel(entity, int(Titanfall::Bsp::models.size()) - 1);
                 Titanfall::EndModel();
             }
         }
@@ -311,6 +313,7 @@ void CompileR1BSPFile() {
 
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall::EmitStubs();
+    Titanfall::FinishPhysics();
     // TF1 shares TF2's cell and portal layouts: sky portals from authored sky
     // faces, or the full portal graph with worldspawn "_viewportals" "1".
     if (world)

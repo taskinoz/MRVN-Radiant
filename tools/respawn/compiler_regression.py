@@ -309,6 +309,66 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("roof does not reduce sky ambient")
 
 
+def physics_checks(bsp, inventory, brushes):
+    """TF1 world VPhysics: one convex IVP ledge per brush, watertight and outward facing."""
+    lump = inventory["lumps"][0x1D]
+    with bsp.open("rb") as stream:
+        stream.seek(lump["offset"])
+        data = stream.read(lump["length"])
+    model, size, keysize, count = struct.unpack_from("<4i", data, 0)
+    if model != 0 or count < 1 or data[-16:] != struct.pack("<4i", -1, -1, 0, 0):
+        raise RuntimeError(f"bad VPhysics model header {model, size, keysize, count}")
+    keydata = data[16 + size:16 + size + keysize]
+    if not keydata.startswith(b"staticsolid {") or not keydata.endswith(b"\x00"):
+        raise RuntimeError(f"bad VPhysics keydata {keydata[:40]!r}")
+    offset, ledges = 16, 0
+    for _ in range(count):
+        solid_size = struct.unpack_from("<i", data, offset)[0]
+        solid = data[offset + 4:offset + 4 + solid_size]
+        offset += 4 + solid_size
+        if solid[:4] != b"VPHY" or solid[72:76] != b"IVPS":
+            raise RuntimeError("VPhysics solid lacks VPHY/IVPS markers")
+        surface = 28
+        if struct.unpack_from("<I", solid, surface + 28)[0] >> 8 != solid_size - 28:
+            raise RuntimeError("compact surface byte_size does not match the solid")
+        nodes = [surface + struct.unpack_from("<i", solid, surface + 32)[0]]
+        while nodes:
+            node = nodes.pop()
+            right, ledge = struct.unpack_from("<ii", solid, node)
+            if right:
+                nodes += [node + 28, node + right]
+                continue
+            ledges += 1
+            ledge += node
+            points_at, _, flags, triangles = struct.unpack_from("<iiIh", solid, ledge)
+            def point(i):
+                return struct.unpack_from("<3f", solid, ledge + points_at + 16 * i)
+            def edge(address):
+                word = struct.unpack_from("<I", solid, address)[0]
+                opposite = (word >> 16) & 0x7FFF
+                return word & 0xFFFF, opposite - 0x8000 if opposite & 0x4000 else opposite
+            corners = sorted({edge(ledge + 20 + 16 * t + 4 * k)[0] for t in range(triangles) for k in range(3)})
+            centre = [sum(point(i)[a] for i in corners) / len(corners) for a in range(3)]
+            for t in range(triangles):
+                tri = ledge + 16 + 16 * t
+                ids = [edge(tri + 4 + 4 * k)[0] for k in range(3)]
+                a, b, c = (point(i) for i in ids)
+                u = [b[i] - a[i] for i in range(3)]
+                v = [c[i] - a[i] for i in range(3)]
+                n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+                if sum(n[i] * (a[i] - centre[i]) for i in range(3)) <= 0:
+                    raise RuntimeError("VPhysics triangle faces inward")
+                for k in range(3):
+                    here = tri + 4 + 4 * k
+                    other = here + 4 * edge(here)[1]
+                    other_tri = ledge + 16 + 16 * ((other - ledge - 16) // 16)
+                    other_k = (other - other_tri - 4) // 4
+                    if edge(other)[0] != ids[(k + 1) % 3] or edge(other_tri + 4 + 4 * ((other_k + 1) % 3))[0] != ids[k]:
+                        raise RuntimeError("VPhysics edge is not twinned with its reverse")
+    if ledges != brushes:
+        raise RuntimeError(f"expected {brushes} VPhysics ledges, got {ledges}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remap", required=True, type=Path)
@@ -370,6 +430,8 @@ def main():
                 raise RuntimeError(f"{game}: expected populated vertex pool {pool}")
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
+            if game == "titanfallonline":
+                physics_checks(bsp, inventory, 5)
             records = load_records(bsp, inventory)
             if not records[92][0][4] or records[92][1][4] or not records[92][1][9]:
                 raise RuntimeError("fixture must contain a sloped brush followed by an axial brush")

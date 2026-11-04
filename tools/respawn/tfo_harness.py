@@ -11,7 +11,8 @@ spawn. Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
       --maps BUILD_DIR --map mp_name --checks checks.json --output REPORT_DIR
 
 checks.json: {"traces": [[x, y, z, ex, ey, ez], ...],
-              "views": [[x, y, z, pitch, yaw], ...]}
+              "views": [[x, y, z, pitch, yaw], ...],
+              "drops": [[x, y, z], ...]}   physics objects; their resting height is logged
 """
 import argparse
 import ctypes
@@ -28,6 +29,7 @@ SCRIPT = r'''
 // MRVN TF1 harness: traces and screenshots, then quit.
 ::MRVN_Traces <- %TRACES%
 ::MRVN_Views <- %VIEWS%
+::MRVN_Drops <- %DROPS%
 
 ::MRVN_OriginalPilotSetFile <- GetPlayerPilotSetFile
 function GetPlayerPilotSetFile( self )
@@ -51,6 +53,22 @@ function MRVN_Run( player )
 		local result = TraceLine( Vector( t[0], t[1], t[2] ), Vector( t[3], t[4], t[5] ), null, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_NONE )
 		MRVN_Log( "TRACE " + i + " fraction=" + result.fraction + " end=" + result.endPos.z + " solid=" + result.startSolid )
 	}
+	// Physics objects dropped from each point show whether VPhysics collides with the world.
+	local dropped = []
+	foreach ( i, d in MRVN_Drops )
+	{
+		local prop = CreateEntity( "prop_physics" )
+		prop.kv.model = "models/weapons/bullets/projectile_rocket.mdl"
+		prop.kv.minhealthdmg = 9999
+		prop.SetOrigin( Vector( d[0], d[1], d[2] ) )
+		DispatchSpawn( prop, false )
+		prop.SetModel( "models/weapons/grenades/m20_f_grenade.mdl" )
+		dropped.append( prop )
+	}
+	if ( dropped.len() )
+		wait 4
+	foreach ( i, prop in dropped )
+		MRVN_Log( "DROP " + i + " z=" + ( IsValid( prop ) ? prop.GetOrigin().z : "gone" ) )
 	foreach ( i, v in MRVN_Views )
 	{
 		player.SetOrigin( Vector( v[0], v[1], v[2] ) )
@@ -132,7 +150,8 @@ def write_mod(game, maps, checks):
     (scripts/'_mapspawn.nut').write_bytes(base + b'\nIncludeScript( "mrvn_tf1_harness", getroottable() )\n')
     sq = lambda rows: '[' + ', '.join('[' + ', '.join(f'{float(v):.3f}' for v in row) + ']' for row in rows) + ']'
     (scripts/'mrvn_tf1_harness.nut').write_text(SCRIPT.replace('%TRACES%', sq(checks.get('traces', [])))
-                                                .replace('%VIEWS%', sq(checks.get('views', []))))
+                                                .replace('%VIEWS%', sq(checks.get('views', [])))
+                                                .replace('%DROPS%', sq(checks.get('drops', []))))
     (mod/'mod.json').write_text(json.dumps({'Name': MOD, 'Description': 'MRVN-Radiant TF1 compiler test', 'Authors': ['MRVN-Radiant'],
                                             'Version': '0.1.0', 'LoadPriority': 50, 'RequiredOnClient': True}, indent=1))
     return mod

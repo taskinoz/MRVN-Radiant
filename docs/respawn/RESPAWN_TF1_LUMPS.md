@@ -13,11 +13,12 @@ python tools/respawn/tfo_harness.py --game "D:/Games/Titanfall Online" `
     --maps BUILD_DIR --map mp_name --checks checks.json --output REPORT_DIR
 ```
 
-`checks.json` lists traces (`[x, y, z, ex, ey, ez]`) and views
-(`[x, y, z, pitch, yaw]`). The harness:
+`checks.json` lists traces (`[x, y, z, ex, ey, ez]`), views
+(`[x, y, z, pitch, yaw]`) and drops (`[x, y, z]`). The harness:
 - installs the map as a temporary mod and hooks TFORevive's `_mapspawn.nut`;
 - launches `TFO.exe --authToken mrvn-local-noauth -noauth`;
 - logs each trace's fraction and end height to `tforevive.log`;
+- spawns a physics grenade at each drop and logs where it rests (`DROP i z=...`);
 - captures the game window at each view;
 - removes the mod and restores `enabledmods.json`.
 
@@ -114,6 +115,49 @@ cubemaps and patch VMTs. Run `tfo_harness.py` with
 `--enable Titanfall1.Content.Client --enable Titanfall1.Content.Shared` when a map
 uses those materials.
 
+## VPhysics (PHYSICS_COLLIDE)
+
+TF1 physics objects (grenades, gibs, ragdolls) collide with the world through
+VPhysics, separately from the CM grid that players and traces use. Without it,
+dropped grenades fell through every floor of a test build of E1M1 (resting near
+z -4000). The layout is Source's IVP compact surface, read from retail Angel City.
+
+- **Lump:** per model `{int modelIndex, dataSize, keydataSize, solidCount}`, then
+  `solidCount` solids of `{int size; data}`, then the NUL-terminated keydata.
+  The lump ends with `{-1, -1, 0, 0}`.
+- **Solid:** a 28-byte header (`VPHY`, version 0x100, model type 0, surface size,
+  drag 1,1,1, axis map size 0), then an `IVP_Compact_Surface` (48 bytes): mass
+  centre, rotation inertia, upper radius, `max_deviation | byte_size << 8`
+  (retail deviation 227), ledge tree root offset, and `IVPS` in the last word.
+- **Ledges:** 16-byte header (point offset, client data 0,
+  `is_compact << 2 | size / 16 << 8`, triangle count), 16-byte triangles
+  (`index:12 | pierce:12 | material:7 | virtual:1`, then three edges of
+  `start point:16 | opposite:15 | virtual:1`, where opposite is a signed count of
+  4-byte edges to the reverse edge) and 16-byte points. Coordinates are IVP
+  metres: `(x, -z, y) / 39.3701`. Triangles wind counter-clockwise seen from
+  outside. Retail ledges share one point pool per surface; remap puts each
+  ledge's points after its triangles, which IVP also accepts.
+- **Ledge tree:** 28-byte nodes: right child offset (0 for a leaf), ledge
+  offset (leaves only), centre, radius and three box sizes; the left child
+  follows its parent. Retail centres and radii are the box centre and half
+  diagonal of the subtree's points, and each box size is `250 * half extent /
+  radius`, rounded up (all retail leaves match to within 1%).
+- **Keydata:** the world has one `staticsolid { "index" "contents" }` per solid,
+  then `virtualterrain {}`, `virtualtrimeshes {}` and a `materialtable`.
+  Triangle material indices refer to that table. Brush entities have one
+  `solid { "index" "mass" "surfaceprop" "volume" }`.
+
+remap turns every solid brush (not sky, water or slime) into one convex ledge
+from its side windings, groups the world's ledges into static solids by
+contents (up to 4 MB each), and gives each brush entity one movable solid. All
+triangles use material 1 (`default`). Retail also writes `vtric` entries and
+`fluid` solids for water, which remap does not.
+
+In TFO, grenades dropped on five E1M1 floors came to rest 1.3 units above them
+(floors at -80, 0, -192, -176 and -280). One dropped onto a ledge at 64 rolled
+off and came to rest at 49. `compiler_regression.py` checks that every brush
+becomes a closed ledge with outward triangles and twinned edges.
+
 ## Portals
 
 TF1 shares TF2's cell and portal layouts and generator (see
@@ -133,10 +177,10 @@ E1M1 (5,728 cells, 14,864 portals) loads, then crashes the TFO client
 
 ## Still missing
 
-- **PHYSICS_COLLIDE:** retail holds VPhysics world collision (8.4 MB in Angel
-  City). remap writes a minimal world model; player and trace collision use the
-  CM grid and work without it.
-- **PHYSICS_TRIANGLES (1.4 MB in Angel City):** not identified.
+- **PHYSICS_TRIANGLES (1.4 MB in Angel City):** not identified; possibly the
+  triangle meshes behind the keydata's `vtric` entries.
+- **VPhysics water and surface properties:** no `fluid` solids, and every
+  triangle uses the `default` surface property.
 - **TRICOLL_BEVEL_INDICES:** as TF2.
 - **LEAF_WATER_DATA:** one 12-byte record per water volume (surface Z, minimum Z,
   surface texture). Written empty, which is correct for maps without water.

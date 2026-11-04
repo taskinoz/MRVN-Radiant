@@ -37,6 +37,7 @@ add_executable(remap
                source/titanfall/titanfall_collisions.cpp
                source/titanfall/titanfall_decompile.cpp
                source/titanfall/titanfall_misc.cpp
+               source/titanfall/titanfall_physics.cpp
                source/titanfall/titanfall_vis.cpp
                source/titanfall/titanfall.cpp
                source/titanfall/titanfall.h

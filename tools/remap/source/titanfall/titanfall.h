@@ -73,6 +73,8 @@ namespace Titanfall {
     void         EmitLevelInfoWorldspawn();
     void         EmitLevelInfo();
     void         EmitStubs();
+    void         EmitPhysicsModel(const entity_t &e, int modelIndex);
+    void         FinishPhysics();
     void         EmitExtraEntity(entity_t &e);
 
     void         LoadLumpsAndEntities( rbspHeader_t *header, const char *filename );
@@ -445,6 +447,8 @@ namespace Titanfall {
         inline std::vector<uint16_t>              objReferences;
         inline std::vector<ObjReferenceBounds_t>  objReferenceBounds;
         inline std::vector<LevelInfo_t>           levelInfo;  // Only one entry! used a vector to keep load / save code simple
+
+        inline std::vector<uint8_t>  physicsCollide;  // VPhysics models, see titanfall_physics.cpp
 
         // Stubs
         inline std::vector<uint8_t>  physicsCollide_stub;

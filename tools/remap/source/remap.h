@@ -420,6 +420,7 @@ enum class EImplicitMap {
 
 struct shaderInfo_t {
     String512                  shader;
+    std::string                surfaceProp;           /* $surfaceprop, for TF1 VPhysics */
     int                        surfaceFlags;
     int                        contentFlags;
     int                        compileFlags;

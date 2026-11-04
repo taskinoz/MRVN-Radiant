@@ -240,9 +240,9 @@ bool ApplyShaderType( const char *name, int *surfaceFlags, int *contentFlags, in
     GetShaderFlag()
     Returns a ShaderType_t corresponding to name
 */
-ShaderFlag_t *GetShaderFlag( const char *name, std::vector<ShaderFlag_t> flags ) {
+const ShaderFlag_t *GetShaderFlag( const char *name, const std::vector<ShaderFlag_t> &flags ) {
     // Walk the current game's shader type vector
-    for( ShaderFlag_t &sf : flags ) {
+    for( const ShaderFlag_t &sf : flags ) {
         if ( striEqual(name, sf.name) ) {
             return &sf;
         }
@@ -256,7 +256,7 @@ ShaderFlag_t *GetShaderFlag( const char *name, std::vector<ShaderFlag_t> flags )
     Applies a shader flag to the supplied flags
 */
 bool ApplyShaderFlag( const char *name, int *surfaceFlags, int *contentFlags, int *compileFlags ) {
-    ShaderFlag_t *sf = nullptr;
+    const ShaderFlag_t *sf = nullptr;
     if( surfaceFlags != nullptr ) { sf = GetShaderFlag(name, g_game->surfaceFlags); }
     if( contentFlags != nullptr ) { sf = GetShaderFlag(name, g_game->contentFlags); }
     if( compileFlags != nullptr ) { sf = GetShaderFlag(name, g_game->compileFlags); }
@@ -876,6 +876,9 @@ static void ParseShaderFile(const char *filename) {
                 if ( !ApplyShaderFlag(token, nullptr, &si->contentFlags, nullptr) ) {
                     Sys_Warning( "Unknown contentflag: \"%s\"\n", token );
                 }
+            } else if (striEqual(token, "$surfaceprop")) {
+                text.GetToken(false);
+                si->surfaceProp = token;  // VPhysics surface property; overrides the VMT
             } else if (striEqual(token, "$compileflag")) {
                 text.GetToken(false);
                 if ( !ApplyShaderFlag(token, nullptr, nullptr, &si->compileFlags) ) {

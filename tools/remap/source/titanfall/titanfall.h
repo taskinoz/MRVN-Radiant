@@ -75,6 +75,7 @@ namespace Titanfall {
     void         EmitStubs();
     void         EmitPhysicsModel(const entity_t &e, int modelIndex);
     void         FinishPhysics();
+    void         AssignWaterCells();
     void         EmitExtraEntity(entity_t &e);
 
     void         LoadLumpsAndEntities( rbspHeader_t *header, const char *filename );
@@ -341,6 +342,14 @@ namespace Titanfall {
         int16_t   leafWaterData;  // -1 for none
     };
 
+    // 0x24: one per water volume; cells reference it
+    struct LeafWaterData_t {
+        float     surfaceZ;
+        float     minZ;
+        int32_t   textureData;  // the surface's material
+    };
+    static_assert(sizeof(LeafWaterData_t) == 12, "Leaf water data is 12 bytes");
+
     // 0x6C
     struct Portal_t {
         uint8_t   isReversed;
@@ -449,6 +458,8 @@ namespace Titanfall {
         inline std::vector<LevelInfo_t>           levelInfo;  // Only one entry! used a vector to keep load / save code simple
 
         inline std::vector<uint8_t>  physicsCollide;  // VPhysics models, see titanfall_physics.cpp
+        inline std::vector<LeafWaterData_t>  leafWaterData;
+        inline std::vector<MinMax>           leafWaterBounds;  // parallel to leafWaterData
 
         // Stubs
         inline std::vector<uint8_t>  physicsCollide_stub;

@@ -115,6 +115,7 @@ void WriteR1BSPFile(const char *filename) {
     AddLump(file, header.lumps[R1_LUMP_MODELS],            Titanfall::Bsp::models);
     AddLump(file, header.lumps[R1_LUMP_ENTITY_PARTITIONS], Titanfall::Bsp::entityPartitions);
     AddLump(file, header.lumps[R1_LUMP_PHYSICS_COLLIDE],   Titanfall::Bsp::physicsCollide.empty() ? Titanfall::Bsp::physicsCollide_stub : Titanfall::Bsp::physicsCollide);
+    AddLump(file, header.lumps[R1_LUMP_LEAF_WATER_DATA],   Titanfall::Bsp::leafWaterData);
     AddLump(file, header.lumps[R1_LUMP_VERTEX_NORMALS],    Titanfall::Bsp::vertexNormals);
     // GameLump
     {
@@ -318,6 +319,7 @@ void CompileR1BSPFile() {
     // faces, or the full portal graph with worldspawn "_viewportals" "1".
     if (world)
         Titanfall2::EmitVisibility(*world);
+    Titanfall::AssignWaterCells();
 }
 
 

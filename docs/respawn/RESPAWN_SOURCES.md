@@ -189,6 +189,72 @@ their notices. The pinned MIT tf2vpk tool extracted local Coliseum/lobby samples
 BobTheBob retains mp_box port credit; Respawn/Nexon retain map/asset credit.
 See [RESPAWN_DECOMPILE.md](RESPAWN_DECOMPILE.md) for exact scope and test evidence.
 
+TF1 VPhysics VMT patch resolution uses an original targeted parser. Patch include,
+insert and replace behavior was cross-checked as a format reference against Valve's
+[Source SDK 2013 materialpatch.cpp](https://github.com/ValveSoftware/source-sdk-2013/blob/019e91ccd650a34745934c65cdbbe89ffcc44ede/src/utils/vbsp/materialpatch.cpp)
+(commit `019e91ccd650a34745934c65cdbbe89ffcc44ede`, Valve Source SDK license).
+No upstream code was incorporated. The compiler fixture checks emitted triangle
+material assignments; TFO-specific KeyValues and patch parity remain unverified.
+
+Visibility cell merging and budget clustering (4 November 2026) are original
+GPL-2.0-or-later code in `respawn/convex_cells.h` and `titanfall2_portals.cpp`,
+over the inherited NetRadiant BSP/portal builder. Native cell-mask limits were
+independently inspected in local TFO/TF2 client binaries; their hashes and RVAs
+are in [the collision/portal notes](RESPAWN_TRICOLL_PORTALS.md). No binary,
+disassembly, extracted map or external implementation is distributed.
+
+The swept box/capsule references and patch/brush comparison fixtures
+(4-5 November 2026) are original GPL-2.0-or-later mathematical/test code in
+`tools/respawn/swept_{box,capsule,patch_test}.py`. They use continuous separating
+axes and convex distance minimization, with no external implementation copied.
+The TF2 script hull setup was independently inspected in the locally installed
+server binary. Its hash, addresses, native results, and unresolved differences
+are recorded in [the collision/portal notes](RESPAWN_TRICOLL_PORTALS.md).
+
+Exact convex CM brush merging (5 November 2026) is original GPL-2.0-or-later
+code in `respawn/convex_brushes.h` and `titanfall_collisions.cpp`. It uses the
+existing NetRadiant brush-winding builder after an original half-space union
+check. Render/IVP source brushes remain intact. Native TFO seam checks and
+cross-game sweep evidence are recorded in the collision/portal notes.
+
+CM brush bevel output (5 November 2026) reuses this project's inherited
+NetRadiant `AddBrushBevels` algorithm in `map.cpp`, parameterized for collision
+copies and bounded generation. Generated sides inherit source material/mapping;
+`titanfall_collisions.cpp` writes separate non-discard/total counts and the
+native discard suffix. This is GPL-2.0-or-later work with the inherited notices
+retained. Retail count/flag checks, independent SAT/half-space comparisons and
+native crease evidence are recorded in the collision/portal notes. Experimental
+triangle selectors remain local diagnostics, not adopted compiler algorithms.
+
+Triangle bevel serialization (5 November 2026) is original GPL-2.0-or-later
+code in `respawn/tricoll_bevels.h`. It implements the direct/chained layouts
+already documented above, without copying an external implementation. The C++
+serializer was checked against independently decoded local retail references;
+counts, capacity tests and native evidence are in the collision/portal notes.
+The encoder does not supply the still-unfinished geometric selector. No retail
+map, reference list or binary is distributed with the source tests.
+
+Triangle header partitioning (5 November 2026) is original GPL-2.0-or-later
+code in `respawn/tricoll_partition.h`, integrated into the entity patch collector
+in `titanfall_collisions.cpp`. It preserves triangle/reference identity while
+splitting over-budget native headers. Independent decoding tests cover dense
+fans and cascading stream-capacity changes. No external implementation was
+copied. The collision/portal notes record limits, validation and the still-open
+geometric selector.
+
+Convex water coverage (5 November 2026) is original GPL-2.0-or-later code in
+`respawn/convex_coverage.h`. It clips bounded convex brushes and subtracts them
+from disjoint dry fragments to measure union volume within cell bounds. No
+external implementation or game geometry was copied. Analytic solids and
+original map fixtures cover slopes, overlaps and partial cells; native smoke
+evidence and remaining water limitations are in the TF1 notes.
+
+Patch render normal generation (5 November 2026) calls the inherited GPL mesh
+normal calculation in `mesh.cpp` from the Respawn path in `bspfile_shared.cpp`.
+The collapsed-grid fallback and validator/tests are original local code. This
+repairs copying uninitialized map control-point normals. Existing inherited
+copyright notices remain in place. No external implementation was added.
+
 For each incorporation, add the exact upstream commit/release, original authors,
 license and preserved notice locations, affected local files, modifications,
 target build and validation evidence here. Keep each tool's identity in release

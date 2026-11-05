@@ -3,7 +3,7 @@ import math
 import unittest
 
 from portals import check_portal_records, connected, locate_cell
-from tricoll import check_tricoll_records, node_count, triangle_indices
+from tricoll import bevel_index, check_bevel_chain, check_tricoll_records, node_count, triangle_indices
 from validate_records import SCHEMAS
 
 
@@ -72,6 +72,60 @@ class TricollTests(unittest.TestCase):
         r[69][0] = (*r[69][0][:-1], math.nan)
         self.assertIn('nonfinite', str(check_tricoll_records(r)))
 
+    def test_bevel_ranges_must_fit_header(self):
+        r = collision()
+        h = list(r[69][0]); h[5] = 2
+        r[69][0] = tuple(h)
+        r[97] = [(0,)]
+        r[66][0] = (r[66][0][0] | 1 << 24,)
+        r[96] = [(1,), (0,)]
+        self.assertEqual(check_tricoll_records(r), [])
+        for offsets in ([(2,), (0,)], [(0,), (3,)]):
+            r[96] = offsets
+            self.assertIn('bevel range', str(check_tricoll_records(r)))
+
+    def test_packed_bevel_indices_and_special_count(self):
+        packed = 1 | (2 << 11) | (1025 << 22)
+        words = [(packed & 0xffffffff,), (packed >> 32,)]
+        self.assertEqual([bevel_index(words, 0, index) for index in range(3)], [1, 2, 1025])
+        packed_tf1 = 3 | (7 << 10) | (513 << 20) | (9 << 30)
+        words_tf1 = [(packed_tf1 & 0xffffffff,), (packed_tf1 >> 32,)]
+        self.assertEqual([bevel_index(words_tf1, 0, index, 10) for index in range(4)], [3, 7, 513, 9])
+        r = collision()
+        h = list(r[69][0]); h[5] = 1
+        r[69][0] = tuple(h)
+        r[97] = [(2,)]
+        r[66][0] = (r[66][0][0] | 1 << 24,)
+        self.assertIn('bevel triangle index', str(check_tricoll_records(r)))
+        r[66][0] = ((r[66][0][0] & ~(15 << 24)) | 15 << 24,)
+        self.assertIn('bevel chain', str(check_tricoll_records(r)))
+        h = list(r[69][0]); h[5] = 3
+        r[69][0] = tuple(h)
+        r[97] = [(1 | 1 << 22,), (0,)]
+        self.assertEqual(check_tricoll_records(r), [])
+        r[97] = [(1 | 2 << 22,), (0,)]
+        self.assertIn('bevel chain', str(check_tricoll_records(r)))
+
+    def test_cross_header_bevel_chain_in_both_formats(self):
+        headers = [(0, 0, 0, 3, 2), (0, 0, 0, 3, 3)]
+        for width in (10, 11):
+            values = [129, 0, 2, 1, 0, 1]
+            packed = sum(value << (width * index) for index, value in enumerate(values))
+            words = [((packed >> offset) & 0xffffffff,) for offset in range(0, width * len(values), 32)]
+            self.assertTrue(check_bevel_chain(words, 0, 0, len(values), width, headers, 0))
+            self.assertFalse(check_bevel_chain(words, 0, 0, len(values) - 1, width, headers, 0))
+
+
+    def test_zero_count_foreign_segment_does_not_terminate_native_chain(self):
+        headers = [(0, 0, 0, 3, 1), (0, 0, 0, 3, 1)]
+        for width in (10, 11):
+            def words(values):
+                packed = sum(value << (width * i) for i, value in enumerate(values))
+                return [((packed >> bit) & 0xffffffff,) for bit in range(0, width * len(values), 32)]
+            self.assertFalse(check_bevel_chain(words([0,0]),0,0,2,width,headers,1))
+            self.assertTrue(check_bevel_chain(words([0,0,128,0]),0,0,4,width,headers,1))
+            self.assertTrue(check_bevel_chain(words([128,0]),0,0,2,width,headers,1))
+
 
 class PortalTests(unittest.TestCase):
     def test_front_child_zero_and_bidirectional_connectivity(self):
@@ -83,6 +137,16 @@ class PortalTests(unittest.TestCase):
         self.assertTrue(connected(r, 1, 0))
         r[107][0] = (0, 0, 1, -1)
         self.assertFalse(connected(r, 0, 1))
+
+    def test_native_cell_mask_reserves_two_sentinels(self):
+        for version in (29, 37):
+            r = visibility()
+            r[107] = [(0, 0, 1, -1)] * 1022
+            r[119] = [r[119][0]] * 1022
+            self.assertEqual(check_portal_records(r, version), [])
+            r[107].append((0, 0, 1, -1))
+            r[119].append(r[119][0])
+            self.assertIn('1024-bit native mask', str(check_portal_records(r, version)))
 
     def test_cycle_fails_without_recursion(self):
         r = visibility()
@@ -106,6 +170,16 @@ class PortalTests(unittest.TestCase):
         r[114] = [(0, -1, -1, -1, -1, -1, -1, -1)]
         r[115] = [(-1,) * 8]
         self.assertIn('intersection edge/vertex pair', str(check_portal_records(r)))
+
+    def test_empty_global_root_uses_float32_accumulation_sentinels(self):
+        r = visibility()
+        maximum = float.fromhex('0x1.fffffep+127')
+        r[119][0] = (maximum, maximum, maximum, 0, 0, 0, -maximum, -maximum, -maximum, 0, 0)
+        self.assertIn('invalid cell access bounds', str(check_portal_records(r, 29)))
+        r[107][0] = (1, 0, 3, -1)
+        self.assertEqual(check_portal_records(r, 29), [])
+        n = list(r[119][0]); n[5] = 1; r[119][0] = tuple(n)
+        self.assertIn('invalid cell access bounds', str(check_portal_records(r, 29)))
 
     def test_only_global_roots_allow_infinity(self):
         r = visibility()

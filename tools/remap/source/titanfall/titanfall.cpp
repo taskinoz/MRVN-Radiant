@@ -167,6 +167,7 @@ void WriteR1BSPFile(const char *filename) {
     AddLump(file, header.lumps[R1_LUMP_TRICOLL_NODES],               Titanfall::Bsp::tricollNodes);
     AddLump(file, header.lumps[R1_LUMP_TRICOLL_HEADERS],             Titanfall::Bsp::tricollHeaders);
     AddLump(file, header.lumps[R1_LUMP_TRICOLL_BEVEL_STARTS],        Titanfall::Bsp::tricollBevelStarts);
+    AddLump(file, header.lumps[R1_LUMP_TRICOLL_BEVEL_INDICES],      Titanfall::Bsp::tricollBevelIndices);
     AddLump(file, header.lumps[R1_LUMP_CM_GRID_CELLS],               Titanfall::Bsp::cmGridCells);
     AddLump(file, header.lumps[R1_LUMP_CM_GEO_SETS],                 Titanfall::Bsp::cmGeoSets);
     AddLump(file, header.lumps[R1_LUMP_CM_GEO_SET_BOUNDS],           Titanfall::Bsp::cmGeoSetBounds);
@@ -283,7 +284,7 @@ void CompileR1BSPFile() {
             Titanfall::EmitOcclusionMeshes( entity );
             continue; // Don't emit as entity
         } else {
-            if( entity.brushes.size() ) {
+            if( entity.brushes.size() || entity.patches ) {
                 Titanfall::BeginModel(entity);
                 Shared::MakeMeshes(entity);
                 Titanfall::EmitMeshes(entity);

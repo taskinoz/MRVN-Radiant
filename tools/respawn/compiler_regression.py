@@ -6,6 +6,8 @@ No game assets required. Outputs and logs remain in a new working directory.
 """
 import argparse
 import json
+import math
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -15,6 +17,7 @@ from validate_records import load_records, validate
 from game_lump import inspect_game_lump, relocate_bsp
 from portals import locate_cell, connected
 from tricoll import triangle_indices
+from decompile_bsp import parse_entities
 
 
 def brush(x, slope, materials):
@@ -51,6 +54,15 @@ def box(lo, hi, material):
     return "\n".join(lines + ["}"])
 
 
+def triangle_prism(triangle, bottom, material):
+    a,b,c = triangle
+    low = [(v[0],v[1],bottom) for v in triangle]
+    faces = [(a,b,c), (low[2],low[1],low[0])]
+    faces += [(triangle[(i+1)%3],triangle[i],low[i]) for i in range(3)]
+    return '\n'.join(['{',*(' '.join('( %.6f %.6f %.6f )' % v for v in face)+
+                                ' '+material+' 0 0 0 1 1 0 0 0' for face in faces),'}'])
+
+
 def entity(**keys):
     return "{\n" + "".join(f'"{k}" "{v}"\n' for k, v in keys.items()) + "}\n"
 
@@ -84,7 +96,21 @@ compat/bump
 }'''
 
 
-def collision_portal_fixtures(folder, command, reports):
+def check_triangle_z_order(records):
+    for h in records[69]:
+        for word, in records[66][h[7]:h[7] + h[4]]:
+            z = [records[3][h[6] + i][2] for i in triangle_indices(word)]
+            order = sorted(range(3), key=lambda i: (z[i], i))
+            flags = word >> 28
+            low = flags & 3
+            if low > 2 or low != order[0]:
+                raise RuntimeError('triangle collision has the wrong lowest-Z vertex')
+            high = (1 & ~low, 2 & ~low)[(flags >> 2) & 1]
+            if high != order[-1]:
+                raise RuntimeError('triangle collision has the wrong highest-Z vertex or tie order')
+
+
+def collision_portal_fixtures(folder, command, reports, game):
     for name, source in [('patch', '{\n"classname" "worldspawn"\n' + PATCH + '\n}\n'),
                          ('portal-open', portal_fixture()),
                          ('portal-closed', portal_fixture(True)),
@@ -99,6 +125,13 @@ def collision_portal_fixtures(folder, command, reports):
             raise RuntimeError(f'{name}: {report["issues"]}')
         r = load_records(bsp, inspect(bsp))
         if name == 'patch':
+            check_triangle_z_order(r)
+            for vertex in r[73]:
+                if r[30][vertex[1]][2] < .5:
+                    raise RuntimeError('Upward patch render normal has the wrong orientation')
+            centers = [r[30][v[1]] for v in r[73] if r[3][v[0]][:2] == (0,0)]
+            if not centers or any(abs(n[0])+abs(n[1])+abs(n[2]-1) > 1e-5 for n in centers):
+                raise RuntimeError('Symmetric patch center does not have its analytic upward normal')
             # One header for the patch's eight triangles, with 4 * ((8 + 3) // 6) nodes.
             if len(r[69]) != 1 or len(r[66]) != 8 or len(r[68]) != 4 or len(r[96]) != 8:
                 raise RuntimeError('patch collision did not use one noded eight-triangle header')
@@ -130,7 +163,226 @@ def collision_portal_fixtures(folder, command, reports):
                     if not any(q[1] == 0 and q[5] == cell and q[0] != p[0] and q[6] == p[6]
                                for q in r[108][other[1]:other[1]+other[0]]):
                         raise RuntimeError('missing reciprocal cell portal')
-        reports.append({'game': 'titanfall2', 'fixture': name, 'issues': []})
+        reports.append({'game': game, 'fixture': name, 'issues': []})
+
+
+def collision_brush_merge_fixtures(folder, command, reports, game):
+    first = triangle_prism(((0,0,64),(0,64,64),(64,64,64)),0,'compat/bump')
+    second = triangle_prism(((0,0,64),(64,64,64),(64,0,64)),0,'compat/bump')
+    variants = [('convex',first+'\n'+second,1),
+                ('material',first+'\n'+second.replace('compat/bump','compat/unlit'),2),
+                ('mapping',first+'\n'+second.replace('compat/bump 0 0','compat/bump 8 0'),2),
+                ('concave',box((0,0,0),(32,64,64),'bump')+'\n'+box((32,0,0),(64,32,64),'bump'),2),
+                ('gap',box((0,0,0),(32,64,64),'bump')+'\n'+box((32.25,0,0),(64,64,64),'bump'),2)]
+    if game == 'titanfall2': variants.append(('recovered',first+'\n'+second,2))
+    for name,geometry,count in variants:
+        path = folder/('brush-merge-'+name+'.map')
+        recovered = '"_remap_contents_0" "1"\n"_remap_contents_1" "2"\n' if name == 'recovered' else ''
+        path.write_text('{\n"classname" "worldspawn"\n'+recovered+geometry+'\n}\n')
+        with path.with_suffix('.log').open('wb') as log:
+            subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+        bsp = path.with_suffix('.bsp');inventory = inspect(bsp);r = load_records(bsp,inventory)
+        if validate(bsp)['issues'] or len(r[92]) != count:
+            raise RuntimeError(f'{name}: collision merging ignored geometry/material constraints')
+        plane_base = r[85][0][-1]
+        def inside(point):
+            for brush in r[92]:
+                if any(abs(point[a]-brush[a]) > brush[6+a]+1e-5 for a in range(3)):
+                    continue
+                planes = [r[1][plane_base+brush[9]+i-r[93][brush[9]+i][0]] for i in range(brush[4])]
+                if all(sum(p[a]*point[a] for a in range(3)) <= p[3]+1e-5 for p in planes):
+                    return True
+            return False
+        for x in (-0.25,0,16,32,32.125,48,64,64.25):
+            for y in (-0.25,0,16,32,48,64,64.25):
+                for z in (-0.25,0,32,64,64.25):
+                    expected = 0<=x<=64 and 0<=y<=64 and 0<=z<=64
+                    if name == 'concave': expected &= x<=32 or y<=32
+                    if name == 'gap': expected &= x<=32 or x>=32.25
+                    if inside((x,y,z)) != expected:
+                        raise RuntimeError(f'{name}: merged collision changed its authored union at {(x,y,z)}')
+        if name == 'recovered' and not {1,2}.issubset({value for value, in r[91]}):
+            raise RuntimeError('Recovered per-brush collision contents changed during merging')
+        if game == 'titanfallonline': physics_checks(bsp,inventory,2)
+        reports.append({'game':game,'fixture':'brush-merge-'+name,'issues':[]})
+    path = folder/'brush-merge-entity.map'
+    path.write_text('{\n"classname" "worldspawn"\n'+brush(1024,True,['bump']*6)+'\n}\n'+
+                    '{\n"classname" "func_brush"\n'+first+'\n'+second+'\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+    bsp = path.with_suffix('.bsp');inventory = inspect(bsp);r = load_records(bsp,inventory)
+    if (validate(bsp)['issues'] or len(r[14]) != 2 or len(r[92]) != 2 or
+            r[92][1][4] != (4 if game == 'titanfall2' else 0) or r[92][1][9] != r[92][0][4]):
+        raise RuntimeError('Merged brush entity lost its model or cutting-plane prefix')
+    if game == 'titanfallonline': physics_checks(bsp,inventory,2,model_index=1)
+    reports.append({'game':game,'fixture':'brush-merge-entity','issues':[]})
+
+
+
+def collision_brush_bevel_fixture(folder, command, reports, game):
+    roof = ((0,0,0),(0,64,64),(64,0,32))
+    wedge = triangle_prism(roof,-32,'compat/bump')
+    path = folder/'brush-bevels.map'
+    path.write_text('{\n"classname" "worldspawn"\n'+wedge+'\n}\n'+
+                    '{\n"classname" "func_brush"\n'+box((1024,0,0),(1088,64,64),'bump')+'\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+    bsp = path.with_suffix('.bsp');inventory = inspect(bsp);r = load_records(bsp,inventory)
+    if validate(bsp)['issues'] or len(r[92]) != 2:
+        raise RuntimeError('Brush bevel fixture failed record validation')
+    first,second = r[92]
+    if not 0 < first[3] < first[4] or second[4] != (4 if game == 'titanfall2' else 0) or second[9] != first[4]:
+        raise RuntimeError('Brush bevel count or subsequent brush plane prefix is incorrect')
+    base = r[85][0][-1]
+    if game == 'titanfall2':
+        corner_planes = [r[1][base+second[9]+i-r[93][second[9]+i][0]] for i in range(second[4])]
+        expected_normals = {(-1,1),(-1,-1),(1,-1),(1,1)}
+        if second[3] != 0 or {(round(p[0]*math.sqrt(2)),round(p[1]*math.sqrt(2))) for p in corner_planes} != expected_normals:
+            raise RuntimeError('TF2 axial box lacks its four distinct discarded corner planes')
+        corners = [(x,y,z) for x in (1024,1088) for y in (0,64) for z in (0,64)]
+        for i,p in enumerate(corner_planes):
+            distances = [sum(p[a]*v[a] for a in range(3))-p[3] for v in corners]
+            if abs(p[2]) > 1e-6 or abs(p[0]**2+p[1]**2-1) > 1e-6 or abs(max(distances)) > 1e-3:
+                raise RuntimeError('TF2 corner plane does not support the authored box')
+            if not r[94][6*second[5]+second[9]+6+i][0] & 0x4000:
+                raise RuntimeError('TF2 corner plane lacks the native discard flag')
+    vertices = [*roof,*((x,y,-32) for x,y,_ in roof)]
+    for i in range(first[3],first[4]):
+        plane = r[1][base+first[9]+i-r[93][first[9]+i][0]]
+        distances = [sum(plane[a]*v[a] for a in range(3))-plane[3] for v in vertices]
+        if max(distances) > 1e-4 or min(abs(d) for d in distances) > 1e-4:
+            raise RuntimeError('Generated brush bevel cuts the source volume or does not support its boundary')
+        prop = r[94][6*first[5]+first[9]+6+i][0]
+        if not prop & 0x4000:
+            raise RuntimeError('Generated brush bevel lacks the native discard flag')
+    if game == 'titanfallonline': physics_checks(bsp,inventory,1,z_bounds=(-32,64))
+    # Compare the native plane representation with independent triangle SAT.
+    from swept_box import sweep_mesh, sweep_halfspaces
+    low = [(x,y,-32) for x,y,_ in roof]
+    faces = [tuple(roof),tuple(reversed(low))]
+    for i in range(3):
+        j = (i+1)%3
+        faces.extend(((roof[i],roof[j],low[j]),(roof[i],low[j],low[i])))
+    planes = []
+    for axis in range(3):
+        for sign in (-1,1):
+            normal = [0,0,0];normal[axis] = sign
+            planes.append((*normal,sign*first[axis]+first[6+axis]))
+    for i in range(first[4]):
+        planes.append(r[1][base+first[9]+i-r[93][first[9]+i][0]])
+    authored = planes[:6+first[3]]
+    missing_bevel_differences = 0
+    for mins,maxs in (((-4,-8,0),(8,12,16)),((-16,-16,0),(16,16,32)),((-8,-24,-4),(8,24,20))):
+        for dx in (-1,0,1):
+            for dy in (-1,0,1):
+                for dz in (-1,0,1):
+                    if (dx,dy,dz)==(0,0,0):continue
+                    start = (16+160*dx,16+160*dy,160*dz)
+                    end = (16-160*dx,16-160*dy,-160*dz)
+                    expected = sweep_mesh(start,end,mins,maxs,faces)
+                    actual = sweep_halfspaces(start,end,mins,maxs,planes)
+                    old = sweep_halfspaces(start,end,mins,maxs,authored)
+                    distance = math.dist(start,end)
+                    if expected is None or actual is None or abs(expected-actual)*distance>1e-3:
+                        raise RuntimeError('Emitted brush bevel planes disagree with exact authored box-sweep contact')
+                    missing_bevel_differences += old is None or abs(expected-old)*distance>1e-3
+    if not missing_bevel_differences:
+        raise RuntimeError('Brush bevel sweep fixture did not exercise a missing separating plane')
+    reports.append({'game':game,'fixture':'native-brush-bevels','box_sweeps':78,
+                    'without_bevel_differences':missing_bevel_differences,'issues':[]})
+
+    radius = 1105
+    ring = set()
+    for x in range(-radius,radius+1):
+        remaining = radius*radius-x*x; y = math.isqrt(remaining)
+        if y*y==remaining: ring.update(((x,y,0),(x,-y,0)))
+    ring = sorted(ring,key=lambda point:math.atan2(point[1],point[0]))
+    pieces = []
+    for upper in (True,False):
+        cone = [((1,1,0),(-1,1,0),(-1,-1,0)) if upper else ((-1,-1,0),(-1,1,0),(1,1,0))]
+        apex = (0,0,64 if upper else -64)
+        for i,point in enumerate(ring):
+            nxt = ring[(i+1)%len(ring)]
+            cone.append((apex,nxt,point) if upper else (apex,point,nxt))
+        pieces.append('\n'.join(['{',*(' '.join('( %s %s %s )'%v for v in face)+
+                                    ' compat/bump 0 0 0 1 1 0 0 0' for face in cone),'}']))
+    path = folder/'brush-bevel-budget.map'
+    path.write_text('{\n"classname" "worldspawn"\n'+'\n'.join(pieces)+'\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+    bsp = path.with_suffix('.bsp');r = load_records(bsp,inspect(bsp))
+    if (validate(bsp)['issues'] or len(r[92])!=2 or any(not b[3]<b[4]<=255 for b in r[92]) or
+            'rejected by native bevel-plane budget' not in path.with_suffix('.log').read_text(errors='replace')):
+        raise RuntimeError('Convex merging overflowed the native plane budget instead of retaining its valid pieces')
+    reports.append({'game':game,'fixture':'native-brush-bevel-budget','issues':[]})
+
+
+
+def portal_boundary_fixtures(folder, command, reports, game):
+    # A nonsolid slab must preserve authored partitions in otherwise convex
+    # empty space. Samples remain graph-connected through ordinary portals.
+    room = portal_fixture(closed=True)
+    room = room[:room.rfind(box((-8, -128, 0), (8, 128, 256), 'bump'))]
+    for kind in ('hint', 'areaportal'):
+        path = folder / ('portal-' + kind + '.map')
+        slab = box((-8, -128, 0), (8, 128, 256), kind)
+        if kind == 'hint':
+            # Only the final face is a hint; all other faces are skipped.
+            slab = slab.replace('compat/hint', 'compat/skip', 5)
+        path.write_text(room + slab + '\n}\n', encoding='utf-8')
+        with path.with_suffix('.log').open('wb') as log:
+            subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+        bsp = path.with_suffix('.bsp')
+        report = validate(bsp)
+        if report['issues']:
+            raise RuntimeError(f'portal {kind}: {report["issues"]}')
+        records = load_records(bsp, inspect(bsp))
+        a, b = [locate_cell(records, point) for point in ((-32, 0, 64), (32, 0, 64))]
+        if a == b or not connected(records, a, b):
+            raise RuntimeError(f'{kind} partition was erased or made opaque')
+        reports.append({'game': game, 'fixture': 'portal-' + kind, 'issues': []})
+
+
+def portal_budget_fixture(folder, command, reports, game):
+    # Dense but connected space on either side of a sealed divider. Its ordinary
+    # convex partition exceeds the native cell budget, without any game assets.
+    end = 34 * 32
+    pieces = [box((-16, -16, -16), (end+16, end+16, 0), 'bump'),
+              box((-16, -16, 128), (end+16, end+16, 144), 'bump'),
+              box((-16, -16, 0), (0, end+16, 128), 'bump'),
+              box((end, -16, 0), (end+16, end+16, 128), 'bump'),
+              box((0, -16, 0), (end, 0, 128), 'bump'),
+              box((0, end, 0), (end, end+16, 128), 'bump'),
+              box((540, 0, 0), (548, end, 128), 'bump')]
+    for x in range(34):
+        for y in range(34):
+            pieces.append(box((x*32+8, y*32+8, 0), (x*32+24, y*32+24, 64), 'bump'))
+    # A hint spanning the left chamber must also survive the nonconvex budget
+    # pass, including routes around subdivisions from the many pillar faces.
+    hint = box((256, 0, 0), (264, end, 128), 'hint')
+    pieces.append(hint.replace('compat/hint', 'compat/skip', 5))
+    path = folder / 'portal-budget.map'
+    path.write_text('{\n"classname" "worldspawn"\n"_viewportals" "1"\n' + '\n'.join(pieces) + '\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    report = validate(bsp)
+    if report['issues']:
+        raise RuntimeError(f'portal budget: {report["issues"]}')
+    r = load_records(bsp, inspect(bsp))
+    a, b, c = [locate_cell(r, p) for p in ((4,4,96), (end-4,4,96), (4,end-4,96))]
+    if a == b or connected(r, a, b) or not connected(r, a, c):
+        raise RuntimeError('cell budget clustering changed closed-room connectivity')
+    for y in range(4, end, 32):
+        before, after = [locate_cell(r, point) for point in ((255,y,96), (257,y,96))]
+        if before == after or not connected(r, before, after):
+            raise RuntimeError('cell budget clustering erased an authored hint boundary')
+    solid = locate_cell(r, (544,4,96))
+    if solid != locate_cell(r, (-8,128,64)) or r[107][solid][0] or r[119][solid][5]:
+        raise RuntimeError('opaque leaves lost their empty shared cell')
+    if len(r[107]) != 1022 or len([p for p, _ in r[106] if p == -1]) <= 1022:
+        raise RuntimeError('stress map did not exercise native cell budget clustering')
+    reports.append({'game': game, 'fixture': 'portal-budget', 'issues': []})
 
 
 # A floor with a roof over its x<0 half. The sun travels down at 60 degrees
@@ -309,19 +561,25 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("roof does not reduce sky ambient")
 
 
-def physics_checks(bsp, inventory, brushes):
-    """TF1 world VPhysics: one convex IVP ledge per brush, watertight and outward facing."""
+def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
+    """Check TF1 world/entity IVP ledges, outward triangles and watertight edges."""
     lump = inventory["lumps"][0x1D]
     with bsp.open("rb") as stream:
         stream.seek(lump["offset"])
         data = stream.read(lump["length"])
-    model, size, keysize, count = struct.unpack_from("<4i", data, 0)
-    if model != 0 or count < 1 or data[-16:] != struct.pack("<4i", -1, -1, 0, 0):
+    model_offset = 0
+    while True:
+        model, size, keysize, count = struct.unpack_from("<4i", data, model_offset)
+        if model in (model_index, -1):
+            break
+        model_offset += 16 + size + keysize
+    if model != model_index or count < 1 or data[-16:] != struct.pack("<4i", -1, -1, 0, 0):
         raise RuntimeError(f"bad VPhysics model header {model, size, keysize, count}")
-    keydata = data[16 + size:16 + size + keysize]
-    if not keydata.startswith(b"staticsolid {") or not keydata.endswith(b"\x00"):
+    keydata = data[model_offset + 16 + size:model_offset + 16 + size + keysize]
+    if not keydata.startswith(b"staticsolid {" if model_index == 0 else b"solid {") or not keydata.endswith(b"\x00"):
         raise RuntimeError(f"bad VPhysics keydata {keydata[:40]!r}")
-    offset, ledges = 16, 0
+    offset, ledges = model_offset + 16, 0
+    heights = []
     for _ in range(count):
         solid_size = struct.unpack_from("<i", data, offset)[0]
         solid = data[offset + 4:offset + 4 + solid_size]
@@ -348,6 +606,7 @@ def physics_checks(bsp, inventory, brushes):
                 opposite = (word >> 16) & 0x7FFF
                 return word & 0xFFFF, opposite - 0x8000 if opposite & 0x4000 else opposite
             corners = sorted({edge(ledge + 20 + 16 * t + 4 * k)[0] for t in range(triangles) for k in range(3)})
+            heights.extend(-point(i)[1] * 39.3701 for i in corners)
             centre = [sum(point(i)[a] for i in corners) / len(corners) for a in range(3)]
             for t in range(triangles):
                 tri = ledge + 16 + 16 * t
@@ -365,8 +624,78 @@ def physics_checks(bsp, inventory, brushes):
                     other_k = (other - other_tri - 4) // 4
                     if edge(other)[0] != ids[(k + 1) % 3] or edge(other_tri + 4 + 4 * ((other_k + 1) % 3))[0] != ids[k]:
                         raise RuntimeError("VPhysics edge is not twinned with its reverse")
+    if z_bounds is not None and any(abs(a - b) > 0.001 for a, b in zip((min(heights), max(heights)), z_bounds)):
+        raise RuntimeError(f"VPhysics Z bounds {(min(heights), max(heights))} differ from {z_bounds}")
     if ledges != brushes:
         raise RuntimeError(f"expected {brushes} VPhysics ledges, got {ledges}")
+
+
+def physics_virtual_mesh_fixture(folder, command, reports, game):
+    # World patches collide in VPhysics through the engine's TRICOLL virtual
+    # meshes, not prisms. As in retail, only clip-only headers get keydata vtric
+    # entries naming their collision contents; solid and bullet-clip do not.
+    patches = [PATCH.replace('compat/bump', f'compat/{name}') for name in ('bump', 'playerclip', 'bulletclip')]
+    patches = [p.replace('( -128 ', f'( {-128 + 512 * i} ').replace('( 0 ', f'( {512 * i} ').replace('( 128 ', f'( {128 + 512 * i} ')
+               for i, p in enumerate(patches)]
+    path = folder/'physics-virtual-mesh.map'
+    path.write_text('{\n"classname" "worldspawn"\n' + box((-256, -256, -64), (1280, 256, -48), 'bump') + '\n' +
+                    '\n'.join(patches) + '\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    physics_checks(bsp, inventory, 1)  # the floor brush only: no patch prisms
+    records = load_records(bsp, inventory)
+    if len(records[69]) != 3:
+        raise RuntimeError(f'expected three patch TRICOLL headers, got {len(records[69])}')
+    contents = [c for (c,) in records[91]]
+    header_contents = {}
+    words = [w for _, n, w in records[87] if n == 1] + [w for (w,) in records[89]]
+    for word in words:
+        if word >> 24 == 0x40:
+            header_contents[(word >> 8) & 0xffff] = contents[word & 0xff]
+    with bsp.open('rb') as stream:
+        entry = inventory['lumps'][29]
+        stream.seek(entry['offset']); data = stream.read(entry['length'])
+    _, size, keysize, _ = struct.unpack_from('<4i', data)
+    keydata = data[16 + size:16 + size + keysize].decode('ascii')
+    vtric = {int(i): int(c) for i, c in re.findall(r'vtric \{\n"index" "(\d+)"\n"contents" "(\d+)"\n\}', keydata)}
+    expected = {h: c for h, c in header_contents.items() if c == 0x10000}
+    if sorted(header_contents.values()) != [0x1, 0x10000, 0x480000] or vtric != expected:
+        raise RuntimeError(f'vtric entries {vtric} do not match clip-only headers {header_contents}')
+    if not keydata.index('virtualtrimeshes {}') < keydata.index('vtric {') < keydata.index('materialtable {'):
+        raise RuntimeError('vtric entries are outside their retail keydata position')
+    reports.append({'game': game, 'fixture': 'physics-virtual-mesh', 'issues': []})
+
+
+def physics_material_limit_fixture(folder, command, reports, game):
+    # A full 1..127 table still accepts a reused property. A new 128th property
+    # must fail instead of silently taking the first property's sound/friction.
+    pieces = [box((i*32,0,0),(i*32+16,16,16),f'limit_{i:03}') for i in range(127)]
+    pieces.append(box((4096,0,0),(4112,16,16),'limit_000'))
+    path = folder/'physics-material-limit.map'
+    path.write_text('{\n"classname" "worldspawn"\n'+'\n'.join(pieces)+'\n}\n')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1]+[str(path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    physics_checks(bsp,inventory,128)
+    with bsp.open('rb') as stream:
+        entry = inventory['lumps'][29]
+        stream.seek(entry['offset']);data = stream.read(entry['length'])
+    table = {(int(name),int(value)) for name,value in re.findall(rb'"limit_prop_(\d+)" "(\d+)"',data)}
+    if table != {(i,i+1) for i in range(127)}:
+        raise RuntimeError('Full VPhysics surface-property table was aliased or truncated')
+    reports.append({'game':game,'fixture':'physics-material-limit','issues':[]})
+    overflow = folder/'physics-material-overflow.map'
+    overflow.write_text('{\n"classname" "worldspawn"\n'+'\n'.join(pieces[:-1])+ '\n'+
+                        box((4096,0,0),(4112,16,16),'limit_127')+'\n}\n')
+    with overflow.with_suffix('.log').open('wb') as log:
+        result = subprocess.run(command[:-1]+[str(overflow)],stdout=log,stderr=subprocess.STDOUT)
+    text = overflow.with_suffix('.log').read_text(errors='replace')
+    if result.returncode == 0 or '127 distinct surface properties' not in text or overflow.with_suffix('.bsp').exists():
+        raise RuntimeError('Unrepresentable VPhysics surface-property table was not rejected')
+    reports.append({'game':game,'fixture':'physics-material-overflow-rejected','issues':[]})
 
 
 def main():
@@ -380,10 +709,38 @@ def main():
     shaders.mkdir(parents=True)
     types = {"flat": "LitFlatGeneric", "bump": "LitBumpGeneric",
              "unlit": "UnlitGeneric", "ts": "UnlitTSGeneric",
-             "overlap_extra": "UnlitGeneric", "overlap": "UnlitGeneric"}
+             "overlap_extra": "UnlitGeneric", "overlap": "UnlitGeneric",
+             "vmt_bare": "LitBumpGeneric", "vmt_mixed": "LitBumpGeneric", "vmt_comment": "LitBumpGeneric",
+             "vmt_inherit": "LitBumpGeneric", "vmt_replace": "LitBumpGeneric", "vmt_insert": "LitBumpGeneric",
+             "vmt_chain": "LitBumpGeneric", "vmt_no_replace": "LitBumpGeneric", "vmt_cycle": "LitBumpGeneric",
+             "vmt_proxy": "LitBumpGeneric"}
     (shaders / "compat.shader").write_text("\n".join(
         f"textures/compat/{name}\n{{\n $shadertype {kind}\n}}"
-        for name, kind in types.items()) + '\ntextures/compat/sky\n{\n $shadertype LitBumpGeneric\n $compileflag sky\n $surfaceflag sky\n}\n', encoding="utf-8")
+        for name, kind in types.items()) + '\ntextures/compat/sky\n{\n $shadertype LitBumpGeneric\n $compileflag sky\n $surfaceflag sky\n}\n' +
+        ''.join(f'\ntextures/compat/{name}\n{{\n $contentflag nonsolid\n $contentflag {fluid}\n}}\n'
+                for name, fluid in (('water', 'water'), ('water_alt', 'water'), ('slime', 'slime'))), encoding="utf-8")
+    with (shaders / "compat.shader").open('a', encoding='utf-8') as stream:
+        for kind in ('hint', 'skip', 'areaportal'):
+            stream.write(f'\ntextures/compat/{kind}\n{{\n $shadertype LitBumpGeneric\n'
+                         f' $contentflag nonsolid\n $compileflag nodraw\n $compileflag {kind}\n}}\n')
+    with (shaders / 'compat.shader').open('a',encoding='utf-8') as stream:
+        stream.write('\ntextures/compat/playerclip\n{\n $shadertype LitBumpGeneric\n $contentflag playerclip\n}\n')
+        stream.write('\ntextures/compat/bulletclip\n{\n $shadertype LitBumpGeneric\n $contentflag bulletclip\n $contentflag blocklosclip\n}\n')
+        for i in range(128):
+            stream.write(f'\ntextures/compat/limit_{i:03}\n{{\n $shadertype LitBumpGeneric\n $surfaceprop limit_prop_{i:03}\n}}\n')
+    vmts = root / 'assets/materials/compat'
+    vmts.mkdir(parents=True)
+    (vmts / 'vmt_bare.vmt').write_text('LightmappedGeneric { $surfaceprop metal }')
+    (vmts / 'vmt_mixed.vmt').write_text('"LightmappedGeneric" { "$surfaceprop" "glass" }')
+    (vmts / 'vmt_comment.vmt').write_text('LightmappedGeneric { // "$surfaceprop" "wrong"\n /* "$surfaceprop" "also_wrong" */ $surfaceprop "wood" }')
+    (vmts / 'vmt_inherit.vmt').write_text('Patch { include "materials/compat/vmt_bare.vmt" insert { "$basetexture" "x" } }')
+    (vmts / 'vmt_replace.vmt').write_text('Patch { include "materials/compat/vmt_bare.vmt" replace { "$surfaceprop" "rubber" } }')
+    (vmts / 'vmt_insert.vmt').write_text('Patch { include "materials/compat/vmt_bare.vmt" insert { "$surfaceprop" "sand" } }')
+    (vmts / 'vmt_chain.vmt').write_text('Patch { include "materials/compat/vmt_replace.vmt" replace { "$surfaceprop" "stone" } }')
+    (vmts / 'vmt_empty.vmt').write_text('LightmappedGeneric { "$basetexture" "x" }')
+    (vmts / 'vmt_no_replace.vmt').write_text('Patch { include "materials/compat/vmt_empty.vmt" replace { "$surfaceprop" "wrong" } }')
+    (vmts / 'vmt_cycle.vmt').write_text('Patch { include "materials/compat/vmt_cycle.vmt" insert { "$surfaceprop" "wrong" } }')
+    (vmts / 'vmt_proxy.vmt').write_text('LightmappedGeneric { Proxies { Test { "$surfaceprop" "wrong" } } "$surfaceprop" "dirt" }')
     geometry = '{\n"classname" "worldspawn"\n' + "\n".join([
         brush(0, True, ["bump"] * 6),
         brush(128, False, ["flat", "bump", "unlit", "ts", "flat", "bump"]),
@@ -432,8 +789,144 @@ def main():
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":
                 physics_checks(bsp, inventory, 5)
+                vmt_path = folder / 'vmt-physics.map'
+                vmt_path.write_text('{\n"classname" "worldspawn"\n' + '\n'.join(
+                    box((x, 0, 0), (x + 64, 64, 64), name) for x, name in
+                    ((0, 'vmt_bare'), (128, 'vmt_mixed'), (256, 'vmt_comment'),
+                     (384, 'vmt_inherit'), (512, 'vmt_replace'), (640, 'vmt_insert'),
+                     (768, 'vmt_chain'), (896, 'vmt_no_replace'), (1024, 'vmt_cycle'),
+                     (1152, 'vmt_proxy'))) + '\n}\n')
+                with vmt_path.with_suffix('.log').open('wb') as log:
+                    subprocess.run(command[:-1] + [str(vmt_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+                if 'unable to resolve VMT materials/compat/vmt_cycle.vmt' not in vmt_path.with_suffix('.log').read_text(errors='replace'):
+                    raise RuntimeError('cyclic VMT include did not produce a compiler warning')
+                vmt_bsp = vmt_path.with_suffix('.bsp')
+                vmt_lump = inspect(vmt_bsp)['lumps'][29]
+                with vmt_bsp.open('rb') as stream:
+                    stream.seek(vmt_lump['offset'])
+                    physics = stream.read(vmt_lump['length'])
+                _, data_size, key_size, _ = struct.unpack_from('<4i', physics)
+                keydata = physics[16 + data_size:16 + data_size + key_size]
+                table = {int(index): name.decode() for name, index in
+                         re.findall(rb'"([^"\n]+)" "(\d+)"', keydata[keydata.index(b'materialtable {'):])}
+                solid_size = struct.unpack_from('<i', physics, 16)[0]
+                solid = physics[20:20 + solid_size]
+                nodes = [28 + struct.unpack_from('<i', solid, 60)[0]]
+                found = {}
+                while nodes:
+                    node = nodes.pop()
+                    right, ledge = struct.unpack_from('<ii', solid, node)
+                    if right:
+                        nodes.extend((node + 28, node + right))
+                        continue
+                    ledge += node
+                    point_offset = struct.unpack_from('<i', solid, ledge)[0]
+                    triangle_count = struct.unpack_from('<h', solid, ledge + 12)[0]
+                    vertex_ids, materials = set(), set()
+                    for triangle in range(triangle_count):
+                        tri = ledge + 16 + 16 * triangle
+                        materials.add((struct.unpack_from('<I', solid, tri)[0] >> 24) & 127)
+                        vertex_ids.update(struct.unpack_from('<I', solid, tri + 4 + 4 * k)[0] & 0xffff
+                                          for k in range(3))
+                    x = sum(struct.unpack_from('<f', solid, ledge + point_offset + 16 * vertex)[0]
+                            for vertex in vertex_ids) * 39.3701 / len(vertex_ids)
+                    found[round(x / 128)] = {table.get(material) for material in materials}
+                if found != {0: {'metal'}, 1: {'glass'}, 2: {'wood'}, 3: {'metal'},
+                             4: {'rubber'}, 5: {'sand'}, 6: {'stone'}, 7: {'default'},
+                             8: {'default'}, 9: {'dirt'}}:
+                    raise RuntimeError(f'VMT surface properties not assigned to their brushes: {found}')
+                reports.append({'game': game, 'fixture': 'vmt-physics-materials', 'issues': []})
+                physics_material_limit_fixture(folder,command,reports,game)
+                physics_virtual_mesh_fixture(folder,command,reports,game)
+                fluid_path = folder / 'fluids.map'
+                fluid_path.write_text('{\n"classname" "worldspawn"\n' +
+                                      box((0, 0, -64), (64, 64, -16), 'bump') + '\n' +
+                                      box((0, 0, 0), (64, 64, 64), 'water') + '\n' +
+                                      box((128, 0, 0), (192, 64, 64), 'slime') + '\n' +
+                                      box((256, 0, 0), (320, 64, 64), 'water_alt') + '\n' +
+                                      box((384, 0, 0), (448, 64, 64.04), 'water') + '\n}\n')
+                with fluid_path.with_suffix('.log').open('wb') as log:
+                    subprocess.run(command[:-1] + [str(fluid_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+                fluid_bsp = fluid_path.with_suffix('.bsp')
+                fluid_lumps = inspect(fluid_bsp)['lumps']
+                with fluid_bsp.open('rb') as stream:
+                    stream.seek(fluid_lumps[29]['offset'])
+                    physics = stream.read(fluid_lumps[29]['length'])
+                    stream.seek(fluid_lumps[36]['offset'])
+                    water_records = list(struct.iter_unpack('<ffi', stream.read(fluid_lumps[36]['length'])))
+                if (physics.count(b'fluid {') != 4 or b'"contents" "16"' not in physics or
+                        b'"contents" "32"' not in physics or len(water_records) != 4 or
+                        len({record[2] for record in water_records}) != 3 or
+                        len({record[0] for record in water_records}) != 2):
+                    raise RuntimeError('fluids with different contents, surface materials or heights must be separate')
+                reports.append({'game': game, 'fixture': 'distinct-fluids', 'issues': []})
+                # A sloped clipping face can precede the horizontal surface in
+                # the map. Its material must not replace the actual surface.
+                clipped = box((0, 0, 0), (64, 64, 96), 'water')
+                clipped = clipped.replace('{\n', '{\n( 64 0 64 ) ( 0 64 112 ) ( 64 64 64 ) compat/water_alt 0 0 0 1 1 0 0 0\n', 1)
+                surface_path = folder / 'water-surface.map'
+                surface_path.write_text('{\n"classname" "worldspawn"\n' + clipped + '\n}\n')
+                with surface_path.with_suffix('.log').open('wb') as log:
+                    subprocess.run(command[:-1] + [str(surface_path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+                surface_bsp = surface_path.with_suffix('.bsp')
+                surface_inventory = inspect(surface_bsp)
+                surface_lumps = surface_inventory['lumps']
+                surface_records = load_records(surface_bsp, surface_inventory)
+                if not any(brush[4] for brush in surface_records[92]):
+                    raise RuntimeError('clipped-water fixture has no non-axial collision plane')
+                with surface_bsp.open('rb') as stream:
+                    stream.seek(surface_lumps[36]['offset'])
+                    surface_water = list(struct.iter_unpack('<ffi', stream.read(surface_lumps[36]['length'])))
+                    stream.seek(surface_lumps[43]['offset'])
+                    surface_names = stream.read(surface_lumps[43]['length'])
+                    stream.seek(surface_lumps[44]['offset'])
+                    surface_table = [v[0] for v in struct.iter_unpack('<I', stream.read(surface_lumps[44]['length']))]
+                    stream.seek(surface_lumps[2]['offset'])
+                    surface_textures = list(struct.iter_unpack('<3f6i', stream.read(surface_lumps[2]['length'])))
+                if len(surface_water) != 1:
+                    raise RuntimeError(f'expected one clipped water record, got {len(surface_water)}')
+                texture = surface_textures[surface_water[0][2]]
+                offset = surface_table[texture[3]]
+                surface_name = surface_names[offset:surface_names.index(b'\0', offset)].decode()
+                if surface_name != 'compat\\water':
+                    raise RuntimeError(f'water surface selected the wrong material: {surface_name}')
+                reports.append({'game': game, 'fixture': 'water-clipped-surface', 'issues': []})
+                water_cells = folder / 'water-cells.map'
+                water_cells.write_text(portal_fixture()[:-2] +
+                    box((-256, -128, 0), (-208, 128, 256), 'water') + '\n' +
+                    box((208, -128, 0), (256, 128, 256), 'water') + '\n}\n')
+                with water_cells.with_suffix('.log').open('wb') as log:
+                    subprocess.run(command[:-1] + [str(water_cells)], stdout=log, stderr=subprocess.STDOUT, check=True)
+                cell_bsp = water_cells.with_suffix('.bsp')
+                cell_records = load_records(cell_bsp, inspect(cell_bsp))
+                for point in ((-128, 0, 64), (128, 0, 64)):
+                    cell_index = locate_cell(cell_records, point)
+                    if cell_records[107][cell_index][3] != -1:
+                        raise RuntimeError('empty space between separated water brushes was assigned to water')
+                reports.append({'game': game, 'fixture': 'separated-water-cells', 'issues': []})
+                # Both triangular pools have bounding-box coverage above 50%
+                # in the left chamber. Only the larger true volume does.
+                for label, tip, expected_water in (('dry', -128, -1), ('wet', 0, 0)):
+                    sloped = folder / ('water-triangle-'+label+'.map')
+                    sloped.write_text(portal_fixture()[:-2] + triangle_prism(
+                        ((-256,-128,256),(-256,128,256),(tip,-128,256)),0,'compat/water')+'\n}\n')
+                    with sloped.with_suffix('.log').open('wb') as log:
+                        subprocess.run(command[:-1]+[str(sloped)],stdout=log,stderr=subprocess.STDOUT,check=True)
+                    sloped_bsp = sloped.with_suffix('.bsp')
+                    water_records = load_records(sloped_bsp,inspect(sloped_bsp))
+                    index = locate_cell(water_records,(-192,64,64))
+                    if validate(sloped_bsp)['issues'] or water_records[107][index][3] != expected_water:
+                        raise RuntimeError('Triangular water brush was measured as its enclosing bounds')
+                    if label == 'dry':
+                        bound = water_records[119][index]
+                        low,high = bound[:3],bound[6:9]
+                        cell_volume = math.prod(high[a]-low[a] for a in range(3))
+                        box_volume = math.prod(max(0,min(high[a],(-128,128,256)[a])-max(low[a],(-256,-128,0)[a])) for a in range(3))
+                        if not box_volume > cell_volume/2 > box_volume/2:
+                            raise RuntimeError('Sloped water fixture does not distinguish box and solid coverage')
+                    reports.append({'game':game,'fixture':'triangular-water-cell-'+label,'issues':[]})
             records = load_records(bsp, inventory)
-            if not records[92][0][4] or records[92][1][4] or not records[92][1][9]:
+            if not records[92][0][4] or records[92][1][4] != (4 if game == 'titanfall2' else 0) or not records[92][1][9]:
                 raise RuntimeError("fixture must contain a sloped brush followed by an axial brush")
             # The box order is -X, +X, -Y, +Y, -Z, +Z (checked against retail maps).
             # Texture strings provide an independent check on axial surface identity.
@@ -471,8 +964,74 @@ def main():
             if sky_report["issues"]:
                 raise RuntimeError(f"sky-only world: {sky_report['issues']}")
             reports.append({"game": game, "fixture": "sky-only", "issues": []})
+        if game != "apexlegends":
+            patch_entity = folder / 'patch-entities.map'
+            # Keep a curved patch and a flat patch whose solid must extend below z=0.
+            flat_patch = PATCH.replace(' 16 ', ' 0 ').replace(' 64 ', ' 0 ')
+            patch_entity.write_text('{\n"classname" "worldspawn"\n' +
+                box((1024, 0, -16), (1088, 64, 0), 'bump') + '\n}\n' +
+                '{\n"classname" "func_brush"\n"targetname" "patch_only"\n' + PATCH + '\n}\n' +
+                '{\n"classname" "func_brush"\n"targetname" "mixed_patch"\n' +
+                box((512, 0, -16), (576, 64, 0), 'bump') + '\n' +
+                flat_patch + '\n}\n')
+            with patch_entity.with_suffix('.log').open('wb') as log:
+                subprocess.run(command[:-1] + [str(patch_entity)], stdout=log, stderr=subprocess.STDOUT, check=True)
+            patch_bsp = patch_entity.with_suffix('.bsp')
+            patch_inventory = inspect(patch_bsp)
+            patch_records = load_records(patch_bsp, patch_inventory)
+            check_triangle_z_order(patch_records)
+            if len(patch_records[14]) != 3 or any(not model[7] for model in patch_records[14]):
+                raise RuntimeError('patch-only or mixed patch entity lost its render model')
+            with patch_bsp.open('rb') as stream:
+                entry = patch_inventory['lumps'][0]
+                stream.seek(entry['offset'])
+                patch_entities = [dict(values) for values in parse_entities(stream.read(entry['length']).decode('utf-8'))]
+            for sidecar in folder.glob(patch_entity.stem + '_*.ent'):
+                text = sidecar.read_text(encoding='utf-8')
+                if text.startswith('ENTITIES'):
+                    text = text.split('\n', 1)[1]
+                patch_entities.extend(dict(values) for values in parse_entities(text))
+            links = {e.get('targetname'): e.get('model') for e in patch_entities if e.get('classname') == 'func_brush'}
+            if links != {'patch_only': '*1', 'mixed_patch': '*2'}:
+                raise RuntimeError(f'patch entity model links missing: {links}')
+            if len(patch_records[69]) != 2 or len(patch_records[66]) != 16:
+                raise RuntimeError('patch entities lost their triangle collision')
+            world_cells = patch_records[85][0][3] * patch_records[85][0][4]
+            for model_index in (1, 2):
+                first, count = patch_records[86][world_cells + model_index]
+                words = []
+                for _, primitives, word in patch_records[87][first:first + count]:
+                    if primitives == 1:
+                        words.append(word)
+                    else:
+                        start = (word >> 8) & 0xffff
+                        words.extend(value[0] for value in patch_records[89][start:start + primitives])
+                if not any(word >> 24 == 0x40 and ((word >> 8) & 0xffff) == model_index - 1 for word in words):
+                    raise RuntimeError(f'patch entity {model_index} lacks its triangle collision in its model cell')
+            if validate(patch_bsp)['issues']:
+                raise RuntimeError('patch entity output failed record validation')
+            if game == 'titanfallonline':
+                physics_checks(patch_bsp, patch_inventory, 8, model_index=1, z_bounds=(-32, 64))
+                physics_checks(patch_bsp, patch_inventory, 9, model_index=2, z_bounds=(-32, 0))
+            reports.append({'game': game, 'fixture': 'patch-entities', 'issues': []})
+        if game != "apexlegends":
+            collision_portal_fixtures(folder, command, reports, game)
+            collision_brush_merge_fixtures(folder, command, reports, game)
+            collision_brush_bevel_fixture(folder, command, reports, game)
+            collapsed_path = folder/'collapsed-patch.map'
+            collapsed_rows = ('( ( 0 0 64 0 0 ) ( 0 0 64 0 0 ) ( 0 0 64 0 0 ) )\n' * 2 +
+                              '( ( 0 0 64 0 0 ) ( 64 0 64 0 0 ) ( 0 64 64 0 0 ) )\n')
+            collapsed_path.write_text('{\n"classname" "worldspawn"\n{\npatchDef2\n{\ncompat/bump\n( 3 3 0 0 0 )\n(\n'+collapsed_rows+')\n}\n}\n}\n')
+            with collapsed_path.with_suffix('.log').open('wb') as log:
+                subprocess.run(command[:-1]+[str(collapsed_path)],stdout=log,stderr=subprocess.STDOUT,check=True)
+            collapsed_bsp = collapsed_path.with_suffix('.bsp')
+            collapsed_records = load_records(collapsed_bsp,inspect(collapsed_bsp))
+            if validate(collapsed_bsp)['issues'] or any(abs(collapsed_records[30][v[1]][2]-1)>1e-5 for v in collapsed_records[73]):
+                raise RuntimeError('Collapsed patch vertices lack their flat upward render normal')
+            reports.append({'game':game,'fixture':'collapsed-patch-normals','issues':[]})
+            portal_boundary_fixtures(folder, command, reports, game)
+            portal_budget_fixture(folder, command, reports, game)
         if game == "titanfall2":
-            collision_portal_fixtures(folder, command, reports)
             submodel_path = folder / 'submodel-bounds.map'
             submodel_path.write_text('{\n"classname" "worldspawn"\n' +
                 box((0,0,0),(64,64,64),'bump') + '\n}\n' +

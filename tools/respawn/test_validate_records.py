@@ -34,6 +34,22 @@ def fixture():
 
 
 class RecordTests(unittest.TestCase):
+    def test_vertex_normals_must_be_finite_and_unit_length(self):
+        for normal in ((float('nan'),0,1),(0,float('inf'),0)):
+            r = fixture()
+            r[30] = [normal]
+            self.assertIn('nonfinite vertex normal',str(check_records(r)))
+        for normal in ((0,0,0),(3,4,0)):
+            r = fixture()
+            r[30] = [normal]
+            self.assertIn('not a unit vector',str(check_records(r)))
+        r = fixture()
+        r[30] = [(0.6,0.8,0)]
+        self.assertEqual(check_records(r),[])
+        r[30] = [(0,0,0),(0,0,1)]
+        r[71][0] = (*r[71][0][:1],1,*r[71][0][2:])
+        self.assertEqual(check_records(r),[])  # native unreferenced zero sentinel
+
     def test_static_prop_objects_follow_aligned_non_sky_mesh_block(self):
         r = fixture()
         r[14][0] = (*r[14][0][:7],65)
@@ -87,6 +103,15 @@ class RecordTests(unittest.TestCase):
         r = fixture()
         r[93] = [(2,)]
         self.assertIn("cutting plane", str(check_records(r)))
+
+    def test_brush_bevel_counts_match_discard_suffix(self):
+        r = fixture()
+        brush = list(r[92][0]);brush[3] = 0;r[92][0] = tuple(brush)
+        self.assertIn('authored/bevel',str(check_records(r)))
+        r[94][6] = (0x4000,)
+        self.assertEqual(check_records(r),[])
+        brush[3] = 1;r[92][0] = tuple(brush)
+        self.assertIn('authored/bevel',str(check_records(r)))
 
     def test_texture_flags_are_separate_from_index(self):
         r = fixture()

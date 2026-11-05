@@ -616,8 +616,13 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         if (!visible || sky || translucent)
             continue;
         Respawn::Bake::Brush &out = brushes.emplace_back();
-        for (const side_t &side : brush.sides)
+        // Supplemental collision planes do not define visible brush faces and
+        // can have only a float planenum, leaving side.plane at zero. Feeding
+        // that zero plane to the segment test makes the brush cast no shadow.
+        for (const side_t &side : brush.sides) {
+            if (side.bevel) continue;
             out.planes.push_back({side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z(), side.plane.dist()});
+        }
         out.mins = {brush.minmax.mins.x(), brush.minmax.mins.y(), brush.minmax.mins.z()};
         out.maxs = {brush.minmax.maxs.x(), brush.minmax.maxs.y(), brush.minmax.maxs.z()};
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TF2 cell/portal topology inspection and bounded cross-reference checks.
+"""TF1/TF2 cell/portal topology inspection and bounded cross-reference checks.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
 Original code; schema provenance in docs/respawn/RESPAWN_TRICOLL_PORTALS.md.
@@ -42,7 +42,7 @@ def connected(records, start, end):
     return False
 
 
-def check_portal_records(records):
+def check_portal_records(records, version=37):
     issues = []
     def error(lump, index, message):
         issues.append({"severity": "error", "lump": lump, "record": index, "message": message})
@@ -50,6 +50,8 @@ def check_portal_records(records):
     vertex_edges, vertex_refs, edge_refs, ie, iv, ih = (records[i] for i in range(111, 117))
     if not nodes and not cells and not portals:
         return issues
+    if version in (29, 37) and len(cells) > 1022:
+        error(107, None, "TF1/TF2 cell count exceeds the 1024-bit native mask with two sentinel bits")
     if not nodes or not cells:
         error(106, None, "cell BSP and cell table must both be present")
     if len(vertex_refs) != len(edge_refs):
@@ -124,9 +126,15 @@ def check_portal_records(records):
         if n[9] + n[3] > len(access) or n[10] + n[4] > len(refs):
             error(119, i, "cell access child/reference slice exceeds table")
         # Retail has global environment roots with flags 0x02 and infinite bounds.
-        global_root = (i < len(cells) and cells[i][2] & 2 and
-                       all(n[a] == -math.inf and n[a+6] == math.inf for a in range(3)))
-        if (not global_root and not all(math.isfinite(v) for v in (*n[:3], *n[6:9]))) or any(n[a] > n[a+6] for a in range(3)):
+        global_root = i < len(cells) and cells[i][2] & 2
+        infinite_root = global_root and all(n[a] == -math.inf and n[a+6] == math.inf for a in range(3))
+        # Retail TF1 mp_o2 also has an empty global root initialized with the
+        # float32 min/max accumulation sentinels, rather than infinite bounds.
+        maximum = float.fromhex('0x1.fffffep+127')
+        empty_root = (global_root and n[3:6] == (0, 0, 0) and
+                      all(n[a] == maximum and n[a+6] == -maximum for a in range(3)))
+        if not empty_root and ((not infinite_root and not all(math.isfinite(v) for v in (*n[:3], *n[6:9]))) or
+                               any(n[a] > n[a+6] for a in range(3))):
             error(119, i, "invalid cell access bounds")
     return issues
 
@@ -140,10 +148,10 @@ def main(argv=None):
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     inv = inspect(args.bsp)
-    if inv["version_raw"] != 37 or inv["byte_order"] != "little" or any(i["severity"] == "error" for i in inv["issues"]):
-        raise FormatError("portal inspection requires structurally valid little-endian BSP v37")
+    if inv["version_raw"] not in (29, 37) or inv["byte_order"] != "little" or any(i["severity"] == "error" for i in inv["issues"]):
+        raise FormatError("portal inspection requires structurally valid little-endian BSP v29/v37")
     records = load_records(args.bsp, inv)
-    issues = check_portal_records(records)
+    issues = check_portal_records(records, inv["version_raw"])
     report = {"path": str(args.bsp.resolve()), "cells": len(records[107]),
               "portals": len(records[108]), "portal_types": dict(Counter(p[1] for p in records[108])),
               "issues": issues}

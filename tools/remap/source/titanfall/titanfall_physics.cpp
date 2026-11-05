@@ -34,12 +34,15 @@
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
 #include "../respawn/encoding.h"
+#include "../respawn/box_coverage.h"
+#include "../respawn/vmt_surfaceprop.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -85,17 +88,20 @@ std::string SurfaceProp(const shaderInfo_t *shader) {
     if (cached != vmtSurfaceProps.end()) return cached->second;
     std::string path = "materials/" + name + ".vmt", prop = "default";
     std::replace(path.begin(), path.end(), '\\', '/');
-    if (const MemBuffer file = vfsLoadFile(path.c_str())) {
-        const std::string text(file.data(), file.size());
-        std::vector<std::string> tokens;
-        for (std::size_t at = 0; (at = text.find('"', at)) != std::string::npos;) {
-            const std::size_t close = text.find('"', at + 1);
-            if (close == std::string::npos) break;
-            tokens.push_back(text.substr(at + 1, close - at - 1));
-            at = close + 1;
+    Respawn::VmtProperty resolved;
+    bool loadedAny = false;
+    const auto load = [&loadedAny](const std::string &filename, std::string &text) {
+        if (const MemBuffer file = vfsLoadFile(filename.c_str())) {
+            text.assign(file.data(), file.size());
+            loadedAny = true;
+            return true;
         }
-        for (std::size_t i = 0; i + 1 < tokens.size(); ++i)
-            if (striEqual(tokens[i].c_str(), "$surfaceprop") && !tokens[i + 1].empty()) { prop = tokens[i + 1]; break; }
+        return false;
+    };
+    if (Respawn::resolveVmtSurfaceProp(path, load, resolved)) {
+        if (resolved.present && !resolved.value.empty()) prop = resolved.value;
+    } else if (loadedAny) {
+        Sys_FPrintf(SYS_WRN, "VPhysics: unable to resolve VMT %s; using default surface property\n", path.c_str());
     }
     return vmtSurfaceProps[name] = prop;
 }
@@ -104,13 +110,15 @@ uint8_t MaterialIndex(const shaderInfo_t *shader) {
     const std::string prop = SurfaceProp(shader);
     for (std::size_t i = 0; i < materialTable.size(); ++i)
         if (materialTable[i] == prop) return uint8_t(i + 1);
-    if (materialTable.size() == 127) return 1;  // 7-bit field
+    if (materialTable.size() >= 127)
+        Error("VPhysics cannot encode more than 127 distinct surface properties (7-bit material field); cannot add '%s'", prop.c_str());
     materialTable.push_back(prop);
     return uint8_t(materialTable.size());
 }
 
 // Closes a ledge from convex polygons (rings of IVP points, each with a
-// material). Triangles are fanned and turned to face away from the centroid.
+// material). Triangles are fanned and turned to face away from the centroid,
+// or left in their given winding when the caller already made it outward.
 // Returns false when the polygons do not close into a watertight hull.
 bool FinishLedge(Ledge &ledge, const std::vector<std::pair<std::vector<P3>, uint8_t>> &polygons) {
     constexpr double weld = 0.01 * kMetresPerUnit;
@@ -172,21 +180,53 @@ bool BuildLedge(const brush_t &brush, Ledge &ledge) {
     return FinishLedge(ledge, polygons);
 }
 
-// Patch triangles become prisms `thickness` units deep, centred on the surface,
-// so either side collides.
-constexpr double kPatchThickness = 4.0;
-bool BuildPrism(const std::array<Vector3, 3> &tri, uint8_t material, Ledge &ledge) {
-    const Vector3 n = vector3_cross(tri[1] - tri[0], tri[2] - tri[0]);
-    const double length = vector3_length(n);
-    if (length < 1e-3) return false;
-    const Vector3 offset = n * float(kPatchThickness / 2 / length);
-    std::array<P3, 3> top, bottom;
-    for (int k = 0; k < 3; ++k) { top[k] = ToIvp(tri[k] + offset); bottom[k] = ToIvp(tri[k] - offset); }
+// Each patch triangle becomes a convex prism `kPatchThickness` units deep into
+// the solid behind the surface, so the visible surface itself collides. A thin
+// slab is tunnelled through by falling physics objects; the whole patch uses one
+// offset direction, so neighbouring prisms share their edge points (no seam
+// gaps) and every prism stays convex, which IVP requires.
+constexpr double kPatchThickness = 32.0;
+bool BuildPrism(const std::array<P3, 3> &top, const std::array<P3, 3> &bottom, uint8_t material, Ledge &ledge) {
     std::vector<std::pair<std::vector<P3>, uint8_t>> polygons = {
-        {{top[0], top[1], top[2]}, material}, {{bottom[0], bottom[1], bottom[2]}, material}};
-    for (int k = 0; k < 3; ++k)
-        polygons.push_back({{top[k], top[(k + 1) % 3], bottom[(k + 1) % 3], bottom[k]}, material});
+        {{top[0], top[1], top[2]}, material}, {{bottom[0], bottom[2], bottom[1]}, material}};
+    for (int k = 0; k < 3; ++k) {
+        const int next = (k + 1) % 3;
+        polygons.push_back({{top[next], top[k], bottom[k], bottom[next]}, material});
+    }
     return FinishLedge(ledge, polygons);
+}
+
+bool BuildPatchPrisms(const mesh_t &mesh, uint8_t material, std::vector<Ledge> &out) {
+    const int width = mesh.width, height = mesh.height;
+    if (width < 2 || height < 2) return false;
+    Vector3 normal(0, 0, 0);
+    for (int y = 0; y + 1 < height; ++y) for (int x = 0; x + 1 < width; ++x) {
+        const int a = x + y * width, b = a + width, c = b + 1, d = a + 1;
+        normal = normal + vector3_cross(mesh.verts[b].xyz - mesh.verts[a].xyz,
+                                        mesh.verts[d].xyz - mesh.verts[a].xyz);
+    }
+    const double length = vector3_length(normal);
+    if (length < 1e-6) return false;
+    // Respawn triangles face the opposite direction to cross(b-a, c-a).
+    // Extrude into the solid behind that front face, rather than into the
+    // playable space in front of it. FinishLedge gives IVP outward windings.
+    const Vector3 offset = normal * float(-kPatchThickness / length);
+    const int count = width * height;
+    std::vector<P3> top(count), bottom(count);
+    for (int i = 0; i < count; ++i) {
+        top[i] = ToIvp(mesh.verts[i].xyz);
+        bottom[i] = ToIvp(mesh.verts[i].xyz - offset);
+    }
+    for (int y = 0; y + 1 < height; ++y) for (int x = 0; x + 1 < width; ++x) {
+        const int a = x + y * width, b = a + width, c = b + 1, d = a + 1;
+        for (const auto &tri : {std::array<int, 3>{a, b, c}, std::array<int, 3>{a, c, d}}) {
+            Ledge ledge;
+            if (BuildPrism({top[tri[0]], top[tri[1]], top[tri[2]]},
+                           {bottom[tri[0]], bottom[tri[1]], bottom[tri[2]]}, material, ledge))
+                out.push_back(std::move(ledge));
+        }
+    }
+    return !out.empty();
 }
 
 // IVP_Compact_Ledge: 16-byte header, 16-byte triangles, then 16-byte points.
@@ -329,7 +369,18 @@ namespace {
 std::vector<std::vector<uint8_t>> worldSolids;
 std::string worldKeydata;
 bool worldPending = false;
+std::size_t worldTricollHeaders = 0;
 std::vector<uint8_t> otherModels;
+
+// Retail gives a world TRICOLL header a keydata vtric entry exactly when its
+// contents carry a player, NPC or Titan clip bit and none of SOLID, WINDOW or
+// GRATE; the entry repeats the header's collision contents. This held for every
+// header of Angel City, Colony, Lagoon and Fracture (2,590 vtric of 15,524).
+bool NeedsVtric(int contents) {
+    constexpr int clip = CONTENTS_PLAYERCLIP | CONTENTS_MONSTERCLIP | CONTENTS_TITANCLIP;
+    constexpr int solid = CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE;
+    return (contents & clip) && !(contents & solid);
+}
 
 void SplitStaticSolids(int contents, const std::vector<Ledge> &ledges) {
     for (std::size_t first = 0; first < ledges.size();) {
@@ -353,10 +404,11 @@ P3 Centre(const std::vector<Ledge> &ledges) {
     return (mins + maxs) * 0.5;
 }
 
-// Water: brushes sharing a surface height form one fluid solid and one leaf
+// Water: brushes sharing a surface height, contents and surface material form one fluid solid and one leaf
 // water record (surface Z, minimum Z, surface texture), as in retail.
 struct Water {
     std::vector<Ledge> ledges;
+    std::vector<Respawn::CoverageSolid> brushVolumes;
     int contents = 0;
     MinMax bounds;
     const shaderInfo_t *surface = nullptr;
@@ -365,7 +417,7 @@ struct Water {
 
 /*
     EmitPhysicsModel()
-    Writes the VPhysics model of the entity's brushes (and the world's patches).
+    Writes the VPhysics model of the entity's brushes and patches.
     Call after its collision (EmitBrush fills brush contents). The world becomes
     static solids grouped by contents plus fluid solids for water; brush entities
     get one movable solid.
@@ -373,7 +425,7 @@ struct Water {
 void Titanfall::EmitPhysicsModel(const entity_t &e, int modelIndex) {
     const bool world = modelIndex == 0;
     std::map<int, std::vector<Ledge>> byContents;
-    std::map<long, Water> waters;
+    std::map<std::tuple<float, int, std::string>, Water> waters;
     std::size_t skipped = 0;
     for (const brush_t &brush : e.brushes) {
         const int contents = brush.contentFlags;
@@ -386,36 +438,55 @@ void Titanfall::EmitPhysicsModel(const entity_t &e, int modelIndex) {
         if (!BuildLedge(brush, ledge)) { ++skipped; continue; }
         if (contents & (CONTENTS_WATER | CONTENTS_SLIME)) {
             if (!world) continue;
-            Water &water = waters[std::lround(brush.minmax.maxs.z() * 8)];
+            const shaderInfo_t *surface = nullptr;
+            for (const side_t &side : brush.sides)
+                if (!side.bevel && side.shaderInfo && side.plane.normal().z() > 0.7f && !surface)
+                    surface = side.shaderInfo;
+            const float surfaceZ = brush.minmax.maxs.z();
+            if (!std::isfinite(surfaceZ)) Error("Nonfinite water surface height");
+            Water &water = waters[{surfaceZ, contents, surface ? surface->shader.c_str() : ""}];
             water.ledges.push_back(std::move(ledge));
             water.contents = contents;
             water.bounds.extend(brush.minmax);
-            for (const side_t &side : brush.sides)
-                if (!side.bevel && side.shaderInfo && side.plane.normal().z() > 0.7f && !water.surface)
-                    water.surface = side.shaderInfo;
+            Respawn::CoverageSolid volume;
+            for (int axis = 0; axis < 3; ++axis) {
+                volume.bounds.mins[axis] = brush.minmax.mins[axis];
+                volume.bounds.maxs[axis] = brush.minmax.maxs[axis];
+            }
+            for (const side_t& side : brush.sides) {
+                if (side.bevel) continue;
+                const Plane3 plane = side.plane.normal() != g_vector3_identity ? side.plane : Plane3(mapplanes[side.planenum].plane);
+                const auto& normal = plane.normal();
+                // Brush bounds already impose the axial faces. Keep the
+                // authored non-axial cuts for exact sloped-volume coverage.
+                if ((normal[0] == 0 && normal[1] == 0) || (normal[0] == 0 && normal[2] == 0) ||
+                    (normal[1] == 0 && normal[2] == 0)) continue;
+                volume.planes.push_back({{normal[0],normal[1],normal[2]},plane.dist()});
+            }
+            water.brushVolumes.push_back(std::move(volume));
+            water.surface = surface;
             continue;
         }
         byContents[world ? contents : 0].push_back(std::move(ledge));
     }
-    std::size_t prisms = 0;
-    if (world) {
-        for (const parseMesh_t *patch = e.patches; patch; patch = patch->next) {
-            const shaderInfo_t &shader = *patch->shaderInfo;
-            if (!shader.contentFlags || (shader.compileFlags & C_SKY)) continue;
-            const uint8_t material = MaterialIndex(&shader);
-            const mesh_t &mesh = patch->mesh;
-            for (int y = 0; y + 1 < mesh.height; ++y) for (int x = 0; x + 1 < mesh.width; ++x) {
-                const int first = x + y * mesh.width;
-                const Vector3 points[] = {mesh.verts[first].xyz, mesh.verts[first + mesh.width].xyz,
-                                          mesh.verts[first + mesh.width + 1].xyz, mesh.verts[first + 1].xyz};
-                for (const auto &tri : {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{0, 2, 3}}) {
-                    Ledge ledge;
-                    if (BuildPrism({points[tri[0]], points[tri[1]], points[tri[2]]}, material, ledge)) {
-                        byContents[shader.contentFlags].push_back(std::move(ledge));
-                        ++prisms;
-                    }
-                }
-            }
+    // World patches collide in VPhysics through their TRICOLL headers: the engine
+    // turns every header into a virtual mesh (with an empty PHYSICS_TRIANGLES it
+    // builds the hulls itself), as retail does. Prisms would duplicate those
+    // meshes (one TFO run left props resting up to 17 units high), so they are kept only
+    // for movable brush entities and for a world without any brush solid,
+    // because the world physics object is built from static solid 0.
+    if (world) worldTricollHeaders = Titanfall::Bsp::tricollHeaders.size();
+    const bool patchPrismsNeeded = !world || byContents.empty();
+    if (world && patchPrismsNeeded && e.patches)
+        Sys_Warning("VPhysics: the world has no brush solid; patches use prisms instead of virtual meshes\n");
+    std::size_t patchPrisms = 0;
+    for (const parseMesh_t *patch = patchPrismsNeeded ? e.patches : nullptr; patch; patch = patch->next) {
+        const shaderInfo_t &shader = *patch->shaderInfo;
+        if (!shader.contentFlags || (shader.compileFlags & C_SKY)) continue;
+        std::vector<Ledge> ledges;
+        if (BuildPatchPrisms(patch->mesh, MaterialIndex(&shader), ledges)) {
+            for (Ledge &ledge : ledges) byContents[world ? shader.contentFlags : 0].push_back(std::move(ledge));
+            patchPrisms += ledges.size();
         }
     }
     if (skipped) Sys_FPrintf(SYS_VRB, "   VPhysics: skipped %zu brushes without closed windings\n", skipped);
@@ -434,15 +505,17 @@ void Titanfall::EmitPhysicsModel(const entity_t &e, int modelIndex) {
             worldKeydata += text;
             worldSolids.push_back(WriteSolid(water.ledges, Centre(water.ledges)));
             Titanfall::LeafWaterData_t data{};
+            if (Titanfall::Bsp::leafWaterData.size() > 32767)
+                Error("Water record index exceeds its signed 16-bit cell field");
             data.surfaceZ = surfaceZ;
             data.minZ = water.bounds.mins.z();
             data.textureData = water.surface ? int32_t(Titanfall::EmitTextureData(*water.surface)) : 0;
             Titanfall::Bsp::leafWaterData.push_back(data);
-            Titanfall::Bsp::leafWaterBounds.push_back(water.bounds);
+            Titanfall::Bsp::leafWaterVolumes.push_back(std::move(water.brushVolumes));
         }
         worldPending = !worldSolids.empty();
-        if (prisms || !waters.empty())
-            Sys_Printf("%9zu patch triangles and %zu water volumes in VPhysics\n", prisms, waters.size());
+        if (patchPrisms || !waters.empty())
+            Sys_Printf("%9zu patch prisms and %zu water volumes in VPhysics\n", patchPrisms, waters.size());
         return;
     }
     if (byContents.empty()) return;
@@ -474,7 +547,21 @@ void Titanfall::FinishPhysics() {
     lump.clear();
     if (!worldPending && otherModels.empty()) return;
     if (worldPending) {
-        std::string keydata = worldKeydata + "virtualterrain {}\nvirtualtrimeshes {}\nmaterialtable {\n";
+        std::string keydata = worldKeydata + "virtualterrain {}\nvirtualtrimeshes {}\n";
+        const auto &contents = Titanfall::Bsp::tricollHeaderContents;
+        std::size_t vtric = 0;
+        for (std::size_t i = 0; i < worldTricollHeaders && i < contents.size(); ++i)
+            if (NeedsVtric(contents[i])) {
+                keydata += "vtric {\n\"index\" \"" + std::to_string(i) + "\"\n\"contents\" \"" +
+                           std::to_string(contents[i]) + "\"\n}\n";
+                ++vtric;
+            }
+        if (vtric) Sys_Printf("%9zu clip triangle meshes in VPhysics\n", vtric);
+        // The TFO server makes physics objects for virtual meshes 0..8191 only.
+        if (worldTricollHeaders > 8192)
+            Sys_Warning("VPhysics: %zu world triangle collision headers; physics objects ignore those after 8192\n",
+                        worldTricollHeaders);
+        keydata += "materialtable {\n";
         if (materialTable.empty()) materialTable.push_back("default");
         for (std::size_t i = 0; i < materialTable.size(); ++i)
             keydata += "\"" + materialTable[i] + "\" \"" + std::to_string(i + 1) + "\"\n";
@@ -501,12 +588,13 @@ void Titanfall::AssignWaterCells() {
         double volume = 1;
         for (int a = 0; a < 3; ++a) volume *= std::max(0.0, double(maxs[a]) - mins[a]);
         if (!(volume > 0) || !std::isfinite(volume)) continue;
-        for (std::size_t w = 0; w < Titanfall::Bsp::leafWaterBounds.size(); ++w) {
-            const MinMax &b = Titanfall::Bsp::leafWaterBounds[w];
-            double overlap = 1;
-            for (int a = 0; a < 3; ++a)
-                overlap *= std::max(0.0, std::min(double(maxs[a]), double(b.maxs[a])) - std::max(double(mins[a]), double(b.mins[a])));
-            if (overlap >= 0.5 * volume) { cells[i].leafWaterData = int16_t(w); ++assigned; break; }
+        Respawn::CoverageBox cell;
+        for (int axis = 0; axis < 3; ++axis) {
+            cell.mins[axis] = mins[axis];
+            cell.maxs[axis] = maxs[axis];
+        }
+        for (std::size_t w = 0; w < Titanfall::Bsp::leafWaterVolumes.size(); ++w) {
+            if (Respawn::coversConvexFraction(cell, Titanfall::Bsp::leafWaterVolumes[w], 0.5)) { cells[i].leafWaterData = int16_t(w); ++assigned; break; }
         }
     }
     if (!Titanfall::Bsp::leafWaterData.empty())

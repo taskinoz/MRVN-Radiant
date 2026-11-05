@@ -129,6 +129,9 @@ struct game_titanfallonline : game_t {
             {"sky",           C_SKY,          0},
             {"decal",       C_DECAL,          0},
             {"trans", C_TRANSLUCENT,          0},
+            {"hint",         C_HINT,          0},
+            {"skip",         C_SKIP,          0},
+            {"areaportal", C_AREAPORTAL,       0},
         }
     }{}
 };
@@ -226,6 +229,9 @@ struct game_titanfall2 : game_t {
             {"sky",           C_SKY,          0},
             {"decal",       C_DECAL,          0},
             {"trans", C_TRANSLUCENT,          0},
+            {"hint",         C_HINT,          0},
+            {"skip",         C_SKIP,          0},
+            {"areaportal", C_AREAPORTAL,       0},
         }
     }{}
 };

@@ -30,6 +30,7 @@
 #include "../remap.h"
 #include "../lump_names.h"
 #include "../respawn/lightbake.h"
+#include "../respawn/convex_coverage.h"
 
 
 void LoadR1BSPFile(rbspHeader_t *header, const char *filename);
@@ -176,7 +177,7 @@ namespace Titanfall {
         int16_t texdata;
         int16_t numVerts;
         int16_t numTris;
-        int16_t numBevelIndexes;
+        uint16_t numBevelIndexes;
         int32_t firstVert;
         int32_t firstTri;
         int32_t firstNode;
@@ -313,7 +314,7 @@ namespace Titanfall {
     // 0x5C
     struct CMBrush_t {
         Vector3   origin;
-        uint8_t   unknown;
+        uint8_t   nonDiscardPlaneCount;
         uint8_t   planeCount;
         uint16_t  index;
         Vector3   extents;
@@ -428,7 +429,9 @@ namespace Titanfall {
         inline std::vector<uint32_t>              textureDataTable;
         inline std::vector<TricollTriangle_t>     tricollTriangles;
         inline std::vector<TricollHeader_t>       tricollHeaders;
+        inline std::vector<int>                   tricollHeaderContents;  // not written; drives keydata vtric entries
         inline std::vector<uint16_t>              tricollBevelStarts;
+        inline std::vector<uint32_t>              tricollBevelIndices;
         inline std::vector<CMBound_t>             tricollNodes;  // 0x44: packed header bounds, see EmitPatchCollision
         inline std::vector<VertexUnlit_t>         vertexUnlitVertices;
         inline std::vector<VertexLitFlat_t>       vertexLitFlatVertices;
@@ -459,7 +462,7 @@ namespace Titanfall {
 
         inline std::vector<uint8_t>  physicsCollide;  // VPhysics models, see titanfall_physics.cpp
         inline std::vector<LeafWaterData_t>  leafWaterData;
-        inline std::vector<MinMax>           leafWaterBounds;  // parallel to leafWaterData
+        inline std::vector<std::vector<Respawn::CoverageSolid>> leafWaterVolumes;  // compiler-only, parallel to leafWaterData
 
         // Stubs
         inline std::vector<uint8_t>  physicsCollide_stub;

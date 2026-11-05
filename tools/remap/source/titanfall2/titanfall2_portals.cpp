@@ -5,6 +5,7 @@
 #include "../remap.h"
 #include "../bspfile_shared.h"
 #include "titanfall2.h"
+#include "../respawn/convex_cells.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -221,6 +222,110 @@ std::size_t RefCount(const Shared::visNode_t &node) {
     return total;
 }
 
+// Retain the BSP for point classification, but remove convex subdivisions that
+// do not divide visibility. Opaque leaves share one cell without outgoing portals.
+// Merge convex neighbours first, then cluster open regions to the native budget.
+std::vector<MinMax> MergeVisibilityCells(const std::vector<node_t *>& leaves,
+                                        std::unordered_map<const node_t *, std::size_t>& ids,
+                                        std::size_t maxCells) {
+    std::vector<Respawn::ConvexCellHull> hulls(leaves.size());
+    Respawn::CellMergeGroups groups(leaves.size());
+    std::vector<MinMax> groupBounds;
+    for (const auto* leaf : leaves) groupBounds.push_back(leaf->minmax);
+    std::size_t opaque = leaves.size();
+    std::vector<const portal_t *> candidates;
+    std::unordered_set<const portal_t *> seen;
+    for (std::size_t i = 0; i < leaves.size(); ++i) {
+        const auto* leaf = leaves[i];
+        if (leaf->opaque) {
+            if (opaque == leaves.size()) opaque = i;
+            if (i != opaque) groups.join(opaque, i);
+            continue;
+        }
+        std::set<Respawn::CellPoint> points;
+        for (const portal_t *p = leaf->portals; p;) {
+            const int side = p->nodes[1] == leaf;
+            const auto normal = p->plane.plane.normal();
+            Respawn::CellPlane plane{{normal[0], normal[1], normal[2]}, p->plane.plane.dist()};
+            if (!side) plane = Respawn::reverseCellPlane(plane);
+            bool duplicate = false;
+            for (const auto& previous : hulls[i].planes)
+                if (Respawn::sameCellPlane(previous, plane)) { duplicate = true; break; }
+            if (!duplicate) hulls[i].planes.push_back(plane);
+            for (const auto& point : p->winding) points.insert({point[0], point[1], point[2]});
+            if (p->onnode && !p->nodes[1 - side]->opaque && seen.insert(p).second) {
+                if (p->compileFlags & (C_HINT | C_AREAPORTAL))
+                    groups.protect(ids.at(p->nodes[0]), ids.at(p->nodes[1]));
+                else candidates.push_back(p);
+            }
+            p = p->next[side];
+        }
+        hulls[i].points.assign(points.begin(), points.end());
+    }
+    const auto root = [&](std::size_t id) {
+        return groups.root(id);
+    };
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto* p : candidates) {
+            const auto a = root(ids.at(p->nodes[0])), b = root(ids.at(p->nodes[1]));
+            if (!groups.canJoin(a, b)) continue;
+            const auto normal = p->plane.plane.normal();
+            const Respawn::CellPlane separator{{-normal[0], -normal[1], -normal[2]}, -p->plane.plane.dist()};
+            if (!Respawn::canMergeCells(hulls[a], hulls[b], separator)) continue;
+            Respawn::mergeCells(hulls[a], hulls[b], separator);
+            hulls[b] = {};
+            groups.join(a, b);
+            groupBounds[a].extend(groupBounds[b]);
+            changed = true;
+        }
+    }
+    // R1/R2 renderers have 1024-bit cell masks with two sentinel bits. If exact
+    // convex merging still exceeds its budget, cluster adjacent free regions
+    // through broad openings first. Every external portal remains in the graph;
+    // a concave cluster can increase visibility but cannot open a solid wall.
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < leaves.size(); ++i) count += root(i) == i;
+    std::vector<double> areas;
+    for (const auto* p : candidates) {
+        Vector3 sum(0);
+        for (std::size_t i = 1; i + 1 < p->winding.size(); ++i)
+            sum += vector3_cross(p->winding[i] - p->winding[0], p->winding[i + 1] - p->winding[0]);
+        areas.push_back(vector3_length(sum));
+    }
+    std::size_t clustered = 0;
+    while (count > maxCells) {
+        double best = -1;
+        std::size_t owner = 0, other = 0;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const auto* p = candidates[i];
+            const auto a = root(ids.at(p->nodes[0])), b = root(ids.at(p->nodes[1]));
+            if (!groups.canJoin(a, b)) continue;
+            auto bounds = groupBounds[a]; bounds.extend(groupBounds[b]);
+            const double score = areas[i] / std::max(double(bounds.area()), 1e-6);
+            if (score > best) { best = score; owner = a; other = b; }
+        }
+        if (best < 0) Error("Visibility needs more than %zu cells after preserving closed regions, hints and area portals", maxCells);
+        groups.join(owner, other);
+        groupBounds[owner].extend(groupBounds[other]);
+        --count;
+        ++clustered;
+    }
+    Sys_Printf("%9zu cell-budget merges after convex merging\n", clustered);
+    std::vector<MinMax> bounds;
+    std::map<std::size_t, std::size_t> cells;
+    for (std::size_t i = 0; i < leaves.size(); ++i) {
+        const auto owner = root(i);
+        const auto entry = cells.emplace(owner, bounds.size());
+        if (entry.second) bounds.emplace_back();
+        bounds[entry.first->second].extend(leaves[i]->minmax);
+        ids[leaves[i]] = entry.first->second;
+    }
+    if (bounds.size() >= 65535) Error("Portal cell count exceeds the sky-sentinel field");
+    return bounds;
+}
+
 void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const MinMax &bounds) {
     if (node.children.size() > 255 || node.refs.size() > 255 || RefCount(node) > 65535 ||
         B::objReferences.size() + node.refs.size() > 65535 ||
@@ -290,18 +395,19 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
     MakeTreePortals(tree);
     FilterStructuralBrushesIntoTree(structural, tree);
     std::vector<node_t *> leaves;
-    std::unordered_map<const node_t *, uint16_t> ids;
+    std::unordered_map<const node_t *, std::size_t> ids;
     std::function<void(node_t *)> collect = [&](node_t *node) {
         if (node->planenum == PLANENUM_LEAF) {
-            if (leaves.size() >= 65534) Error("Portal cell count exceeds the sky-sentinel field");
             ids.emplace(node, leaves.size()); leaves.push_back(node);
         } else { collect(node->children[0]); collect(node->children[1]); }
     };
     collect(tree.headnode);
-    B::cells_stub.resize(leaves.size());
+    // Two sentinel cells occupy the last two bits of the native fixed masks.
+    const auto cellBounds = MergeVisibilityCells(leaves, ids, Respawn::MaxVisibilityCells);
+    B::cells_stub.resize(cellBounds.size());
     B::cellBSPNodes_stub.resize(1);
     std::function<void(const node_t *, std::size_t)> emitTree = [&](const node_t *node, std::size_t index) {
-        if (node->planenum == PLANENUM_LEAF) B::cellBSPNodes_stub[index] = {-1, ids.at(node)};
+        if (node->planenum == PLANENUM_LEAF) B::cellBSPNodes_stub[index] = {-1, static_cast<uint32_t>(ids.at(node))};
         else {
             const uint32_t first = B::cellBSPNodes_stub.size();
             B::cellBSPNodes_stub.resize(first + 2);
@@ -310,7 +416,7 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         }
     };
     emitTree(tree.headnode, 0);
-    std::vector<std::vector<Titanfall::Portal_t>> outgoing(leaves.size());
+    std::vector<std::vector<Titanfall::Portal_t>> outgoing(cellBounds.size());
     std::unordered_set<const portal_t *> visited;
     for (auto *leaf : leaves) for (const portal_t *p = leaf->portals; p;) {
         const int side = p->nodes[1] == leaf;
@@ -318,20 +424,22 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         if (p->onnode && p->winding.size() >= 3 && visited.insert(p).second) {
             const bool free0 = !p->nodes[0]->opaque, free1 = !p->nodes[1]->opaque;
             const bool sky = (p->compileFlags & C_SKY) != 0;
-            if ((free0 && free1) || ((free0 || free1) && sky)) {
+            const bool regular = free0 && free1 && ids.at(p->nodes[0]) != ids.at(p->nodes[1]);
+            const bool aperture = sky && (free0 != free1);
+            if (regular || aperture) {
                 auto portal = geometry.Polygon(p->winding, p->plane.plane);
                 for (int from = 0; from < 2; ++from) if (!p->nodes[from]->opaque) {
                     portal.isReversed = from;
                     const bool destinationOpaque = p->nodes[1 - from]->opaque;
                     portal.type = destinationOpaque ? 1 : 0;
-                    portal.cell = destinationOpaque ? leaves.size() + 1 : ids.at(p->nodes[1 - from]);
+                    portal.cell = destinationOpaque ? cellBounds.size() + 1 : ids.at(p->nodes[1 - from]);
                     outgoing[ids.at(p->nodes[from])].push_back(portal);
                 }
             }
         }
         p = next;
     }
-    for (std::size_t i = 0; i < leaves.size(); ++i) {
+    for (std::size_t i = 0; i < cellBounds.size(); ++i) {
         if (B::portals_stub.size() + outgoing[i].size() > 65535) Error("Portal record count exceeds 16 bits");
         Titanfall::Cell_t cell{};
         cell.firstPortal = B::portals_stub.size(); cell.portalCount = outgoing[i].size();
@@ -341,9 +449,12 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
     }
     geometry.Finish();
     // One access root per cell, followed by each root's geometric child tree.
-    std::vector<std::vector<Shared::visRef_t>> references(leaves.size());
+    std::vector<std::vector<Shared::visRef_t>> references(cellBounds.size());
     std::function<void(const node_t *, const Shared::visRef_t &)> distribute = [&](const node_t *node, const Shared::visRef_t &ref) {
-        if (node->planenum == PLANENUM_LEAF) { references[ids.at(node)].push_back(ref); return; }
+        if (node->planenum == PLANENUM_LEAF) {
+            if (!node->opaque) references[ids.at(node)].push_back(ref);
+            return;
+        }
         const auto &plane = mapplanes[node->planenum].plane;
         const Vector3 center = (ref.minmax.mins + ref.minmax.maxs) * 0.5f;
         const Vector3 extent = (ref.minmax.maxs - ref.minmax.mins) * 0.5f;
@@ -354,13 +465,16 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         if (d - radius <= 0.01) distribute(node->children[1], ref);
     };
     for (const auto &ref : Shared::visRefs) distribute(tree.headnode, ref);
-    B::cellAABBNodes.clear(); B::cellAABBNodes.resize(leaves.size());
+    B::cellAABBNodes.clear(); B::cellAABBNodes.resize(cellBounds.size());
     B::objReferences.clear(); B::objReferenceBounds.clear();
-    for (std::size_t i = 0; i < leaves.size(); ++i) {
+    for (std::size_t i = 0; i < cellBounds.size(); ++i) {
+        auto& refs = references[i];
+        std::sort(refs.begin(), refs.end(), [](const auto& a, const auto& b) { return a.index < b.index; });
+        refs.erase(std::unique(refs.begin(), refs.end(), [](const auto& a, const auto& b) { return a.index == b.index; }), refs.end());
         const auto access = Shared::MakeVisTree(std::move(references[i]), 1e30f);
-        WriteAccessNode(access, i, leaves[i]->minmax);
+        WriteAccessNode(access, i, cellBounds[i]);
     }
-    Sys_Printf("%9zu geometry-derived cells, %zu directed portals, %zu portal edges\n",
-               leaves.size(), B::portals_stub.size(), B::portalEdges_stub.size() / 2);
+    Sys_Printf("%9zu visibility cells from %zu BSP leaves, %zu directed portals, %zu portal edges\n",
+               cellBounds.size(), leaves.size(), B::portals_stub.size(), B::portalEdges_stub.size() / 2);
     FreeTree(tree);
 }

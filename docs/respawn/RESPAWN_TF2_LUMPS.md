@@ -3,7 +3,7 @@
 remap now writes every Titanfall 2 lump that retail maps fill, except triangle
 collision bevel indices. Layouts were read from the six retail samples in
 `.local/respawn/samples/tf2-*` (Coliseum, Colony, Glitch, Homestead, Live Fire
-Stacks, Lobby). Compiled maps were checked with `validate_records.py`, the 14
+Stacks, Lobby). Compiled maps were checked with `validate_records.py`, the 26
 compiler regressions, and in game on Jump Academy 2 (TF2) and Trainstation (HL2).
 The in-game checks covered loading, spawns, displacement collision and rendering.
 
@@ -91,6 +91,13 @@ shader has `surfaceparm alphashadow`.
 
 ## Collision
 
+- **Brush bevels:** CM_BRUSHES separates non-discard and total non-axial plane
+  counts. The shared emitter now retains inherited edge bevels after the actual
+  cuts, sets side flag `0x4000`, and regenerates them after convex merging.
+  Independent box sweeps and a 172-case native TF2 run validate this path; full
+  retail generation parity is still open. See
+  [the brush-bevel study](RESPAWN_TRICOLL_PORTALS.md#cm-brush-bevel-output-5-november-2026).
+
 - **Primitive groups:** a geo set with more than one primitive stores
   `first << 8 | contents`; every primitive in the set shares that contents.
   Primitive bounds parallel the primitives. remap groups a grid's primitives
@@ -104,14 +111,37 @@ shader has `surfaceparm alphashadow`.
   `native_triangle_collision.py`, which verified the flags on all 662,080
   Homestead triangles. Jump Academy 2 went from 19,104 headers to 1,194, and all
   13 sampled displacement floors collided at their surface height in game. TF1
-  uses the same layouts and now gets patch collision too.
+  uses the same layouts and now gets patch collision too. Height ties now
+  select the first minimum and last maximum vertex, so flat triangles encode
+  nibble 4. All sampled TF1 triangles, plus all but 15 triangles in six TF2 maps,
+  match this rule; see [collision research](RESPAWN_TRICOLL_PORTALS.md) for the
+  unresolved near-tie exceptions. This correction has compiler regression
+  coverage for TF1 and TF2; the new native flat-entity run was in TFO.
+
+The portal generator now shares the native 1,022-cell budget with TF1. It merges
+convex adjacent regions first, then clusters through broad openings if necessary,
+retaining the full classification BSP and external portals. The two-format stress
+fixture keeps a sealed divider disconnected and retains an authored hint across
+34 sampled crossings. Protected interfaces survive alternate merge paths. TF2
+shader flags now expose `hint`, `skip` and `areaportal`; runtime area-portal
+opening/closing remains unimplemented. A native Northstar run of the budgeted
+stress graph (1,022 cells / 6,970 directed portals) passed floor/divider/open/hint
+traces and three rendered camera views with a stock material on 4 November 2026.
+This verifies the tested graph, not full culling parity.
+See [portal research](RESPAWN_TRICOLL_PORTALS.md).
 
 ## Open questions
 
 - **Bevel indices (0x61):** per triangle, a range of 11-bit ids starting at its
-  bevel start. Ids are below the header's triangle count. They are mostly (91%)
-  among the triangles sharing a vertex, but are neither the edge neighbours nor
-  the vertex neighbours exactly, and some exceed the vertex count. remap writes no
-  bevels, as retail does for headers without them; collision works without them.
+  bevel start. The triangle word's bits 24–27 give the count; values below 15
+  identify that many triangles in the same header. In all six sampled retail
+  maps, every such id is below that header's triangle count. Count 15 denotes
+  chained references to other headers; see [the collision notes](RESPAWN_TRICOLL_PORTALS.md).
+  Geometric selection remains unresolved. In a coordinate-based Coliseum
+  sample, 12,658 of 20,067 unique ordinary references from individual source
+  triangles targeted triangles with no exactly shared vertex. Those references
+  cannot be generated reliably by assuming vertex or edge adjacency. remap writes
+  no bevels, as retail does for some headers; limited collision tests pass without
+  them, but hull and edge parity remain unverified.
 - **CMA:** see above.
 - **Cubemap choice:** retail mesh assignment is not purely nearest.

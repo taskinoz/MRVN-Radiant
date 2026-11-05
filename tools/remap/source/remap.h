@@ -1345,6 +1345,8 @@ inline int FindFloatPlane(const Vector3 &normal, float dist, int numPoints, cons
 bool PlaneEqual(const plane_t &p, const Plane3f &plane);
 bool SnapNormal(Vector3 &normal);
 void AddBrushBevels();
+void AddBrushBevels(brush_t& brush);
+bool AddBrushBevels(brush_t& brush, std::size_t maxSides);
 
 /* portals.c */
 bool PortalPassable(const portal_t *p);

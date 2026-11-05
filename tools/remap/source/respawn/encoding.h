@@ -1,6 +1,7 @@
 // Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
@@ -23,6 +24,20 @@ inline bool textureNameEquals(const std::vector<char>& pool, std::size_t offset,
     return offset < pool.size() && name.size() < pool.size() - offset &&
            pool[offset + name.size()] == '\0' &&
            std::equal(name.begin(), name.end(), pool.begin() + offset);
+}
+
+// Upper triangle nibble: lowest-Z vertex and which of the other two is
+// highest. The observed TF1/TF2 rule breaks minimum ties toward the first
+// vertex and maximum ties toward the last: a horizontal triangle is 4.
+// Rare retail exceptions are recorded in RESPAWN_TRICOLL_PORTALS.md.
+inline std::uint32_t triangleZOrder(const std::array<float, 3>& z) {
+    int low = 0, high = 0;
+    for (int k = 1; k < 3; ++k) {
+        if (z[k] < z[low]) low = k;
+        if (z[k] >= z[high]) high = k;
+    }
+    const int firstOther = 1 & ~low;
+    return static_cast<std::uint32_t>(low | ((firstOther != high) << 2));
 }
 
 struct BoundsAxis { std::int16_t origin; std::int16_t extent; };

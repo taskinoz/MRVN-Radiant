@@ -25,6 +25,8 @@
 #include "bspfile_abstract.h"
 #include "respawn/lightmap.h"
 #include "respawn/csg.h"
+#include <cmath>
+#include <limits>
 #include <map>
 #include <tuple>
 
@@ -269,6 +271,54 @@ void Shared::MakeMeshes(const entity_t &e) {
             continue;
         }
 
+        // Map control points carry positions and UVs, not initialized normals.
+        // The Respawn path bypasses Q3's DrawSurfaceForMesh normal generation.
+        MakeMeshNormals(patchMesh);
+        const int vertexCount = patchMesh.width * patchMesh.height;
+        std::vector<Vector3> patchNormals(vertexCount);
+        std::vector<int> validNormals;
+        for (int i = 0; i < vertexCount; ++i) {
+            auto& normal = patchNormals[i];
+            normal = patchMesh.verts[i].normal;
+            const double length = vector3_length(normal);
+            if (std::isfinite(length) && length > 1e-6) {
+                normal /= length;
+                validNormals.push_back(i);
+            }
+        }
+        // A collapsed grid edge can leave a control point with no local fan.
+        // Borrow the closest usable grid normal without changing geometry.
+        Vector3 fallbackNormal(0,0,1);
+        if (validNormals.empty()) {
+            bool found = false;
+            for (int y = 0; y + 1 < patchMesh.height && !found; ++y) {
+                for (int x = 0; x + 1 < patchMesh.width && !found; ++x) {
+                    const int a = x + y * patchMesh.width;
+                    const int quad[] = {a,a+patchMesh.width,a+patchMesh.width+1,a+1};
+                    for (int t = 0; t < 2; ++t) {
+                        const auto& p0 = patchMesh.verts[quad[0]].xyz;
+                        const auto& p1 = patchMesh.verts[quad[t+1]].xyz;
+                        const auto& p2 = patchMesh.verts[quad[t+2]].xyz;
+                        auto normal = vector3_cross(p2-p0,p1-p0);
+                        if (VectorNormalize(normal) > 1e-6) {fallbackNormal=normal;found=true;break;}
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < vertexCount; ++i) {
+            const auto& normal = patchNormals[i];
+            const double length = vector3_length(normal);
+            if (std::isfinite(length) && length > 1e-6) continue;
+            int closest = -1;
+            double distance = std::numeric_limits<double>::infinity();
+            for (const int candidate : validNormals) {
+                const auto delta = patchMesh.verts[i].xyz - patchMesh.verts[candidate].xyz;
+                const double squared = vector3_dot(delta,delta);
+                if (squared < distance) {distance=squared;closest=candidate;}
+            }
+            patchNormals[i] = closest >= 0 ? patchNormals[closest] : fallbackNormal;
+        }
+
         Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
         mesh.shaderInfo = patch->shaderInfo;
         Shared::Island_t  island;
@@ -295,7 +345,7 @@ void Shared::MakeMeshes(const entity_t &e) {
             Shared::Vertex_t &vertex = mesh.vertices.emplace_back();
 
             vertex.xyz          = patchMesh.verts[index].xyz;
-            vertex.normal       = patchMesh.verts[index].normal;
+            vertex.normal       = patchNormals[index];
             vertex.textureUV    = patchMesh.verts[index].st;
             vertex.colour       = {0xFF, 0xFF, 0xFF, 0xFF};  // TODO: patchMesh.verts[index].colour
             Vector2  lightmapUV = {columnU[index % pw], rowV[index / pw]};

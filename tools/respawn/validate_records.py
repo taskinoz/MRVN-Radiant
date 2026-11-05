@@ -154,6 +154,8 @@ def check_records(records):
         start = 6 * brush_index + side_offset
         if start + 6 + count > len(properties):
             error(92, i, "side-property slice outside lump")
+        elif any(bool(properties[start+6+j][0] & 0x4000) != (j >= non_discard) for j in range(count)):
+            error(92, i, "authored/bevel plane counts disagree with side discard flags")
         for j in range(count):
             offset_index = side_offset + j
             plane = base_plane + offset_index - offsets[offset_index][0]
@@ -203,6 +205,15 @@ def check_records(records):
             pad = indices[first + 3 * triangles:first + 3 * triangles + 3]
             if len(pad) != 3 or len({v[0] for v in pad}) != 1:
                 error(80, i, "odd triangle count without a degenerate padding triangle")
+    normal_references = {vertex[1] for pool in (71,72,73,74) for vertex in records[pool]}
+    for i, normal in enumerate(records[30]):
+        # Retail reserves an unreferenced zero vector at slot zero.
+        if i == 0 and normal == (0,0,0) and i not in normal_references:
+            continue
+        if not all(math.isfinite(v) for v in normal):
+            error(30, i, "nonfinite vertex normal")
+        elif abs(sum(v*v for v in normal)-1) > 1e-3:
+            error(30, i, "vertex normal is not a unit vector")
     for pool in (71, 72, 73, 74):
         for i, vertex in enumerate(records[pool]):
             if vertex[0] >= len(records[3]) or vertex[1] >= len(records[30]):
@@ -226,14 +237,14 @@ def validate(path):
     report = {"path": str(Path(path).resolve()), "version": inventory["version_raw"],
             "counts": {str(i): len(v) for i, v in records.items()},
             "issues": check_records(records)}
+    report["issues"].extend(check_tricoll_records(records, inventory["version_raw"]))
     if inventory["version_raw"] == 37:
         report["game_lump"] = inspect_game_lump(path, inventory=inventory)
         # Minimal synthetic fixtures may have no visibility data at all.
         if records[123] or records[120]:
             prop_count = sum(e.get('placement_count',0) for e in report['game_lump']['entries'])
             report['issues'].extend(check_tf2_object_references(records,prop_count))
-        report["issues"].extend(check_tricoll_records(records))
-        report["issues"].extend(check_portal_records(records))
+    report["issues"].extend(check_portal_records(records, inventory["version_raw"]))
     return report
 
 

@@ -568,10 +568,18 @@ static void SetBrushContents( brush_t& b ){
    ydnar 2003-01-20: added mrelusive fixes
  */
 
-void AddBrushBevels(){
+void AddBrushBevels() { AddBrushBevels(buildBrush); }
+
+void AddBrushBevels(brush_t& brush) {
+    if (!AddBrushBevels(brush,MAX_BUILD_SIDES))
+        xml_Select("MAX_BUILD_SIDES",brush.entityNum,brush.brushNum,true);
+}
+
+bool AddBrushBevels(brush_t& brush, std::size_t maxSides){
 	// TODO: Set bevel plane flags here
 	const int surfaceFlagsMask = 0; //g_game->brushBevelsSurfaceFlagsMask;
-	auto& sides = buildBrush.sides;
+	auto& sides = brush.sides;
+    if (sides.size() > maxSides) return false;
 
 	//
 	// add the axial planes
@@ -605,9 +613,7 @@ void AddBrushBevels(){
 
 			if ( i == sides.size() ) {
 				// add a new side
-				if ( sides.size() == MAX_BUILD_SIDES ) {
-					xml_Select( "MAX_BUILD_SIDES", buildBrush.entityNum, buildBrush.brushNum, true );
-				}
+                if (sides.size() >= maxSides) return false;
 				side_t& s = sides.emplace_back();
 				Plane3f plane;
 				plane.normal().set( 0 );
@@ -616,20 +622,20 @@ void AddBrushBevels(){
 				if ( dir == 1 ) {
 					/* ydnar: adding bevel plane snapping for fewer bsp planes */
 					if ( bevelSnap > 0 ) {
-						plane.dist() = floor( buildBrush.minmax.maxs[ axis ] / bevelSnap ) * bevelSnap;
+						plane.dist() = floor( brush.minmax.maxs[ axis ] / bevelSnap ) * bevelSnap;
 					}
 					else{
-						plane.dist() = buildBrush.minmax.maxs[ axis ];
+						plane.dist() = brush.minmax.maxs[ axis ];
 					}
 				}
 				else
 				{
 					/* ydnar: adding bevel plane snapping for fewer bsp planes */
 					if ( bevelSnap > 0 ) {
-						plane.dist() = -ceil( buildBrush.minmax.mins[ axis ] / bevelSnap ) * bevelSnap;
+						plane.dist() = -ceil( brush.minmax.mins[ axis ] / bevelSnap ) * bevelSnap;
 					}
 					else{
-						plane.dist() = -buildBrush.minmax.mins[ axis ];
+						plane.dist() = -brush.minmax.mins[ axis ];
 					}
 				}
 
@@ -661,7 +667,33 @@ void AddBrushBevels(){
 	// add the edge bevels
 	//
 	if ( sides.size() == 6 ) {
-		return;     // pure axial
+        // TF2 clips rounded hulls against four additional horizontal support
+        // planes, even for a pure axial box. Axial expansion alone leaves the
+        // square XY corners; the Q3 edge loop below never visits axial edges.
+        if (g_game->bspVersion == 37) {
+            if (maxSides - sides.size() < 4) return false;
+            constexpr int directions[4][2] = {{-1,1},{-1,-1},{1,-1},{1,1}};
+            for (const auto& direction : directions) {
+                Plane3f plane;
+                plane.normal() = Vector3(direction[0],direction[1],0);
+                VectorNormalize(plane.normal());
+                const Vector3 corner(direction[0] > 0 ? brush.minmax.maxs[0] : brush.minmax.mins[0],
+                                     direction[1] > 0 ? brush.minmax.maxs[1] : brush.minmax.mins[1],
+                                     brush.minmax.mins[2]);
+                plane.dist() = vector3_dot(corner,plane.normal());
+                side_t& bevel = sides.emplace_back();
+                bevel.planenum = FindFloatPlane(plane,1,&corner);
+                bevel.contentFlags = sides[0].contentFlags;
+                bevel.shaderInfo = sides[0].shaderInfo;
+                for (int row = 0; row < 2; ++row) {
+                    bevel.texMat[row] = sides[0].texMat[row];
+                    bevel.vecs[row] = sides[0].vecs[row];
+                }
+                bevel.bevel = true;
+                ++c_edgebevels;
+            }
+        }
+		return true;
 	}
 
 	// test the non-axial plane edges
@@ -742,13 +774,16 @@ void AddBrushBevels(){
 					//%	Sys_Printf( "n = %f %f %f\n", normal[ 0 ], normal[ 1 ], normal[ 2 ] );
 
 					// add this plane
-					if ( sides.size() == MAX_BUILD_SIDES ) {
-						xml_Select( "MAX_BUILD_SIDES", buildBrush.entityNum, buildBrush.brushNum, true );
-					}
+                    if (sides.size() >= maxSides) return false;
 					side_t& s2 = sides.emplace_back();
 
 					s2.planenum = FindFloatPlane( plane, 1, &sides[i].winding[ j ] );
 					s2.contentFlags = sides[0].contentFlags;
+                    s2.shaderInfo = sides[i].shaderInfo;
+                    for (int row = 0; row < 2; ++row) {
+                        s2.texMat[row] = sides[i].texMat[row];
+                        s2.vecs[row] = sides[i].vecs[row];
+                    }
 					s2.surfaceFlags = ( sides[i].surfaceFlags & surfaceFlagsMask ); /* handle bevel surfaceflags */
 					s2.bevel = true;
 					c_edgebevels++;
@@ -756,6 +791,7 @@ void AddBrushBevels(){
 			}
 		}
 	}
+    return true;
 }
 
 

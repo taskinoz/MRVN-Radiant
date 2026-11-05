@@ -25,10 +25,144 @@
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
 #include "../respawn/encoding.h"
+#include "../respawn/tricoll_partition.h"
+#include "../respawn/convex_brushes.h"
+#include <map>
+#include <numeric>
 #include <algorithm>
 #include <tuple>
 
 namespace {
+void ClassifyCollisionBrush(brush_t& brush) {
+    if (!brush.recoveredContents)
+        for (const auto& side : brush.sides)
+            if (!side.bevel && side.shaderInfo) brush.contentFlags |= side.shaderInfo->contentFlags;
+}
+
+Respawn::CellPlane BrushPlane(const side_t& side) {
+    const auto& n = side.plane.normal();
+    return {{n[0],n[1],n[2]},side.plane.dist()};
+}
+
+bool SameCollisionFace(const side_t& a, const side_t& b) {
+    for (int axis = 0; axis < 3; ++axis)
+        if (std::abs(a.plane.normal()[axis]-b.plane.normal()[axis]) > 1e-10) return false;
+    if (std::abs(a.plane.dist()-b.plane.dist()) > 1e-8) return false;
+    if (a.shaderInfo != b.shaderInfo || a.surfaceFlags != b.surfaceFlags || a.compileFlags != b.compileFlags) return false;
+    for (int row = 0; row < 2; ++row) for (int axis = 0; axis < 3; ++axis)
+        if (a.texMat[row][axis] != b.texMat[row][axis]) return false;
+    for (int row = 0; row < 2; ++row) for (int axis = 0; axis < 4; ++axis)
+        if (a.vecs[row][axis] != b.vecs[row][axis]) return false;
+    return true;
+}
+
+// Keep render and IVP source brushes intact. The CM representation can remove
+// an internal plane only when the adjacent volumes form one convex brush and
+// coincident outer faces have the same material and texture mapping.
+std::vector<brush_t> CollisionBrushes(entity_t& entity) {
+    std::vector<brush_t> brushes;
+    for (auto& brush : entity.brushes) {
+        ClassifyCollisionBrush(brush); // EmitPhysicsModel still reads the originals.
+        brushes.push_back(brush);
+    }
+    if (g_game->bspVersion != 29 && g_game->bspVersion != 37) return brushes;
+    std::vector<Respawn::ConvexCellHull> hulls(brushes.size());
+    std::vector<shaderInfo_t*> material(brushes.size(),nullptr);
+    std::vector<std::size_t> parents(brushes.size());
+    std::iota(parents.begin(),parents.end(),std::size_t{0});
+    std::map<int,std::vector<std::size_t>> owners;
+    for (std::size_t i = 0; i < brushes.size(); ++i) {
+        auto& brush = brushes[i];
+        bool compatible = brush.contentFlags != 0 && !brush.recoveredContents;
+        std::vector<side_t> sides;
+        for (const auto& side : brush.sides) if (!side.bevel) {
+            sides.push_back(side);
+            if (!material[i]) material[i] = side.shaderInfo;
+            compatible &= side.planenum >= 0 && side.plane.normal() != g_vector3_identity &&
+                          side.shaderInfo && side.shaderInfo == material[i] &&
+                          !(side.compileFlags & (C_SKY|C_HINT|C_AREAPORTAL|C_SKIP));
+            hulls[i].planes.push_back(BrushPlane(side));
+            for (const auto& point : side.winding) hulls[i].points.push_back({point[0],point[1],point[2]});
+        }
+        if (!compatible || hulls[i].points.empty()) { material[i] = nullptr; continue; }
+        brush.sides = std::move(sides);
+        for (const auto& side : brush.sides) owners[side.planenum].push_back(i);
+    }
+    struct Candidate { std::size_t a,b; int plane; };
+    std::vector<Candidate> candidates;
+    for (const auto& entry : owners) {
+        if (entry.first & 1) continue;
+        const auto opposite = owners.find(entry.first ^ 1);
+        if (opposite == owners.end()) continue;
+        for (auto a : entry.second) for (auto b : opposite->second) {
+            if (a == b || material[a] != material[b] || brushes[a].contentFlags != brushes[b].contentFlags) continue;
+            const auto& x = brushes[a].minmax; const auto& y = brushes[b].minmax;
+            bool overlap = true;
+            for (int axis = 0; axis < 3; ++axis)
+                overlap &= x.mins[axis] <= y.maxs[axis] && y.mins[axis] <= x.maxs[axis];
+            if (overlap) candidates.push_back({a,b,entry.first});
+        }
+    }
+    const auto root = [&](std::size_t i) {
+        while (parents[i] != i) { parents[i] = parents[parents[i]]; i = parents[i]; }
+        return i;
+    };
+    std::size_t merged = 0, budgetRejected = 0;
+    bool changed;
+    do {
+        changed = false;
+        for (const auto& candidate : candidates) {
+            const auto a = root(candidate.a), b = root(candidate.b);
+            if (a == b) continue;
+            auto& first = brushes[a]; auto& second = brushes[b];
+            std::size_t sa = first.sides.size(), sb = second.sides.size();
+            for (std::size_t i = 0; i < first.sides.size(); ++i)
+                if (first.sides[i].planenum == candidate.plane) sa = i;
+            for (std::size_t i = 0; i < second.sides.size(); ++i)
+                if (second.sides[i].planenum == (candidate.plane ^ 1)) sb = i;
+            if (!Respawn::canMergeBrushHulls(hulls[a],sa,hulls[b],sb)) continue;
+            std::vector<side_t> sides;
+            for (std::size_t i = 0; i < first.sides.size(); ++i) if (i != sa) sides.push_back(first.sides[i]);
+            bool compatible = true;
+            for (std::size_t i = 0; i < second.sides.size(); ++i) if (i != sb) {
+                const auto& side = second.sides[i];
+                auto found = std::find_if(sides.begin(),sides.end(),[&](const side_t& previous) { return previous.planenum == side.planenum; });
+                if (found == sides.end()) sides.push_back(side);
+                else if (!SameCollisionFace(*found,side)) { compatible = false; break; }
+            }
+            if (!compatible || sides.size() > 255) continue;
+            auto bounds = first.minmax; bounds.extend(second.minmax);
+            brush_t joined = first;
+            joined.sides = std::move(sides);
+            if (!CreateBrushWindings(joined)) continue;
+            brush_t bounded = joined;
+            // The optimization must not make an otherwise representable input
+            // exceed the native 8-bit count after edge bevels are generated.
+            if (!AddBrushBevels(bounded,6+255)) { ++budgetRejected; continue; }
+            joined.minmax = bounds;
+            first = std::move(joined);
+            // Rebuild only boundary vertices, rather than retaining every
+            // internal tile corner and making long strip merges quadratic.
+            hulls[a] = {};
+            for (const auto& side : first.sides) {
+                hulls[a].planes.push_back(BrushPlane(side));
+                for (const auto& point : side.winding) hulls[a].points.push_back({point[0],point[1],point[2]});
+            }
+            hulls[b] = {};
+            parents[b] = a;
+            ++merged; changed = true;
+        }
+    } while (changed);
+    if (merged) Sys_Printf("%9zu exact convex collision-brush merges\n",merged);
+    if (budgetRejected) Sys_Printf("%9zu collision merges rejected by native bevel-plane budget\n",budgetRejected);
+    std::vector<brush_t> result;
+    for (std::size_t i = 0; i < brushes.size(); ++i) if (root(i) == i) {
+        AddBrushBevels(brushes[i]);
+        result.push_back(std::move(brushes[i]));
+    }
+    return result;
+}
+
 struct PatchCollision {
     MinMax bounds;
     uint16_t header;
@@ -66,25 +200,14 @@ Titanfall::CMBound_t EncodeBounds(const MinMax &minmax) {
 // three vertices so the 10-bit base and 7-bit deltas stay in range.
 constexpr std::size_t MaxTriangles = 300;
 
-uint32_t TriangleFlags(const std::array<Vector3, 3> &v) {
-    int low = 0, high = 0;
-    for (int k = 1; k < 3; ++k) {
-        if (v[k].z() < v[low].z()) low = k;
-        if (v[k].z() > v[high].z()) high = k;
-    }
-    const int options[2] = {1 & ~low, 2 & ~low};
-    if (low == high) high = options[0];
-    const int which = options[0] == high ? 0 : 1;
-    return uint32_t((low | (which << 2)) << 4);
-}
-
 void EmitTricollHeader(const shaderInfo_t &shader, int contents, bool modelOnly,
-                       const std::vector<std::array<Vector3, 3>> &triangles, std::vector<PatchCollision> &result) {
+                       const std::vector<std::array<Vector3, 3>> &triangles,
+                       std::size_t firstTriangle, std::size_t triangleCount, std::vector<PatchCollision> &result) {
     if (Titanfall::Bsp::tricollHeaders.size() > 65535)
         Error("Tricoll header index exceeds its collision primitive field");
     PatchCollision out;
-    for (const auto &tri : triangles)
-        for (const Vector3 &point : tri) {
+    for (std::size_t i = firstTriangle; i < firstTriangle + triangleCount; ++i)
+        for (const Vector3 &point : triangles[i]) {
             for (int axis = 0; axis < 3; ++axis)
                 if (!std::isfinite(point[axis])) Error("Nonfinite patch collision vertex");
             out.bounds.extend(point);
@@ -97,35 +220,47 @@ void EmitTricollHeader(const shaderInfo_t &shader, int contents, bool modelOnly,
     Titanfall::TricollHeader_t header{};
     header.texdata = texture;
     header.texinfoFlags = static_cast<int16_t>(shader.surfaceFlags & 0xffff);
-    header.numVerts = static_cast<int16_t>(triangles.size() * 3);
-    header.numTris = static_cast<int16_t>(triangles.size());
+    header.numVerts = static_cast<int16_t>(triangleCount * 3);
+    header.numTris = static_cast<int16_t>(triangleCount);
     header.firstVert = Titanfall::Bsp::vertices.size();
     header.firstTri = Titanfall::Bsp::tricollTriangles.size();
     header.firstNode = Titanfall::Bsp::tricollNodes.size();
     header.org = Vector3(0);
     header.scale = 1;
-    for (std::size_t i = 0; i < triangles.size(); ++i) {
-        Titanfall::Bsp::vertices.insert(Titanfall::Bsp::vertices.end(), triangles[i].begin(), triangles[i].end());
+    for (std::size_t i = 0; i < triangleCount; ++i) {
+        const auto& triangle = triangles[firstTriangle + i];
+        Titanfall::Bsp::vertices.insert(Titanfall::Bsp::vertices.end(), triangle.begin(), triangle.end());
         Titanfall::TricollTriangle_t word{};
         word.idx0 = static_cast<uint32_t>(i * 3);
         word.idx1 = 1;
         word.idx2 = 2;
-        word.unk = TriangleFlags(triangles[i]);
+        word.unk = Respawn::triangleZOrder({triangle[0].z(), triangle[1].z(), triangle[2].z()}) << 4;
         Titanfall::Bsp::tricollTriangles.push_back(word);
         Titanfall::Bsp::tricollBevelStarts.push_back(0);
     }
-    const std::size_t nodes = triangles.size() <= 3 ? 0 : 4 * ((triangles.size() + 3) / 6);
+    const std::size_t nodes = triangleCount <= 3 ? 0 : 4 * ((triangleCount + 3) / 6);
     if (nodes) {
         const Titanfall::CMBound_t box = EncodeBounds(out.bounds);
         Titanfall::Bsp::tricollNodes.insert(Titanfall::Bsp::tricollNodes.end(), nodes, box);
     }
     Titanfall::Bsp::tricollHeaders.push_back(header);
+    Titanfall::Bsp::tricollHeaderContents.push_back(contents);
     result.push_back(out);
 }
 
 std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
     std::vector<PatchCollision> result;
     if (g_game->bspVersion != 37 && g_game->bspVersion != 29) return result;  // TF2 and TF1: same tricoll layouts
+    struct TriangleBatch {
+        const shaderInfo_t* shader;
+        int contents;
+        bool modelOnly;
+        std::vector<std::array<Vector3,3>> triangles;
+    };
+    std::vector<TriangleBatch> batches;
+    std::vector<std::uint32_t> batchSizes;
+    std::vector<std::uint32_t> batchOffsets;
+    std::uint32_t entityTriangleCount = 0;
     for (const parseMesh_t *patch = entity.patches; patch; patch = patch->next) {
         const shaderInfo_t &shader = *patch->shaderInfo;
         int contents = shader.contentFlags;
@@ -149,14 +284,49 @@ std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
             for (const auto &tri : {std::array<unsigned, 3>{0, 1, 2}, std::array<unsigned, 3>{0, 2, 3}}) {
                 if (vector3_length(vector3_cross(points[tri[1]] - points[tri[0]], points[tri[2]] - points[tri[0]])) > 1e-6)
                     triangles.push_back({points[tri[0]], points[tri[1]], points[tri[2]]});
-                if (triangles.size() == MaxTriangles) {
-                    EmitTricollHeader(shader, contents, modelOnly, triangles, result);
-                    triangles.clear();
-                }
             }
         }
-        if (!triangles.empty())
-            EmitTricollHeader(shader, contents, modelOnly, triangles, result);
+        if (!triangles.empty()) {
+            if (triangles.size() > 0xffffffffull - entityTriangleCount)
+                Error("Entity patch triangle count exceeds 32 bits");
+            batchOffsets.push_back(entityTriangleCount);
+            batchSizes.push_back(static_cast<std::uint32_t>(triangles.size()));
+            entityTriangleCount += static_cast<std::uint32_t>(triangles.size());
+            batches.push_back({&shader, contents, modelOnly, std::move(triangles)});
+        }
+    }
+    if (!batches.empty()) {
+        std::vector<std::uint16_t> precedingCounts;
+        for (const auto& header : Titanfall::Bsp::tricollHeaders)
+            precedingCounts.push_back(static_cast<std::uint16_t>(header.numTris));
+        // Selection must run over the whole entity before material/header cuts.
+        // TODO: supply the complete validated selector; supporting planes alone
+        // are still insufficient evidence for adopting a geometric rule.
+        const std::vector<std::vector<std::uint32_t>> references(entityTriangleCount);
+        try {
+            const auto chunks = Respawn::partitionTricollBevels(
+                g_game->bspVersion == 29 ? 10 : 11, precedingCounts, batchSizes, references, MaxTriangles);
+            for (const auto& chunk : chunks) {
+                const auto& batch = batches[chunk.batch];
+                EmitTricollHeader(*batch.shader, batch.contents, batch.modelOnly, batch.triangles,
+                                 chunk.firstTriangle - batchOffsets[chunk.batch], chunk.triangleCount, result);
+            }
+            for (std::size_t h = 0; h < chunks.size(); ++h) {
+                const auto& encoded = chunks[h].bevels;
+                auto& header = Titanfall::Bsp::tricollHeaders[precedingCounts.size() + h];
+                header.firstBevelIndex = Titanfall::Bsp::tricollBevelIndices.size();
+                header.numBevelIndexes = encoded.indexCount;
+                Titanfall::Bsp::tricollBevelIndices.insert(Titanfall::Bsp::tricollBevelIndices.end(),
+                                                        encoded.words.begin(), encoded.words.end());
+                for (std::size_t i = 0; i < chunks[h].triangleCount; ++i) {
+                    auto& word = Titanfall::Bsp::tricollTriangles[header.firstTri + i];
+                    word.unk = (word.unk & 0xf0u) | encoded.counts[i];
+                    Titanfall::Bsp::tricollBevelStarts[header.firstTri + i] = encoded.starts[i];
+                }
+            }
+        } catch (const std::exception& error) {
+            Error("%s", error.what());
+        }
     }
     return result;
 }
@@ -238,6 +408,7 @@ void EmitPrimitiveGroups(std::vector<PendingPrimitive> &pending) {
     Emits brushes of entity into bsp
 */
 void Titanfall::EmitCollisionGrid( entity_t &e ) {
+    auto collisionBrushes = CollisionBrushes(e);
     std::vector<brush_t*> gridBrushes;
     std::vector<brush_t*> modelBrushes;
 
@@ -247,7 +418,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     for (const auto &patch : patches) if (!patch.modelOnly) { gridSize.extend(patch.bounds); gridPatches = true; }
 
     // Sort brushes
-    for( brush_t &brush : e.brushes ) {
+    for( brush_t &brush : collisionBrushes ) {
         int skySides = 0;
 
         for( const side_t &side : brush.sides ) {
@@ -425,10 +596,11 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     Emits brushes of entity into bsp
 */
 void Titanfall::EmitModelGridCell( entity_t &e ) {
+    auto collisionBrushes = CollisionBrushes(e);
     const auto patches = EmitPatchCollision(e);
     std::size_t offset = Titanfall::Bsp::cmBrushes.size();
 
-    for( brush_t &brush : e.brushes )
+    for( brush_t &brush : collisionBrushes )
         Titanfall::EmitBrush( brush );
 
     if (Titanfall::Bsp::cmGeoSets.size() > 65535)
@@ -438,7 +610,7 @@ void Titanfall::EmitModelGridCell( entity_t &e ) {
 
     std::vector<PendingPrimitive> pending;
     std::size_t i = 0;
-    for( brush_t &b : e.brushes ) {
+    for( brush_t &b : collisionBrushes ) {
         Titanfall::CMBrush_t &brush = Titanfall::Bsp::cmBrushes.at(offset + i);
 
         MinMax brushMinmax;
@@ -497,14 +669,7 @@ static uint16_t EmitBrushSideProperty(const shaderInfo_t &shader) {
     Emits a brush into bsp
 */
 void Titanfall::EmitBrush(brush_t &brush) {
-    // TODO: The core structs ( entity_t, brush_t parseMest_t, shaderInfo_t, etc... ) need to be rewritten
-    // to avoid this
-    for( side_t &side : brush.sides ) {
-        if( !side.bevel && !brush.recoveredContents )
-            brush.contentFlags |= side.shaderInfo->contentFlags;
-            // TODO: collect shader contentClearFlags & mask at the end
-    }
-
+    ClassifyCollisionBrush(brush);
 
     if (Titanfall::Bsp::cmBrushes.size() > 65535)
         Error("Collision brush index exceeds 16 bits");
@@ -514,7 +679,7 @@ void Titanfall::EmitBrush(brush_t &brush) {
     b.origin = brush.minmax.origin();
     b.index = Titanfall::Bsp::cmBrushes.size() - 1;
     b.planeCount = 0;
-    b.unknown = 0;
+    b.nonDiscardPlaneCount = 0;
     // All brushes need this prefix, including boxes after non-axial brushes.
     // It also locates the side properties at 6 * brush.index + sidePlaneIndex.
     b.sidePlaneIndex = Titanfall::Bsp::cmBrushSidePlaneOffsets.size();
@@ -589,37 +754,35 @@ void Titanfall::EmitBrush(brush_t &brush) {
         tv.t_axis = t_axis;  tv.t_offset = side.texMat[1][2];
     }
 
-#if 1
-    for (const side_t &side : cuttingSides) {
-        Vector3 normal = side.plane.normal();
-        SnapNormal(normal);
-        if (normal[0] == -1.0f || normal[0] == 1.0f || (normal[0] == 0.0f && normal[1] == 0.0f)
-            || normal[1] == -1.0f || normal[1] == 1.0f || (normal[1] == 0.0f && normal[2] == 0.0f)
-            || normal[2] == -1.0f || normal[2] == 1.0f || (normal[2] == 0.0f && normal[0] == 0.0f) || side.bevel) {
-            continue;  // axial, only test non-axial edges
+    const shaderInfo_t* fallbackShader = nullptr;
+    for (const auto& side : brush.sides)
+        if (!side.bevel && side.shaderInfo) { fallbackShader = side.shaderInfo; break; }
+    const bool nativeBevels = g_game->bspVersion == 29 || g_game->bspVersion == 37;
+    for (int pass = 0; pass < (nativeBevels ? 2 : 1); ++pass) {
+        for (const side_t& side : cuttingSides) {
+            if (side.bevel != (pass != 0)) continue;
+            const Plane3 plane = side.plane.normal() != g_vector3_identity ? side.plane : Plane3(mapplanes[side.planenum].plane);
+            Vector3 normal = plane.normal();
+            SnapNormal(normal);
+            if (normal[0] == -1.0f || normal[0] == 1.0f || (normal[0] == 0.0f && normal[1] == 0.0f)
+                || normal[1] == -1.0f || normal[1] == 1.0f || (normal[1] == 0.0f && normal[2] == 0.0f)
+                || normal[2] == -1.0f || normal[2] == 1.0f || (normal[2] == 0.0f && normal[0] == 0.0f)) continue;
+            if (b.planeCount == 255) Error("Collision brush has more than 255 non-axial sides including bevels");
+            Titanfall::EmitPlane(plane);
+            ++b.planeCount;
+            const auto* shader = side.shaderInfo ? side.shaderInfo : fallbackShader;
+            const uint16_t property = shader ? EmitBrushSideProperty(*shader) : 0;
+            Titanfall::Bsp::cmBrushSideProperties.push_back(property | (side.bevel ? MASK_DISCARD : 0));
+            Titanfall::Bsp::cmBrushSidePlaneOffsets.push_back(0);
+            auto& tv = Titanfall::Bsp::cmBrushSideTexVecs.emplace_back();
+            ComputeAxisBase(normal,tv.s_axis,tv.t_axis);
+            tv.s_offset = side.shaderInfo ? side.texMat[0][2] : 0;
+            tv.t_offset = side.shaderInfo ? side.texMat[1][2] : 0;
         }
-
-        Titanfall::EmitPlane(side.plane);
-        if (b.planeCount == 255)
-            Error("Collision brush has more than 255 non-axial sides");
-        b.planeCount++;
-        Titanfall::Bsp::cmBrushSideProperties.emplace_back(EmitBrushSideProperty(*side.shaderInfo));
-
-        uint16_t &so = Titanfall::Bsp::cmBrushSidePlaneOffsets.emplace_back();
-        so = 0;
-
-        Vector3  s_axis, t_axis;
-        ComputeAxisBase(normal, s_axis, t_axis);
-        auto &tv = Titanfall::Bsp::cmBrushSideTexVecs.emplace_back();
-        tv.s_axis = s_axis;  tv.s_offset = side.texMat[0][2];
-        tv.t_axis = t_axis;  tv.t_offset = side.texMat[1][2];
+        if (pass == 0) b.nonDiscardPlaneCount = b.planeCount;
     }
+    if (b.planeCount) b.sidePlaneIndex = Titanfall::Bsp::cmBrushSidePlaneOffsets.size() - b.planeCount;
 
-    if (b.planeCount) {
-        b.unknown = b.planeCount;
-        b.sidePlaneIndex = Titanfall::Bsp::cmBrushSidePlaneOffsets.size() - b.planeCount;
-    }
-#endif
 }
 
 /*

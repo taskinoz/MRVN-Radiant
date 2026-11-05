@@ -505,6 +505,24 @@ objects and TF1's chain header field (2 * 10 - 7 bits, 8,192 headers). Bevel
 references that still cannot be encoded are dropped with a warning instead of
 aborting the compile; a dropped bevel leaves contact conservative.
 
+**Cross-engine retail comparison.** Angel City and Relic ship in both games,
+compiled by Respawn for each engine (`.local/respawn/cross_engine_tricoll.py`).
+On triangles matched by position (358,245 in Angel City, 374,424 in Relic):
+
+| | Angel City | Relic |
+| --- | --- | --- |
+| TF1 / TF2 headers | 5,806 / 9,133 | 3,775 / 5,730 |
+| TF1 / TF2 bevel references | 1,160,466 / 571,701 | 1,001,229 / 552,696 |
+| In both lists | 257,930 | 251,626 |
+| TF1 references satisfying remap's rule | 100% | 100% |
+| TF2 references satisfying remap's rule | 54% | 60% |
+| TF2 references to triangles sharing no vertex | 36% | 25% |
+
+Respawn changed the selector between engines on identical geometry: TF1 lists
+are about twice as long and always fall under the shared-vertex supporting-plane
+rule; TF2 selects fewer adjacent planes and more non-adjacent ones. remap's rule
+is therefore a superset of TF1 retail behavior and a different selection for TF2.
+
 ## Visibility records
 
 | Lump | Layout | Meaning |

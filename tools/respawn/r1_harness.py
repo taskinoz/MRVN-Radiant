@@ -1,91 +1,50 @@
-"""Load a compiled Titanfall 1 map in R1Delta and run traces, drops and views.
+"""Load a Titanfall 1 map in R1Delta and run traces, hulls, drops and views.
 
-R1Delta addons are loose directories mounted from <game>/r1/addons. The map is
-installed as a temporary addon, a script is run after the local match reaches
-Playing, and the result is read from a fresh condump. The addon and addonlist
-entry are removed afterwards. Copyright (C) 2026 MRVN-Radiant contributors.
+R1Delta ships a JSON-RPC (MCP) control server, enabled with -usemcp and
+started with +mcp_start_http PORT on 127.0.0.1. The harness launches R1Delta as
+its own launcher does, loads the map through that server, and runs server
+Squirrel directly, reading printed results back without console dumps. A
+compiled map is mounted as a temporary owned addon in <game>/r1/addons; omit
+--maps to test a retail map. Copyright (C) 2026 MRVN-Radiant contributors.
 GPL-2.0-or-later.
 
-  python tools/respawn/r1_harness.py --game "D:/Games/Titanfall" \\
-      --maps BUILD_DIR --map mp_name --checks checks.json --output REPORT_DIR
+  python tools/respawn/r1_harness.py --maps BUILD_DIR --map mp_name \\
+      --checks checks.json --output REPORT_DIR
 
-checks.json: {"traces": [[x, y, z, ex, ey, ez], ...],
-              "views": [[x, y, z, pitch, yaw], ...],
-              "drops": [[x, y, z], ...]}   physics objects; their resting height is logged
+checks.json uses the TFO harness schema (tools/respawn/tfo_harness.py):
+  traces [[x,y,z,ex,ey,ez]], hulls [[x,y,z,ex,ey,ez,minx,miny,minz,maxx,maxy,maxz]],
+  views [[x,y,z,pitch,yaw]], drops [[x,y,z]], drop_models, drop_wait,
+  drop_samples, expect {trace_z, hull_z, drop_z}. Events and report.json match
+  that harness, so results from both engines compare line for line.
 """
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
+import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tfo_harness import capture_window, expectation_errors, height_expectations  # noqa: E402
 
 ADDON_PREFIX = 'MRVN.TF1Harness.'
 OWNER = '.mrvn-harness-owner.json'
-MODEL = 'models/weapons/grenades/m20_f_grenade.mdl'
+# Barrels spawn as physics props in R1Delta; crate.mdl and projectile_rocket.mdl do not.
+DEFAULT_MODEL = 'models/containers/barrel.mdl'
 ADDON_LIST = re.compile(r'\s*"AddonList"\s*\{[^{}]*\}\s*', re.I | re.S)
 MAP_NAME = re.compile(r'[A-Za-z0-9_]+')
-
-SCRIPT = r'''
-::MRVN_%ID%_Traces <- %TRACES%
-::MRVN_%ID%_Views <- %VIEWS%
-::MRVN_%ID%_Drops <- %DROPS%
-
-function MRVN_%ID%_Log( text ) { printl( "[MRVN:%ID%] " + text ) }
-
-function MRVN_%ID%_Attach()
-{
-	WaittillGameStateOrHigher( eGameState.Playing )
-	while ( GetPlayerArray().len() == 0 ) wait 0.5
-	wait 2
-	thread MRVN_%ID%_Run( GetPlayerArray()[0] )
-}
-
-function MRVN_%ID%_Run( player )
-{
-	player.EndSignal( "OnDestroy" )
-	MRVN_%ID%_Log( "BEGIN" )
-	foreach ( i, t in MRVN_%ID%_Traces )
-	{
-		local result = TraceLine( Vector( t[0], t[1], t[2] ), Vector( t[3], t[4], t[5] ), null, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_NONE )
-		MRVN_%ID%_Log( "TRACE " + i + " fraction=" + result.fraction + " end=" + result.endPos.z + " solid=" + result.startSolid )
-	}
-	local dropped = []
-	foreach ( i, d in MRVN_%ID%_Drops )
-	{
-		local prop = CreateEntity( "prop_physics" )
-		prop.kv.model = "%MODEL%"
-		prop.kv.minhealthdmg = 9999
-		prop.SetOrigin( Vector( d[0], d[1], d[2] ) )
-		DispatchSpawn( prop, false )
-		prop.SetModel( "%MODEL%" )
-		dropped.append( prop )
-	}
-	if ( dropped.len() )
-		wait 4
-	foreach ( i, prop in dropped )
-		MRVN_%ID%_Log( "DROP " + i + " z=" + ( IsValid( prop ) ? prop.GetOrigin().z : "gone" ) )
-	foreach ( i, v in MRVN_%ID%_Views )
-	{
-		player.SetOrigin( Vector( v[0], v[1], v[2] ) )
-		player.SetAngles( Vector( v[3], v[4], 0 ) )
-		player.SetVelocity( Vector( 0, 0, 0 ) )
-		wait 2
-		MRVN_%ID%_Log( "VIEW " + i )
-		ServerCommand( "screenshot" )
-		wait 2
-	}
-	MRVN_%ID%_Log( "DONE" )
-	wait 1
-	ServerCommand( "condump" )
-}
-
-thread MRVN_%ID%_Attach()
-'''
+MODEL_NAME = re.compile(r'models/[A-Za-z0-9_/-]+\.mdl')
+PROTOCOL = '2025-06-18'
+BATCH = 120  # rows per Squirrel call; R1Delta captures at most 500 output lines
 
 
 def digest(path):
@@ -103,20 +62,32 @@ def resolve_dir(path, label):
     return path
 
 
-def sq(rows):
-    return '[' + ', '.join('[' + ', '.join(f'{float(v):.3f}' for v in row) + ']' for row in rows) + ']'
+def finite_rows(rows, width, label):
+    if not isinstance(rows, list) or any(
+            not isinstance(row, list) or len(row) != width or
+            any(type(v) not in (int, float) or not math.isfinite(v) for v in row) for row in rows):
+        raise ValueError(f'checks.{label} must be a list of {width}-number lists')
+    return rows
 
 
 def validate_checks(checks):
     checks = checks or {}
     if not isinstance(checks, dict):
         raise ValueError('checks must be a JSON object')
-    result = {}
-    for key, width in (('traces', 6), ('views', 5), ('drops', 3)):
-        rows = checks.get(key, [])
-        if not isinstance(rows, list) or any(not isinstance(row, list) or len(row) != width for row in rows):
-            raise ValueError(f'checks.{key} must be a list of {width}-number lists')
-        result[key] = rows
+    result = {key: finite_rows(checks.get(key, []), width, key)
+              for key, width in (('traces', 6), ('hulls', 12), ('views', 5), ('drops', 3))}
+    if any(row[6 + i] > row[9 + i] for row in result['hulls'] for i in range(3)):
+        raise ValueError('hull mins must not exceed maxs')
+    models = checks.get('drop_models', [])
+    if (not isinstance(models, list) or (models and len(models) != len(result['drops'])) or
+            any(not isinstance(m, str) or not MODEL_NAME.fullmatch(m) or '..' in m.split('/') for m in models)):
+        raise ValueError('drop_models must match drops and contain models/... .mdl paths')
+    wait = checks.get('drop_wait', 4)
+    if type(wait) not in (int, float) or not math.isfinite(wait) or not 0 < wait <= 120:
+        raise ValueError('drop_wait must be a positive duration of at most 120 seconds')
+    result.update(drop_models=models, drop_wait=float(wait), drop_samples=checks.get('drop_samples', False) is True,
+                  expect=checks.get('expect', {}))
+    height_expectations(result['expect'])  # reject malformed expectations before launching
     return result
 
 
@@ -148,7 +119,15 @@ def find_game(explicit=None):
     raise ValueError('could not read R1Delta InstallPath; pass --game')
 
 
-def prepare(app, game, maps, map_name, checks, run_id=None):
+def prepare(app, game, maps, map_name, models=None, run_id=None):
+    """Stage an owned addon with the compiled map (maps=None: a retail map) and,
+    when models is not None, a level-init precache script for drop models.
+
+    R1Delta ignores PrecacheModel after level load, and a prop_physics with an
+    unprecached model removes itself on spawn. With developer > 0, _mapspawn.nut
+    includes test/myscript during level init on any map, so the harness stages
+    that script (and launches with +developer 1). Per-map level scripts in an
+    addon were not loaded."""
     app = resolve_dir(app, 'R1Delta app')
     game = resolve_dir(game, 'Titanfall install')
     r1 = game / 'r1'
@@ -160,24 +139,31 @@ def prepare(app, game, maps, map_name, checks, run_id=None):
         raise ValueError(f'expected Titanfall VPKs in {game / "vpk"}')
     if not MAP_NAME.fullmatch(map_name):
         raise ValueError('invalid map name')
-    maps = resolve_dir(maps, 'map build')
-    source = maps / 'maps' if (maps / 'maps' / f'{map_name}.bsp').is_file() else maps
-    if not (source / f'{map_name}.bsp').is_file():
-        raise ValueError(f'missing compiled map: {maps / (map_name + ".bsp")}')
-    checks = validate_checks(checks)
     run_id = run_id or uuid.uuid4().hex
     if not re.fullmatch(r'[a-f0-9]{32}', run_id):
         raise ValueError('invalid run ID')
+    session = {'run_id': run_id, 'app': str(app), 'game': str(game), 'r1': str(r1), 'map': map_name, 'addon': None}
+    if maps is None and models is None:
+        return session
+    source = None
+    if maps is not None:
+        maps = resolve_dir(maps, 'map build')
+        source = maps / 'maps' if (maps / 'maps' / f'{map_name}.bsp').is_file() else maps
+        if not (source / f'{map_name}.bsp').is_file():
+            raise ValueError(f'missing compiled map: {maps / (map_name + ".bsp")}')
+    hook = 'scripts/vscripts/test/myscript.nut'
+    if models is not None:
+        owners = [app / 'r1delta' / hook] + list((r1 / 'addons').glob('*/' + hook))
+        if any(path.exists() for path in owners):
+            raise ValueError(f'another {hook} exists; refusing to shadow it: {[str(p) for p in owners if p.exists()]}')
 
     addon = r1 / 'addons' / (ADDON_PREFIX + run_id)
-    cfg = r1 / 'cfg' / f'mrvn_harness_{run_id}.cfg'
     listing = r1 / 'addonlist.txt'
-    for path in (listing, cfg, addon, addon.parent, cfg.parent, r1):
+    for path in (listing, addon, addon.parent, r1):
         if linked(path):
             raise ValueError(f'refusing linked harness path: {path}')
-    if addon.exists() or cfg.exists():
+    if addon.exists():
         raise ValueError('harness path already exists')
-
     listing_existed = listing.exists()
     original = listing.read_text(encoding='utf-8-sig') if listing_existed else '"AddonList"\n{\n}\n'
     if not ADDON_LIST.fullmatch(original):
@@ -186,268 +172,315 @@ def prepare(app, game, maps, map_name, checks, run_id=None):
     addon.parent.mkdir(parents=True, exist_ok=True)
     addon.mkdir()
     (addon / OWNER).write_text(json.dumps({'run_id': run_id}), encoding='utf-8')
+    updated = None
     try:
-        target = addon / 'maps'
-        target.mkdir()
-        for item in source.iterdir():
-            if item.suffix.lower() in ('.map', '.log', '.prt', '.srf') or item.name == OWNER:
-                continue
-            dest = target / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest)
-            else:
-                shutil.copyfile(item, dest)
-
+        if source is not None:
+            target = addon / 'maps'
+            target.mkdir()
+            for item in source.iterdir():
+                # Only the level itself: .bsp, its .bsp_lump files and .ent sidecars.
+                if item.is_file() and item.name.startswith(map_name) and (
+                        item.suffix.lower() in ('.bsp', '.ent', '.bsp_lump') or '.bsp.' in item.name):
+                    shutil.copyfile(item, target / item.name)
+        if models is not None:
+            script = addon / hook
+            script.parent.mkdir(parents=True)
+            script.write_text(f'// MRVN harness {run_id}: precache drop models at level init\n' +
+                              ''.join(f'PrecacheModel( "{m}" )\n' for m in sorted(set(models) | {DEFAULT_MODEL})) +
+                              '::MRVN_PrecacheHook <- true\nprintl( "[MRVN] PRECACHE HOOK" )\n',
+                              encoding='utf-8')
         (addon / 'addoninfo.txt').write_text(
             '"AddonInfo"\n{\n"addontitle" "MRVN TF1 Harness ' + run_id + '"\n'
             '"addonversion" "1"\n"addonauthor" "mrvn-radiant"\n'
-            '"addonContent_Map" "1"\n"addonContent_Script" "1"\n}\n', encoding='utf-8')
-
-        scripts = addon / 'scripts/vscripts'
-        scripts.mkdir(parents=True)
-        script_path = scripts / f'mrvn_harness_{run_id}.nut'
-        script_path.write_text(
-            SCRIPT.replace('%ID%', run_id)
-            .replace('%TRACES%', sq(checks['traces']))
-            .replace('%VIEWS%', sq(checks['views']))
-            .replace('%DROPS%', sq(checks['drops']))
-            .replace('%MODEL%', MODEL), encoding='utf-8')
-
-        cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text(
-            'developer 1\nsv_cheats 1\n'
-            f'script IncludeFile("mrvn_harness_{run_id}")\n', encoding='utf-8')
-
+            f'"addonContent_Map" "{int(source is not None)}"\n"addonContent_Script" "{int(models is not None)}"\n}}\n',
+            encoding='utf-8')
         updated = original[:original.rfind('}')] + f'"{addon.name}" "1"\n' + original[original.rfind('}'):]
         listing.parent.mkdir(parents=True, exist_ok=True)
         listing.write_text(updated, encoding='utf-8')
-
-        return {
-            'run_id': run_id, 'app': str(app), 'game': str(game), 'r1': str(r1),
-            'addon': str(addon), 'cfg': str(cfg), 'listing': str(listing),
-            'listing_existed': listing_existed, 'original_listing': original,
-            'map': map_name, 'maps': str(maps), 'checks': checks,
-            'prepared_at_ns': time.time_ns(),
-            'addon_sha256': digest(addon / 'addoninfo.txt'),
-            'script_sha256': digest(script_path),
-            'cfg_sha256': digest(cfg),
-        }
     except BaseException:
         shutil.rmtree(addon, ignore_errors=True)
-        if cfg.exists():
-            cfg.unlink()
-        if listing.exists() and listing.read_text(encoding='utf-8-sig') == locals().get('updated'):
+        if updated is not None and listing.exists() and listing.read_text(encoding='utf-8-sig') == updated:
             if listing_existed:
                 listing.write_text(original, encoding='utf-8')
             else:
                 listing.unlink()
         raise
+    session.update(addon=str(addon), listing=str(listing), listing_existed=listing_existed,
+                   addon_sha256=digest(addon / 'addoninfo.txt'))
+    return session
 
 
 def cleanup(session):
+    """Remove only the addon and addon-list entry this session created."""
+    if not session.get('addon'):
+        return
     run_id = session['run_id']
     if not re.fullmatch(r'[a-f0-9]{32}', run_id):
         raise ValueError('invalid session ID')
     r1 = Path(session['r1']).resolve()
     addon = Path(session['addon']).resolve()
-    cfg = Path(session['cfg']).resolve()
     if addon.parent != (r1 / 'addons').resolve() or addon.name != ADDON_PREFIX + run_id:
         raise ValueError('session addon path mismatch')
-    if cfg.parent != (r1 / 'cfg').resolve() or cfg.name != f'mrvn_harness_{run_id}.cfg':
-        raise ValueError('session cfg path mismatch')
     if not addon.is_dir():
         raise ValueError('session addon is missing')
     try:
         owner = json.loads((addon / OWNER).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         raise ValueError('session owner file is missing or invalid')
-    if owner.get('run_id') != run_id:
-        raise ValueError('session owner mismatch')
-    if linked(cfg) or digest(cfg) != session['cfg_sha256']:
-        raise ValueError('owned cfg changed; refusing removal')
-
+    if owner.get('run_id') != run_id or digest(addon / 'addoninfo.txt') != session['addon_sha256']:
+        raise ValueError('session owner mismatch; refusing removal')
     listing = r1 / 'addonlist.txt'
     text = listing.read_text(encoding='utf-8-sig') if listing.exists() else ''
-    pattern = r'(?m)^"' + re.escape(addon.name) + r'"\s+"[01]"\s*\n?'
-    updated, count = re.subn(pattern, '', text)
+    updated, count = re.subn(r'(?m)^[ \t]*"' + re.escape(addon.name) + r'"\s+"[01]"\s*\n?', '', text)
     if count != 1:
         raise ValueError('owned addon entry missing or ambiguous')
-
     shutil.rmtree(addon)
-    cfg.unlink()
     if not session.get('listing_existed', True) and updated.strip() == '"AddonList"\n{\n}':
         listing.unlink()
     else:
         listing.write_text(updated, encoding='utf-8')
 
 
-def collect(session, text):
-    run_id = session['run_id']
-    marker = f'[MRVN:{run_id}] '
-    lines = text.splitlines(keepends=True)
-    starts = [i for i, line in enumerate(lines) if marker + 'BEGIN' in line]
-    if starts:
-        text = ''.join(lines[starts[-1]:])
-    events = [line.split(marker, 1)[1].rstrip('\r\n') for line in text.splitlines() if marker in line]
-    issues = []
-    if not starts:
-        issues.append('run BEGIN boundary missing')
-    if len(starts) > 1:
-        issues.append('run ID reused; prepare a fresh session')
-    if 'DONE' not in events:
-        issues.append('run did not finish')
-    for key, label in (('traces', 'TRACE'), ('drops', 'DROP'), ('views', 'VIEW')):
-        for index in range(len(session['checks'].get(key, []))):
-            if not any(event.startswith(f'{label} {index} ') or event == f'{label} {index}' for event in events):
-                issues.append(f'{label} {index} missing')
-    errors = [line for line in text.splitlines()
-              if any(tag in line for tag in ('SCRIPT ERROR', 'CRASH HAS BEEN CAPTURED', 'EXCEPTION'))]
-    if errors:
-        issues.append('script error or crash in console dump')
-    return {'events': events, 'errors': errors, 'issues': issues,
-            'server_passed': not issues, 'finished': 'DONE' in events,
-            'log_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+class Control:
+    """Minimal client for R1Delta's MCP HTTP server."""
+
+    def __init__(self, port):
+        self.url = f'http://127.0.0.1:{port}'
+        self.session = None
+        self.ident = 0
+
+    def healthy(self):
+        try:
+            with urllib.request.urlopen(self.url + '/health', timeout=2) as reply:
+                return json.loads(reply.read()).get('status') == 'ok'
+        except (OSError, ValueError):
+            return False
+
+    def post(self, message, timeout=90):
+        headers = {'Content-Type': 'application/json', 'MCP-Protocol-Version': PROTOCOL}
+        if self.session:
+            headers['Mcp-Session-Id'] = self.session
+        request = urllib.request.Request(self.url + '/', json.dumps(message).encode(), headers)
+        with urllib.request.urlopen(request, timeout=timeout) as reply:
+            body = reply.read()
+            return reply.headers.get('Mcp-Session-Id'), json.loads(body) if body else {}
+
+    def initialize(self):
+        session, reply = self.post({'jsonrpc': '2.0', 'id': 0, 'method': 'initialize', 'params': {
+            'protocolVersion': PROTOCOL, 'capabilities': {}, 'clientInfo': {'name': 'mrvn-r1-harness', 'version': '1'}}})
+        if 'result' not in reply:
+            raise RuntimeError(f'MCP initialize failed: {reply}')
+        self.session = session
+        self.post({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+
+    def call(self, name, arguments, timeout=90):
+        self.ident += 1
+        _, reply = self.post({'jsonrpc': '2.0', 'id': self.ident, 'method': 'tools/call',
+                              'params': {'name': name, 'arguments': arguments}}, timeout)
+        if 'result' not in reply:
+            raise RuntimeError(f'MCP {name} failed: {reply.get("error", reply)}')
+        return reply['result']
+
+    def state(self):
+        return self.call('get_game_state', {}).get('structuredContent', {})
+
+    def console(self, command):
+        self.call('execute_console_command', {'command': command, 'capture_output': False})
+
+    def squirrel(self, script, attempts=4):
+        """Run server Squirrel; return its [MRVN] lines, raising on script errors.
+
+        R1Delta gives a script 2 s to reach the engine thread (the first call
+        after a map load always misses that) but still runs it later, so
+        retried scripts must be idempotent."""
+        for number in range(attempts):
+            try:
+                result = self.call('execute_squirrel', {'context': 'server', 'script': script})
+                break
+            except RuntimeError as error:
+                if 'Timed out waiting for VM task' not in str(error) or number == attempts - 1:
+                    raise
+                time.sleep(1)
+        text = ''.join(part.get('text', '') for part in result.get('content', []))
+        if result.get('isError'):
+            raise RuntimeError('Squirrel error: ' + text[-600:])
+        return [line.split('[MRVN] ', 1)[1].strip() for line in text.splitlines() if '[MRVN] ' in line]
 
 
-def launch(session):
+def vec(values):
+    return 'Vector( ' + ', '.join(f'{float(v):.4f}' for v in values) + ' )'
+
+
+def trace_script(rows, first, hull):
+    lines = ['local player = GetPlayerArray().len() ? GetPlayerArray()[0] : null']
+    for i, t in enumerate(rows, first):
+        call = (f'TraceHull( {vec(t[:3])}, {vec(t[3:6])}, {vec(t[6:9])}, {vec(t[9:12])}, player, '
+                if hull else f'TraceLine( {vec(t[:3])}, {vec(t[3:6])}, player, ')
+        kind = 'HULL' if hull else 'TRACE'
+        lines.append(f'{{ local r = {call}TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_NONE ); '
+                     f'printl( "[MRVN] {kind} {i} fraction=" + r.fraction + " end=" + r.endPos.z + '
+                     f'" solid=" + r.startSolid + " normal=" + r.surfaceNormal ) }}')
+    return '\n'.join(lines)
+
+
+def run_checks(control, checks, pid, output, events, screenshots):
+    for key, hull in (('traces', False), ('hulls', True)):
+        rows = checks[key]
+        for first in range(0, len(rows), BATCH):
+            events += control.squirrel(trace_script(rows[first:first + BATCH], first, hull))
+    drops = checks['drops']
+    if drops:
+        models = checks['drop_models'] or [DEFAULT_MODEL] * len(drops)
+        token = uuid.uuid4().hex
+        # Guarded by a token: a timed-out call still runs later, so a retry
+        # must not spawn a second set.
+        spawn = [f'if ( !( "MRVN_DropToken" in getroottable() ) || ::MRVN_DropToken != "{token}" ) {{',
+                 f'::MRVN_DropToken <- "{token}"', '::MRVN_Drops <- []']
+        for model in sorted(set(models)):
+            spawn.append(f'PrecacheModel( "{model}" )')
+        for d, model in zip(drops, models):
+            spawn.append(f'{{ local p = CreateEntity( "prop_physics" ); p.kv.model = "{model}"; p.kv.minhealthdmg = 9999; '
+                         f'p.SetOrigin( {vec(d)} ); DispatchSpawn( p, false ); ::MRVN_Drops.append( p ) }}')
+        spawn.append('}')
+        spawn.append('foreach ( i, p in ::MRVN_Drops ) printl( "[MRVN] SPAWNED " + i + " valid=" + IsValid( p ) )')
+        spawned = control.squirrel('\n'.join(spawn))
+        events += spawned
+        invalid = [line.split()[1] for line in spawned if line.endswith('valid=false')]
+        if invalid:
+            names = sorted({models[int(i)] for i in invalid})
+            raise RuntimeError(f'drops {invalid} did not spawn as physics props in R1Delta (models {names})')
+        report = ('foreach ( i, p in ::MRVN_Drops ) { if ( IsValid( p ) ) printl( "[MRVN] %s " + i + %s" origin=" + '
+                  'p.GetOrigin() + " velocity=" + p.GetVelocity() ); else printl( "[MRVN] %s " + i + " z=gone" ) }')
+        start = time.monotonic()
+        while checks['drop_samples'] and time.monotonic() - start < checks['drop_wait']:
+            t = round(time.monotonic() - start, 2)
+            events += control.squirrel(report % ('SAMPLE', f'" t={t}" + ', 'SAMPLE'))
+            time.sleep(0.2)
+        time.sleep(max(0.0, checks['drop_wait'] - (time.monotonic() - start)))
+        events += control.squirrel(report % ('DROP', '" z=" + p.GetOrigin().z + ', 'DROP'))
+    for i, v in enumerate(checks['views']):
+        control.squirrel(f'local p = GetPlayerArray()[0]; p.SetOrigin( {vec(v[:3])} ); '
+                         f'p.SetAngles( Vector( {float(v[3])}, {float(v[4])}, 0 ) ); p.SetVelocity( Vector( 0, 0, 0 ) )')
+        time.sleep(2)
+        path = output / f'view_{i}.png'
+        if capture_window(pid, path):
+            screenshots.append(str(path))
+        events.append(f'VIEW {i}')
+
+
+def free_port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+def launch(session, port):
+    app, game = Path(session['app']), Path(session['game'])
     env = os.environ.copy()
-    env['FROM_DELTA_LAUNCHER'] = '1'
-    env['__COMPAT_LAYER'] = 'NoDTToDITMouseBatch=1'
-    env['ContentId'] = '1025161'
-    app = Path(session['app'])
-    game = Path(session['game'])
-    prepend = [app / 'r1delta/bin_delta', app / 'r1delta/bin', game / 'bin/x64_retail',
-               game / 'r1/bin/x64_retail']
-    env['PATH'] = os.pathsep.join([str(path) for path in prepend] + [env.get('PATH', '')])
-    command = [str(app / 'Titanfall.exe'), '-game', 'r1',
-               '-novid', '-windowed', '-w', '1280', '-h', '720',
-               '+sv_lan', '1', '+sv_cheats', '1', '+developer', '1',
-               '+exec', Path(session['cfg']).stem, '+map', session['map']]
-    return subprocess.Popen(command, cwd=session['game'], env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    # As R1Delta's launcher (launcher_ex/App.xaml.cs): no -game, game cwd, DLL paths.
+    env.update(FROM_DELTA_LAUNCHER='1', ContentId='1025161', __COMPAT_LAYER='NoDTToDITMouseBatch=1')
+    paths = [app / 'r1delta/bin_delta', app / 'r1delta/bin', game / 'bin/x64_retail', game / 'r1/bin/x64_retail']
+    env['PATH'] = os.pathsep.join([str(p) for p in paths if p.is_dir()] + [env.get('PATH', '')])
+    command = [str(app / 'Titanfall.exe'), '-novid', '-usemcp', '-windowed', '-w', '1280', '-h', '720',
+               '+developer', '1', '+mcp_start_http', str(port)]
+    return subprocess.Popen(command, cwd=game, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def stop(process):
+def stop(process, control):
     if process is None or process.poll() is not None:
         return
-    process.terminate()
     try:
-        process.wait(timeout=20)
-    except subprocess.TimeoutExpired:
+        control.console('quit')
+        process.wait(timeout=30)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, urllib.error.URLError):
         process.kill()
-        process.wait(timeout=10)
+        process.wait(timeout=30)
 
 
-def wait_for_condump(session, process, timeout):
-    r1 = Path(session['r1'])
-    marker = f'[MRVN:{session["run_id"]}]'
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        candidates = []
-        for path in r1.glob('condump*.txt'):
-            try:
-                if path.stat().st_mtime_ns > session['prepared_at_ns'] and marker in path.read_text('utf-8', 'replace'):
-                    candidates.append(path)
-            except OSError:
-                pass
-        if candidates:
-            path = max(candidates, key=lambda item: item.stat().st_mtime_ns)
+def attempt(session, checks, output, timeout):
+    port = free_port()
+    control = Control(port)
+    process = launch(session, port)
+    report = {'map': session['map'], 'events': [], 'errors': [], 'screenshots': [], 'loaded': False, 'finished': False}
+    start = time.monotonic()
+    try:
+        while not control.healthy():
+            if process.poll() is not None:
+                raise RuntimeError(f'R1Delta exited with code {process.returncode} before its control server started')
+            if time.monotonic() - start > timeout:
+                raise TimeoutError('R1Delta control server did not start')
             time.sleep(1)
-            return path, path.read_text('utf-8', 'replace')
-        if process is not None and process.poll() is not None:
-            break
-        time.sleep(0.5)
-    return None, ''
-
-
-def screenshots(session):
-    found = []
-    for directory in (Path(session['r1']) / 'screenshots', Path(session['game']) / 'screenshots'):
-        if not directory.is_dir():
-            continue
-        for path in directory.iterdir():
-            if path.is_file() and path.suffix.lower() in ('.tga', '.jpg', '.png') and path.stat().st_mtime_ns > session['prepared_at_ns']:
-                found.append({'path': str(path), 'sha256': digest(path)})
-    return found
+        control.initialize()
+        time.sleep(5)  # let the main menu finish initialising
+        control.console('map ' + session['map'])
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError(f'R1Delta exited with code {process.returncode} while loading the map')
+            if time.monotonic() - start > timeout:
+                raise TimeoutError('map did not load')
+            state = control.state()
+            if state.get('in_game') and state.get('current_map', '').lower() in (session['map'].lower(),
+                                                                              session['map'].lower() + '.bsp'):
+                break
+            time.sleep(2)
+        while True:  # the local player spawns after the map loads
+            try:
+                if control.squirrel('printl( "[MRVN] PLAYERS " + GetPlayerArray().len() )') != ['PLAYERS 0']:
+                    break
+            except RuntimeError:
+                pass
+            if time.monotonic() - start > timeout:
+                raise TimeoutError('no player spawned')
+            time.sleep(2)
+        report['loaded'] = True
+        time.sleep(3)
+        report['events'].append('BEGIN')
+        run_checks(control, checks, process.pid, output, report['events'], report['screenshots'])
+        report['events'].append('DONE')
+        report['finished'] = True
+    except Exception as error:
+        report['errors'].append(f'{type(error).__name__}: {error}')
+        try:  # the last console lines usually name the failure
+            lines = control.call('get_console_log', {}, timeout=10).get('structuredContent', {}).get('lines', [])
+            report['console_tail'] = [line.rstrip() for line in lines]
+        except Exception:
+            pass
+    finally:
+        stop(process, control)
+    if report['finished']:
+        report['errors'] += expectation_errors(report['events'], checks['expect'])
+    return report
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--game', type=Path, help='Titanfall install containing r1/ and vpk/')
-    p.add_argument('--r1delta', type=Path, help='R1Delta app-* folder (auto-detected)')
-    p.add_argument('--maps', type=Path, help='Folder with the compiled .bsp and .ent files')
-    p.add_argument('--map', help='Map name without .bsp')
+    p.add_argument('--game', type=Path, help='Titanfall install (default: R1Delta InstallPath)')
+    p.add_argument('--r1delta', type=Path, help='R1Delta app directory (default: newest app-*)')
+    p.add_argument('--maps', type=Path, help='Folder with the compiled .bsp/.ent; omit for a retail map')
+    p.add_argument('--map', required=True)
     p.add_argument('--checks', type=Path)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--session', type=Path, help='Reuse or write the staging session here')
-    p.add_argument('--collect-log', type=Path, help='Parse an existing condump instead of launching')
-    p.add_argument('--stage-only', action='store_true', help='Stage the addon and print the exec command')
-    p.add_argument('--keep', action='store_true', help='Leave the addon and addonlist entry in place')
-    p.add_argument('--timeout', type=int, default=300)
-    p.add_argument('--attempts', type=int, default=2)
+    p.add_argument('--timeout', type=int, default=300, help='Seconds to start, load and spawn')
+    p.add_argument('--attempts', type=int, default=3)
     args = p.parse_args(argv)
-    if not 0 <= args.timeout <= 3600:
-        p.error('timeout must be between 0 and 3600 seconds')
-    if args.attempts < 1:
-        p.error('attempts must be at least 1')
-
+    if not 30 <= args.timeout <= 3600 or args.attempts < 1:
+        p.error('--timeout must be 30..3600 and --attempts at least 1')
+    checks = validate_checks(json.loads(args.checks.read_text()) if args.checks else {})
     args.output.mkdir(parents=True, exist_ok=True)
-    session_path = args.session or args.output / 'r1_session.json'
-    if args.session and args.session.exists():
-        session = json.loads(session_path.read_text(encoding='utf-8'))
-    else:
-        if not (args.maps and args.map):
-            p.error('--maps and --map are required for a new session')
-        checks = json.loads(args.checks.read_text()) if args.checks else {}
-        session = prepare(find_app(args.r1delta), find_game(args.game), args.maps, args.map, checks)
-        session_path.write_text(json.dumps(session, indent=2), encoding='utf-8')
-
-    if args.stage_only:
-        print(f'staged {session["addon"]}')
-        print(f'session {session_path}')
-        print(f'In a local R1Delta match: exec {Path(session["cfg"]).stem}')
-        return 0
-
-    process = None
-    text = ''
-    path = None
-    attempts = 0
+    session = prepare(find_app(args.r1delta), find_game(args.game), args.maps, args.map,
+                      checks['drop_models'] if checks['drops'] else None)
     try:
-        if args.collect_log:
-            path = args.collect_log
-            text = path.read_text('utf-8', 'replace')
-        else:
-            for attempt in range(args.attempts):
-                attempts = attempt + 1
-                session['prepared_at_ns'] = time.time_ns()
-                process = launch(session)
-                path, text = wait_for_condump(session, process, args.timeout)
-                exit_code = process.poll()
-                stop(process)
-                process = None
-                if text:
-                    break
-                reason = f'process exited with code {exit_code}' if exit_code is not None else 'timed out'
-                print(f'attempt {attempt + 1}: no condump from the run ({reason})', flush=True)
-        result = collect(session, text)
+        for number in range(1, args.attempts + 1):
+            report = attempt(session, checks, args.output, args.timeout)
+            if report['loaded'] or number == args.attempts:
+                break
+            print(f'attempt {number}: {report["errors"]}, retrying', flush=True)
     finally:
-        stop(process)
-        if not args.keep:
-            cleanup(session)
-
-    shots = screenshots(session)
-    report = {**session, **result, 'output': str(args.output),
-              'log': str(path) if path else None, 'attempts': attempts,
-              'screenshots': shots, 'kept': args.keep}
-    if path and Path(path).exists():
-        snapshot = args.output / 'r1_condump.txt'
-        snapshot.write_text(text, encoding='utf-8')
-        report['console_snapshot'] = str(snapshot)
-    report.pop('original_listing', None)
-    (args.output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-    print(json.dumps({key: report[key] for key in ('server_passed', 'finished', 'issues', 'events')}, indent=2))
-    return 0 if result['server_passed'] else 1
+        cleanup(session)
+    (args.output / 'report.json').write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2))
+    return 0 if report['finished'] and not report['errors'] else 1
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    sys.exit(main())

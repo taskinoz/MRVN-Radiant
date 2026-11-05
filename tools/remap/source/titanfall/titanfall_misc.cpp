@@ -237,6 +237,18 @@ void Titanfall::EndModel() {
         model.minmax.extend(meshBounds.origin + meshBounds.extents);
     }
 
+    // R1Delta refuses TF1 maps past the Source coordinate limit ("Map coordinate
+    // extents are too large!!"); TFO loads them. Retail stays inside it.
+    if (g_game->bspVersion == 29 && Titanfall::Bsp::models.size() == 1 && model.meshCount) {
+        constexpr float limit = 16384.0f;
+        for (int axis = 0; axis < 3; ++axis)
+            if (model.minmax.mins[axis] < -limit || model.minmax.maxs[axis] > limit) {
+                Sys_Warning("World extends to %.0f..%.0f on axis %d, past +/-16384: R1Delta will not load it\n",
+                            model.minmax.mins[axis], model.minmax.maxs[axis], axis);
+                break;
+            }
+    }
+
     Sys_FPrintf( SYS_VRB, "       numMeshes: %i\n", model.meshCount );
     Sys_FPrintf( SYS_VRB, "   EndModel\n" );
 }

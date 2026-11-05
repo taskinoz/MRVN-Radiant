@@ -18,87 +18,99 @@ class R1HarnessTests(unittest.TestCase):
         self.app = self.root / 'R1Delta/app-3.0.4'
         self.maps = self.root / 'build'
         (self.game / 'vpk').mkdir(parents=True)
-        (self.r1 / 'cfg').mkdir(parents=True)
+        self.r1.mkdir(parents=True)
         self.app.mkdir(parents=True)
         (self.app / 'Titanfall.exe').write_bytes(b'')
         (self.r1 / 'GameInfo.txt').write_text('"GameInfo" {}')
         self.maps.mkdir()
         (self.maps / 'mp_test.bsp').write_bytes(b'BSP')
-        (self.maps / 'mp_test.ent').write_text('ENT')
+        (self.maps / 'mp_test_spawn.ent').write_text('ENT')
+        (self.maps / 'mp_test.bsp.0000.bsp_lump').write_bytes(b'LUMP')
         (self.maps / 'mp_test.map').write_text('SOURCE')
+        (self.maps / 'other.bsp').write_bytes(b'OTHER')
         (self.r1 / 'addonlist.txt').write_text('"AddonList"\n{\n"UserMod" "1"\n}\n')
 
-    def prepare(self):
-        return r1_harness.prepare(self.app, self.game, self.maps, 'mp_test',
-                                  {'traces': [[0, 0, 10, 0, 0, 0]], 'drops': [[0, 0, 10]]},
-                                  run_id='a' * 32)
+    def prepare(self, maps=True):
+        return r1_harness.prepare(self.app, self.game, self.maps if maps else None, 'mp_test',
+                                  ['models/containers/barrel.mdl'] if maps else None, run_id='a' * 32)
 
-    def test_staging_and_cleanup_preserves_other_addons(self):
+    def test_staging_copies_only_the_level_and_cleanup_preserves_other_addons(self):
         session = self.prepare()
         addon = Path(session['addon'])
-        self.assertTrue((addon / 'maps/mp_test.bsp').exists())
-        self.assertTrue((addon / 'maps/mp_test.ent').exists())
-        self.assertFalse((addon / 'maps/mp_test.map').exists())
+        staged = sorted(p.name for p in (addon / 'maps').iterdir())
+        self.assertEqual(staged, ['mp_test.bsp', 'mp_test.bsp.0000.bsp_lump', 'mp_test_spawn.ent'])
         self.assertIn('"addonContent_Map" "1"', (addon / 'addoninfo.txt').read_text())
-        cfg = Path(session['cfg']).read_text()
-        self.assertIn('script IncludeFile("mrvn_harness_' + 'a' * 32 + '")', cfg)
+        hook = (addon / 'scripts/vscripts/test/myscript.nut').read_text()
+        self.assertIn('PrecacheModel( "models/containers/barrel.mdl" )', hook)
         self.assertIn('"MRVN.TF1Harness.' + 'a' * 32 + '" "1"', (self.r1 / 'addonlist.txt').read_text())
-        script = next((addon / 'scripts/vscripts').glob('*.nut')).read_text()
-        self.assertIn('[MRVN:' + 'a' * 32 + ']', script)
-        self.assertIn('WaittillGameStateOrHigher', script)
-        self.assertIn('ServerCommand( "condump" )', script)
-
         r1_harness.cleanup(session)
         self.assertFalse(addon.exists())
-        self.assertFalse(Path(session['cfg']).exists())
         listing = (self.r1 / 'addonlist.txt').read_text()
         self.assertIn('"UserMod" "1"', listing)
         self.assertNotIn('MRVN.TF1Harness', listing)
 
-    def test_foreign_cfg_prevents_cleanup(self):
+    def test_cleanup_accepts_the_games_tab_indented_listing(self):
         session = self.prepare()
-        Path(session['cfg']).write_text('user changes')
-        with self.assertRaisesRegex(ValueError, 'changed'):
-            r1_harness.cleanup(session)
-        self.assertTrue(Path(session['addon']).exists())
-
-    def test_cleanup_requires_owned_addon_entry(self):
-        session = self.prepare()
-        listing = self.r1 / 'addonlist.txt'
-        listing.write_text('"AddonList"\n{\n"UserMod" "1"\n}\n')
-        with self.assertRaisesRegex(ValueError, 'entry'):
-            r1_harness.cleanup(session)
-        self.assertTrue(Path(session['addon']).exists())
-
-    def test_collect_reports_pass_and_failure(self):
-        session = self.prepare()
-        events = ['BEGIN', 'TRACE 0 fraction=1 end=0 solid=false', 'DROP 0 z=8', 'DONE']
-        text = '\n'.join('[MRVN:' + 'a' * 32 + '] ' + event for event in events)
-        result = r1_harness.collect(session, text)
-        self.assertTrue(result['server_passed'])
-        self.assertTrue(result['finished'])
-        self.assertEqual(result['events'], events)
-        bad = r1_harness.collect(session, text.replace('DONE', 'OTHER'))
-        self.assertFalse(bad['server_passed'])
-        self.assertIn('run did not finish', bad['issues'])
-        self.assertFalse(r1_harness.collect(session, text + '\nSCRIPT ERROR')['server_passed'])
-        self.assertFalse(r1_harness.collect(session, text.replace('DROP 0 z=8', ''))['server_passed'])
-
-    def test_accepts_nested_map_directory(self):
-        nested = self.maps / 'maps'
-        nested.mkdir()
-        (self.maps / 'mp_test.bsp').replace(nested / 'mp_test.bsp')
-        session = self.prepare()
-        self.assertTrue((Path(session['addon']) / 'maps/mp_test.bsp').exists())
+        name = Path(session['addon']).name
+        (self.r1 / 'addonlist.txt').write_text(f'"AddonList"\n{{\n\t"UserMod"\t\t"1"\n\t"{name}"\t\t"1"\n}}\n')
         r1_harness.cleanup(session)
+        self.assertEqual((self.r1 / 'addonlist.txt').read_text(), '"AddonList"\n{\n\t"UserMod"\t\t"1"\n}\n')
 
-    def test_rejects_unsafe_listing_and_missing_map(self):
-        (self.r1 / 'addonlist.txt').write_text('"AddonList"\n{\n"UserMod" "1"\n}\nextra\n')
-        with self.assertRaisesRegex(ValueError, 'unsupported'):
+    def test_existing_precache_hook_is_not_shadowed(self):
+        other = self.r1 / 'addons/UserMod/scripts/vscripts/test/myscript.nut'
+        other.parent.mkdir(parents=True)
+        other.write_text('// user script')
+        with self.assertRaises(ValueError):
             self.prepare()
-        (self.r1 / 'addonlist.txt').write_text('"AddonList"\n{\n}\n')
-        with self.assertRaisesRegex(ValueError, 'missing compiled map'):
-            r1_harness.prepare(self.app, self.game, self.maps, 'mp_missing', {})
+        self.assertFalse((self.r1 / 'addons' / ('MRVN.TF1Harness.' + 'a' * 32)).exists())
+
+    def test_retail_map_with_drops_stages_only_the_precache_hook(self):
+        session = r1_harness.prepare(self.app, self.game, None, 'mp_test', [], run_id='b' * 32)
+        addon = Path(session['addon'])
+        self.assertFalse((addon / 'maps').exists())
+        self.assertIn(r1_harness.DEFAULT_MODEL, (addon / 'scripts/vscripts/test/myscript.nut').read_text())
+        self.assertIn('"addonContent_Map" "0"', (addon / 'addoninfo.txt').read_text())
+        r1_harness.cleanup(session)
+        self.assertFalse(addon.exists())
+
+    def test_retail_map_stages_nothing(self):
+        session = self.prepare(maps=False)
+        self.assertIsNone(session['addon'])
+        self.assertFalse((self.r1 / 'addons').exists())
+        r1_harness.cleanup(session)
+        self.assertEqual((self.r1 / 'addonlist.txt').read_text(), '"AddonList"\n{\n"UserMod" "1"\n}\n')
+
+    def test_changed_addon_prevents_cleanup(self):
+        session = self.prepare()
+        (Path(session['addon']) / 'addoninfo.txt').write_text('user changes')
+        with self.assertRaises(ValueError):
+            r1_harness.cleanup(session)
+        self.assertTrue(Path(session['addon']).exists())
+
+    def test_unsupported_addon_list_is_not_rewritten(self):
+        (self.r1 / 'addonlist.txt').write_text('"AddonList" { "Nested" { } }')
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertFalse((self.r1 / 'addons').exists())
+
+    def test_check_validation_matches_tfo_schema(self):
+        checks = r1_harness.validate_checks({
+            'traces': [[0, 0, 10, 0, 0, 0]], 'hulls': [[0, 0, 10, 0, 0, 0, -8, -8, 0, 8, 8, 72]],
+            'drops': [[0, 0, 10]], 'drop_models': ['models/containers/barrel.mdl'], 'drop_wait': 2,
+            'drop_samples': True, 'expect': {'trace_z': [[0, -1, 1]]}})
+        self.assertTrue(checks['drop_samples'])
+        for bad in ({'hulls': [[0, 0, 0, 0, 0, 0, 8, 0, 0, -8, 0, 0]]},
+                    {'drops': [[0, 0, 0]], 'drop_models': ['../x.mdl']},
+                    {'drop_wait': 0}, {'traces': [[0, 0, float('nan'), 0, 0, 0]]},
+                    {'expect': {'trace_z': [[0, 2, 1]]}}):
+            with self.assertRaises(ValueError):
+                r1_harness.validate_checks(bad)
+
+    def test_trace_script_matches_tfo_event_format(self):
+        script = r1_harness.trace_script([[1, 2, 3, 4, 5, 6, -1, -1, -1, 1, 1, 1]], 7, True)
+        self.assertIn('TraceHull( Vector( 1.0000, 2.0000, 3.0000 )', script)
+        self.assertIn('"[MRVN] HULL 7 fraction=" + r.fraction + " end=" + r.endPos.z', script)
+        self.assertIn('TRACE_COLLISION_GROUP_NONE );', script)
 
 
 if __name__ == '__main__':

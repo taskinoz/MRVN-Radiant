@@ -54,14 +54,57 @@ Things learned getting it to run:
   the game window must be visible; it brings the window to the front first.
   Windows Firewall prompts for `TFO.exe` cover the window until answered.
 
-An experimental R1Delta harness is also available in
-`tools/respawn/r1_harness.py`. Its staging and cleanup are covered by unit
-tests, but its automatic launch has not yet succeeded on the test machine: the
-R1Delta process exited with code 1 before producing a console dump. A staged
-session can be tried manually with `--stage-only`, then the printed `exec`
-command in a local match. Collect a fresh console dump with `--session` and
-`--collect-log`; collection removes the staged addon unless `--keep` is used.
-Treat a staged session or a report with missing events as unverified.
+## Testing in R1Delta (Titanfall 1)
+
+`tools/respawn/r1_harness.py` tests maps in R1Delta unattended, with the TFO
+harness's checks schema, event lines and report, so both TF1 runtimes compare
+line for line:
+
+    python tools/respawn/r1_harness.py --maps BUILD_DIR --map mp_name         --checks checks.json --output REPORT_DIR
+
+Omit `--maps` for a retail map. The game and R1Delta paths default to R1Delta's
+registry `InstallPath` and its newest `%LOCALAPPDATA%/R1Delta/app-*`.
+
+- **Control:** R1Delta ships a JSON-RPC (MCP) server, registered only with
+  `-usemcp` and started by `+mcp_start_http PORT` on 127.0.0.1. Its tools run
+  server Squirrel synchronously and return printed output, run console commands,
+  and report game state. The harness launches `app-*/Titanfall.exe` as R1Delta's
+  own launcher does (`FROM_DELTA_LAUNCHER`, `ContentId`, R1Delta and game DLL
+  directories on `PATH`, game directory as working directory, no `-game`), loads
+  the map with `map`, waits for the local player, then runs traces and hulls in
+  batches, spawns drops, samples or waits, and reads them back. The old launch
+  passed `-game r1`; the old console-dump flow is gone. No R1Delta fork is needed;
+  the source checked was tag v3.0.4 (`engine/mcp_server.cpp`).
+- **Script calls:** R1Delta gives a script 2 s to reach the engine thread; the
+  first call after a map load always misses that but still runs later. The
+  harness retries on that timeout, so every script is idempotent; drop spawning
+  is guarded by a run token.
+- **Staging:** a compiled map becomes an owned addon in `r1/addons` with only its
+  `.bsp`, `.bsp_lump` and `.ent` files, listed in `addonlist.txt`; cleanup
+  removes exactly that addon and entry (R1Delta rewrites the list with tabs).
+  Drop models are precached by an addon `scripts/vscripts/test/myscript.nut`,
+  which `_mapspawn.nut` includes at level init when `developer` is above 0; the
+  harness refuses to shadow an existing one. Runtime `PrecacheModel` has no
+  effect, and per-map addon level scripts were not loaded.
+- **Drops:** `models/containers/barrel.mdl` is the default: barrels spawn as
+  physics props on retail maps, while `crate.mdl` and `projectile_rocket.mdl`
+  never do. Unspawned drops fail the run with the model named.
+- **Results:** retail Angel City (16 traces, 16 barrels) passed with every barrel
+  on its traced floor. On the compiled closed-solid bevel map, all 5,148 traces
+  and hull sweeps matched TFO within 0.001 unit (5,130 exactly).
+- **Coordinate limit:** R1Delta refuses maps past +/-16384 units ("Map coordinate
+  extents are too large!!") where TFO loads them; remap now warns for TF1.
+
+**Open: physics props on compiled maps.** In R1Delta, `prop_physics` is removed
+silently on spawn on every remap-compiled map tried (brush-only and patch maps,
+scripted or placed in the entity lump), but works on retail Angel City and works
+on the same compiled maps in TFO. Precaching (verified hook), world bounds keys
+(`world_mins`/`world_maxs`, which retail writes and remap does not), spawn height
+and retail Angel City's own PHYSICS_COLLIDE all failed to change it. Loading
+retail Angel City under another name crashed, so it could not separate R1Delta's
+custom-map path from remap output. Prop drops in R1Delta are unverified until
+this is resolved; traces and hulls are unaffected.
+
 
 ## Materials
 

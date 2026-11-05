@@ -16,7 +16,7 @@ from inspect_bsp import inspect
 from validate_records import load_records, validate
 from game_lump import inspect_game_lump, relocate_bsp
 from portals import locate_cell, connected
-from tricoll import triangle_indices
+from tricoll import triangle_indices, decode_bevel_lists, select_bevels
 from decompile_bsp import parse_entities
 
 
@@ -149,6 +149,17 @@ def collision_portal_fixtures(folder, command, reports, game):
                          for h in r[69] for (word,) in r[66][h[7]:h[7]+h[4]]]
             if sorted(rendered) != sorted(collision):
                 raise RuntimeError('patch render and collision triangulations differ')
+            # Emitted bevel lists equal the independent supporting-plane rule.
+            order = [(h, k) for h, header in enumerate(r[69]) for k in range(header[4])]
+            positions = [tuple(r[3][r[69][h][6] + v] for v in triangle_indices(r[66][r[69][h][7] + k][0]))
+                         for h, k in order]
+            expected = select_bevels(positions)
+            emitted = decode_bevel_lists(r, 29 if game == 'titanfallonline' else 37)
+            for i, key in enumerate(order):
+                if sorted(order.index(t) for t in emitted[key]) != expected[i]:
+                    raise RuntimeError(f'patch triangle {key} bevels {emitted[key]} differ from rule {expected[i]}')
+            if not any(expected.values()):
+                raise RuntimeError('dome patch selected no triangle bevels')
         else:
             a, b = (locate_cell(r, point) for point in ((-128, 0, 64), (128, 0, 64)))
             if a == b or connected(r, a, b) != (name != 'portal-closed'):

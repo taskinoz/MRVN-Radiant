@@ -463,6 +463,7 @@ collision defect. The harness's `drop_samples` option logs drop positions every
   other physics shapes and speeds, broader buoyancy cases, underwater cells and
   surface-specific effects need in-game tests. The controlled crate comparison
   above verifies emitted-fluid buoyancy for one scene.
-- **TRICOLL_BEVEL_INDICES:** as TF2.
+- **TRICOLL_BEVEL_INDICES:** written with the functional rule, as TF2. It is a
+  superset of Angel City's retail lists; exact retail selection remains open.
 - **LEAF_WATER_DATA:** records are generated for water, but the cell assignment
   heuristic remains unverified, particularly for single-cell maps.

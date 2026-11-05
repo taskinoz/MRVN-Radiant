@@ -46,6 +46,59 @@ def check_bevel_chain(words, first, start, total, width, headers, current):
     return False
 
 
+def decode_bevel_lists(records, version=37):
+    """Return {(header, triangle): [(header, triangle), ...]} of bevel targets."""
+    width = 10 if version == 29 else 11
+    triangles, headers, starts, bevels = (records.get(i, []) for i in (66, 69, 96, 97))
+    result = {}
+    for h, header in enumerate(headers):
+        nt, nb, ft, fb = header[4], header[5], header[7], header[9]
+        for k in range(nt):
+            count = (triangles[ft + k][0] >> 24) & 0xf
+            start = starts[ft + k][0]
+            targets = []
+            if count < 15:
+                targets = [(h, bevel_index(bevels, fb, i, width)) for i in range(start, start + count)]
+            else:
+                while start + 2 <= nb:
+                    value = bevel_index(bevels, fb, start, width) | (bevel_index(bevels, fb, start + 1, width) << width)
+                    start += 2
+                    n, target = value & 0x7f, value >> 7
+                    targets += [(target, bevel_index(bevels, fb, i, width)) for i in range(start, start + n)]
+                    start += n
+                    if target == h:
+                        break
+            result[(h, k)] = targets
+    return result
+
+
+def select_bevels(triangles):
+    """Independent reference of remap's supporting-plane bevel rule (see
+    tricoll_bevel_select.h): {source index: sorted target indices}."""
+    def sub(a, b):
+        return tuple(x - y for x, y in zip(a, b))
+    planes = []
+    for t in triangles:
+        u, v = sub(t[2], t[0]), sub(t[1], t[0])
+        n = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+        length = math.sqrt(sum(c*c for c in n))
+        n = tuple(c / length for c in n) if length > 1e-9 else None
+        planes.append((n, sum(a*b for a, b in zip(n, t[0])) if n else 0.0))
+    result = {}
+    for i, t in enumerate(triangles):
+        chosen = []
+        if planes[i][0] and planes[i][0][2] >= -0.5:
+            for j, other in enumerate(triangles):
+                n, d = planes[j]
+                if j == i or not n or not set(t) & set(other):
+                    continue
+                distances = [sum(a*b for a, b in zip(n, p)) - d for p in t]
+                if max(distances) <= 1/32 and min(distances) < -1/32:
+                    chosen.append(j)
+        result[i] = chosen
+    return result
+
+
 def check_tricoll_records(records, version=37):
     errors = []
     def error(index, message):

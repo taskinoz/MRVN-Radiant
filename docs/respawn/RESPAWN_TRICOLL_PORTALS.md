@@ -452,9 +452,58 @@ Boundary/invalid-input cases cover final native header IDs, chain address
 limits, missing targets, empty batches and lists that cannot fit even in a
 one-triangle header. The Release build, 49 compiler fixtures, C++ encoding tests
 and 189 Python tests pass. Across all 50 emitted TF1/TF2 regression BSPs, lumps
-3, 66, 68, 69, 96 and 97 are byte-identical to the pre-refactor baseline. The
-production selector still supplies empty reference lists; complete geometric
-selection remains open.
+3, 66, 68, 69, 96 and 97 are byte-identical to the pre-refactor baseline. (The
+production selector and header grouping below now replace the empty lists and
+per-patch batches.)
+
+### Production triangle bevels and header grouping (6 November 2026)
+
+remap now writes triangle bevel lists for TF1 and TF2 with a functional rule,
+`respawn/tricoll_bevel_select.h`: a source triangle (physical front normal Z of
+at least -0.5) references every triangle of its entity that shares a vertex and
+whose plane supports it (all source vertices within 1/32 unit in front, at least
+one more than 1/32 behind). It is not retail's selector. TF1 Angel City's retail
+references all satisfy it; on retail TF2 Coliseum geometry it reproduces 31.9% of
+retail's 18,817 references (TF2 also references triangles without a shared vertex)
+and adds 48,933 others. The adoption criterion was native safety, not parity.
+
+Native sweeps (TFO and TF2, outside starts, 26 directions, three lateral offsets,
+point traces and five box hulls) compared three representations of each shape:
+triangles without bevels, triangles with the rule's lists, and native CM brushes.
+Sweeps within 3 degrees of parallel to a face were excluded: on identical
+geometry at different positions they gave contacts up to 366 units apart.
+
+- **Closed concave solids** (V-notch, L-step, zig-zag ridge, pyramid pit;
+  watertight, outward, volumes checked analytically; 5,148 cases per game):
+  without bevels, triangles caught early against the brush result on the notch
+  (20 TFO / 8 TF2 non-grazing hulls) and zig-zag (12 / 3); with the rule, no
+  sweep was earlier than the brushes and no new difference appeared. Point traces
+  matched the exact box sweep everywhere.
+- **Open terrain** against prism brushes (each triangle extruded down; downward
+  non-grazing hulls): early contacts fell from 79 to 48 (TFO) and 67 to 46 (TF2),
+  worst cases from 46 to 37 and 44 to 24 units; no sweep became later than the
+  brushes (TF2 kept the same 3 later cases with and without bevels).
+- **Purely concave neighbours** (valley, pit) select nothing, by construction.
+
+Native hulls are not exact box sweeps: native brushes themselves stopped up to
+31.6 units past the exact AABB contact on sloped ridges, and triangles without
+bevels matched the exact sweep there. The criterion is therefore agreement with
+native brushes, the engine's own solid behavior.
+
+Compiled output was checked natively without injection: the same closed-solid map
+built from the compiler's own lists (one grouped header, own-header chains) matched
+the injected runs on all 5,148 sweeps in both games within 0.001 unit. The
+regression decodes the dome patch's emitted lists and compares them with an
+independent Python implementation (`tricoll.select_bevels`); a full retail-derived
+Coliseum compile matched it for all 16,632 triangles (85,709 references).
+
+**Header grouping.** Patches with the same material, contents and sky flag now
+share headers, ordered by triangle-centroid Morton code and cut at 300
+triangles. One header per patch gave 16,632 headers for decompiled Coliseum
+(retail: 184); it now gives 63. That exceeded TFO's 8,192 virtual-mesh physics
+objects and TF1's chain header field (2 * 10 - 7 bits, 8,192 headers). Bevel
+references that still cannot be encoded are dropped with a warning instead of
+aborting the compile; a dropped bevel leaves contact conservative.
 
 ## Visibility records
 

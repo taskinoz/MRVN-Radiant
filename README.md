@@ -38,8 +38,8 @@ samples, map trials, crash investigations and the converter notes. See the
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall Online | 97% (73/75) | Baked lighting, probes, shadow meshes, cubemaps, brush and patch collision, VPhysics world collision, sky portals; tested in Titanfall Online. Missing physics triangles and collision bevels; see [RESPAWN_TF1_LUMPS.md](docs/respawn/RESPAWN_TF1_LUMPS.md) |
-| Titanfall 2 | 99% (80/81) | Every lump retail fills except triangle collision bevels; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
+| Titanfall Online | 99% (74/75) | Baked lighting, probes, shadow meshes, cubemaps, brush and patch collision with triangle bevels, VPhysics world collision (patches through the engine's virtual meshes), sky portals; tested in Titanfall Online. PHYSICS_TRIANGLES stays empty, so the engine builds it at load; see [RESPAWN_TF1_LUMPS.md](docs/respawn/RESPAWN_TF1_LUMPS.md) |
+| Titanfall 2 | 100% (81/81) | Every lump retail fills; triangle collision bevels use a natively tested rule, not retail's exact lists; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
 | Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals. Not yet recounted for empty lumps |
 
 > Coverage = lumps remap writes as retail maps do / lumps named for that game in
@@ -48,7 +48,7 @@ samples, map trials, crash investigations and the converter notes. See the
 > Fixed placeholder stubs don't count. Titanfall 2's lighting, probe and shadow
 > lumps are generated when the map has lights.
 
-> NOTE: These values are updated manually. Last counted 2026-11-04 from
+> NOTE: These values are updated manually. Last counted 2026-11-06 from
 > `titanfall.cpp`, `titanfall2.cpp` and `apex_legends.cpp`.
 
 ## Other tools

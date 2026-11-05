@@ -26,6 +26,7 @@
 #include "titanfall.h"
 #include "../respawn/encoding.h"
 #include "../respawn/tricoll_partition.h"
+#include "../respawn/tricoll_bevel_select.h"
 #include "../respawn/convex_brushes.h"
 #include <map>
 #include <numeric>
@@ -258,6 +259,7 @@ std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
         std::vector<std::array<Vector3,3>> triangles;
     };
     std::vector<TriangleBatch> batches;
+    std::map<std::tuple<const shaderInfo_t*, int, bool>, std::size_t> batchIndex;
     std::vector<std::uint32_t> batchSizes;
     std::vector<std::uint32_t> batchOffsets;
     std::uint32_t entityTriangleCount = 0;
@@ -286,23 +288,61 @@ std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
                     triangles.push_back({points[tri[0]], points[tri[1]], points[tri[2]]});
             }
         }
-        if (!triangles.empty()) {
-            if (triangles.size() > 0xffffffffull - entityTriangleCount)
-                Error("Entity patch triangle count exceeds 32 bits");
-            batchOffsets.push_back(entityTriangleCount);
-            batchSizes.push_back(static_cast<std::uint32_t>(triangles.size()));
-            entityTriangleCount += static_cast<std::uint32_t>(triangles.size());
-            batches.push_back({&shader, contents, modelOnly, std::move(triangles)});
+        if (triangles.empty()) continue;
+        // Patches sharing material, contents and sky flag share headers, as in
+        // retail (Coliseum: 184 headers for 16,632 triangles). One header per
+        // patch exhausted TFO's 8192 virtual meshes and TF1's 8192 chainable
+        // headers on large maps.
+        const auto batchKey = std::make_tuple(&shader, contents, modelOnly);
+        auto found = batchIndex.find(batchKey);
+        if (found == batchIndex.end()) {
+            found = batchIndex.emplace(batchKey, batches.size()).first;
+            batches.push_back({&shader, contents, modelOnly, {}});
         }
+        auto& target = batches[found->second].triangles;
+        target.insert(target.end(), triangles.begin(), triangles.end());
+    }
+    // Order each batch spatially (Morton order of triangle centroids over the
+    // entity bounds) so every header the partitioner cuts from it is compact.
+    MinMax entityBounds;
+    for (const auto& batch : batches)
+        for (const auto& triangle : batch.triangles)
+            for (const auto& point : triangle) entityBounds.extend(point);
+    for (auto& batch : batches) {
+        const auto morton = [&](const std::array<Vector3, 3>& triangle) {
+            std::uint64_t code = 0;
+            for (int axis = 0; axis < 3; ++axis) {
+                const double size = std::max(1e-6, double(entityBounds.maxs[axis]) - entityBounds.mins[axis]);
+                const double centre = (double(triangle[0][axis]) + triangle[1][axis] + triangle[2][axis]) / 3;
+                const auto cell = static_cast<std::uint64_t>(std::clamp((centre - entityBounds.mins[axis]) / size, 0.0, 1.0) * 1023.0);
+                for (int bit = 0; bit < 10; ++bit) code |= ((cell >> bit) & 1ull) << (3 * bit + axis);
+            }
+            return code;
+        };
+        std::stable_sort(batch.triangles.begin(), batch.triangles.end(),
+                         [&](const auto& a, const auto& b) { return morton(a) < morton(b); });
+        if (batch.triangles.size() > 0xffffffffull - entityTriangleCount)
+            Error("Entity patch triangle count exceeds 32 bits");
+        batchOffsets.push_back(entityTriangleCount);
+        batchSizes.push_back(static_cast<std::uint32_t>(batch.triangles.size()));
+        entityTriangleCount += static_cast<std::uint32_t>(batch.triangles.size());
     }
     if (!batches.empty()) {
         std::vector<std::uint16_t> precedingCounts;
         for (const auto& header : Titanfall::Bsp::tricollHeaders)
             precedingCounts.push_back(static_cast<std::uint16_t>(header.numTris));
-        // Selection must run over the whole entity before material/header cuts.
-        // TODO: supply the complete validated selector; supporting planes alone
-        // are still insufficient evidence for adopting a geometric rule.
-        const std::vector<std::vector<std::uint32_t>> references(entityTriangleCount);
+        // Selection runs over the whole entity before material/header cuts, so
+        // an edge between patches or materials still gets its bevels.
+        std::vector<Respawn::BevelTriangle> entityTriangles;
+        entityTriangles.reserve(entityTriangleCount);
+        for (const auto& batch : batches)
+            for (const auto& triangle : batch.triangles) {
+                Respawn::BevelTriangle t;
+                for (int k = 0; k < 3; ++k)
+                    for (int axis = 0; axis < 3; ++axis) t[k][axis] = triangle[k][axis];
+                entityTriangles.push_back(t);
+            }
+        const std::vector<std::vector<std::uint32_t>> references = Respawn::selectTricollBevels(entityTriangles);
         try {
             const auto chunks = Respawn::partitionTricollBevels(
                 g_game->bspVersion == 29 ? 10 : 11, precedingCounts, batchSizes, references, MaxTriangles);
@@ -311,6 +351,10 @@ std::vector<PatchCollision> EmitPatchCollision(const entity_t &entity) {
                 EmitTricollHeader(*batch.shader, batch.contents, batch.modelOnly, batch.triangles,
                                  chunk.firstTriangle - batchOffsets[chunk.batch], chunk.triangleCount, result);
             }
+            std::size_t dropped = 0;
+            for (const auto& chunk : chunks) dropped += chunk.droppedReferences;
+            if (dropped)
+                Sys_Warning("%zu triangle collision bevels dropped: their headers exceed the chain index field\n", dropped);
             for (std::size_t h = 0; h < chunks.size(); ++h) {
                 const auto& encoded = chunks[h].bevels;
                 auto& header = Titanfall::Bsp::tricollHeaders[precedingCounts.size() + h];

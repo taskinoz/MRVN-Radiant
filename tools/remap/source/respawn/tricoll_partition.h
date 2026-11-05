@@ -9,6 +9,7 @@ struct TricollBevelChunk {
     std::uint32_t firstTriangle;
     std::uint16_t triangleCount;
     TricollBevelEncoding bevels;
+    std::uint32_t droppedReferences = 0;  // unencodable chain targets, see below
 };
 
 // Batches preserve material/contents ownership; references use entity-wide
@@ -93,13 +94,32 @@ inline std::vector<TricollBevelChunk> partitionTricollBevels(
     for (const auto& chunk : chunks) counts.push_back(chunk.triangleCount);
     for (std::size_t h = 0; h < chunks.size(); ++h) {
         auto& chunk = chunks[h];
+        // Chain segments store their header in 2 * width - 7 bits (8192 TF1
+        // headers, 32768 TF2), and every chain ends on a segment naming its own
+        // header. Beyond that, keep what a plain list can hold: up to 14 targets
+        // in the triangle's own header. Bevels only trim early hull contacts, so
+        // dropping one leaves collision conservative.
+        const std::uint32_t headerLimit = 1u << (2 * width - 7);
+        const auto current = static_cast<std::uint32_t>(precedingTriangleCounts.size() + h);
         std::vector<std::vector<TricollBevelReference>> local(chunk.triangleCount);
-        for (std::uint32_t i = 0; i < chunk.triangleCount; ++i)
-            for (const auto target : references[chunk.firstTriangle + i]) {
+        for (std::uint32_t i = 0; i < chunk.triangleCount; ++i) {
+            const auto& list = references[chunk.firstTriangle + i];
+            for (const auto target : list) {
                 const auto targetChunk = owner[target];
-                local[i].push_back({static_cast<std::uint32_t>(precedingTriangleCounts.size() + targetChunk),
-                                   target - chunks[targetChunk].firstTriangle});
+                const auto header = static_cast<std::uint32_t>(precedingTriangleCounts.size() + targetChunk);
+                if (header != current && header >= headerLimit) { ++chunk.droppedReferences; continue; }
+                local[i].push_back({header, target - chunks[targetChunk].firstTriangle});
             }
+            const bool chain = local[i].size() >= 15 ||
+                std::any_of(local[i].begin(), local[i].end(), [&](const auto& ref) { return ref.header != current; });
+            if (chain && current >= headerLimit) {
+                std::vector<TricollBevelReference> own;
+                for (const auto& ref : local[i])
+                    if (ref.header == current && own.size() < 14) own.push_back(ref);
+                chunk.droppedReferences += static_cast<std::uint32_t>(local[i].size() - own.size());
+                local[i].swap(own);
+            }
+        }
         chunk.bevels = encodeTricollBevels(width,
             static_cast<std::uint32_t>(precedingTriangleCounts.size() + h), counts, local);
     }

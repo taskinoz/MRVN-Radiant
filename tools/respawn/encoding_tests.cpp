@@ -7,6 +7,8 @@
 #include "../remap/source/respawn/box_coverage.h"
 #include "../remap/source/respawn/convex_coverage.h"
 #include "../remap/source/respawn/vmt_surfaceprop.h"
+#include "../remap/source/respawn/tricoll_bevel_select.h"
+#include "../remap/source/respawn/tricoll_bevel_select.h"
 #include <iostream>
 #include <limits>
 #include <map>
@@ -193,8 +195,13 @@ int main() {
                     "The final native primitive header remains usable for direct lists");
             rejects([&]{ Respawn::partitionTricollBevels(width,std::vector<std::uint16_t>(65535,1),
                 {2},{{},{}},1); });
-            rejects([&]{ Respawn::partitionTricollBevels(width,
-                std::vector<std::uint16_t>(1u<<(2*width-7),1),{1,1},{{1},{0}}); });
+            {
+                // Past the chain header field, cross-header bevels are dropped (conservative).
+                const auto beyond = Respawn::partitionTricollBevels(width,
+                    std::vector<std::uint16_t>(1u<<(2*width-7),1),{1,1},{{1},{0}});
+                require(beyond.size()==2 && beyond[0].droppedReferences==1 && beyond[1].droppedReferences==1,
+                        "Chain targets past the header field are dropped, not encoded");
+            }
         }
         Respawn::CellMergeGroups groups(6);
         groups.protect(0, 1);
@@ -353,6 +360,35 @@ int main() {
         require(!Respawn::coversConvexFraction(translated,{translatedWedge},.50001), "World translation does not create water volume");
         require(!Respawn::coversConvexFraction(unit,{{{{2,2,2},{3,3,3}},{{{1,1,0},5}}}},.1), "Disjoint water volumes do not cover the cell");
         require(!Respawn::coversConvexFraction(unit,std::vector<Respawn::CoverageSolid>(100,wedge),.75), "Repeated volumes preserve union coverage");
+        {
+            // Front normals are cross(v2 - v0, v1 - v0). Ridge faces select each
+            // other, valley faces never do, and unshared triangles are ignored.
+            using T = Respawn::BevelTriangle;
+            const T a{{{{0, 0, 0}}, {{-64, 0, -64}}, {{0, 64, 0}}}};  // faces (-x, +z)
+            const T b{{{{0, 0, 0}}, {{0, 64, 0}}, {{64, 0, -64}}}};   // faces (+x, +z)
+            const auto ridge = Respawn::selectTricollBevels({a, b});
+            require(ridge[0] == std::vector<std::uint32_t>{1} && ridge[1] == std::vector<std::uint32_t>{0},
+                    "Convex ridge faces select each other");
+            const T c{{{{0, 0, 0}}, {{-64, 0, 64}}, {{0, 64, 0}}}};   // faces (+x, +z)
+            const T d{{{{0, 0, 0}}, {{0, 64, 0}}, {{64, 0, 64}}}};    // faces (-x, +z)
+            const auto valley = Respawn::selectTricollBevels({c, d});
+            require(valley[0].empty() && valley[1].empty(), "Concave valley faces select nothing");
+            const T far{{{{1000, 0, 0}}, {{1000, 64, 0}}, {{1064, 0, -64}}}};
+            require(Respawn::selectTricollBevels({a, far})[0].empty(), "Triangles without a shared vertex are not selected");
+            const T down{{{{0, 0, 0}}, {{0, 64, 0}}, {{-64, 0, -64}}}};  // faces (+x, -z)
+            require(Respawn::selectTricollBevels({down, b})[0].empty(), "Steeply downward sources select nothing");
+            // TF1 chain segments name headers in 13 bits: past 8192, keep plain
+            // local lists and drop foreign references instead of failing.
+            const std::vector<std::uint16_t> preceding(8192, 1);
+            const auto local = Respawn::partitionTricollBevels(10, preceding, {2}, {{1}, {0}});
+            require(local.size() == 1 && local[0].droppedReferences == 0 && local[0].bevels.indexCount == 2,
+                    "Headers past 8192 keep same-header lists");
+            const auto foreign = Respawn::partitionTricollBevels(10, preceding, {2}, {{1}, {0}}, 1);
+            require(foreign.size() == 2 && foreign[0].droppedReferences == 1 && foreign[1].droppedReferences == 1 &&
+                    foreign[0].bevels.indexCount == 0, "Unencodable TF1 chain references are dropped");
+            const auto wide = Respawn::partitionTricollBevels(11, preceding, {2}, {{1}, {0}}, 1);
+            require(wide[0].droppedReferences == 0 && wide[0].bevels.indexCount > 0, "TF2's wider chain field keeps them");
+        }
         std::cout << "Texture identity and conservative collision encoding tests passed\n";
         return 0;
     } catch (const std::exception& error) {

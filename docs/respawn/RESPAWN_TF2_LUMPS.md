@@ -1,7 +1,7 @@
 # Titanfall 2 lumps added in November 2026
 
-remap now writes every Titanfall 2 lump that retail maps fill, except triangle
-collision bevel indices. Layouts were read from the six retail samples in
+remap now writes every Titanfall 2 lump that retail maps fill. Triangle
+collision bevel indices use a functional rule rather than retail's exact selector. Layouts were read from the six retail samples in
 `.local/respawn/samples/tf2-*` (Coliseum, Colony, Glitch, Homestead, Live Fire
 Stacks, Lobby). Compiled maps were checked with `validate_records.py`, the 26
 compiler regressions, and in game on Jump Academy 2 (TF2) and Trainstation (HL2).
@@ -17,7 +17,7 @@ The in-game checks covered loading, spawns, displacement collision and rendering
 | 0x7D SHADOW_MESH_ALPHA_VERTICES | `surfaceparm alphashadow` casters |
 | 0x59, 0x5A CM_PRIMITIVES / BOUNDS | Grouped collision primitives |
 | 0x44 TRICOLL_NODES | Noded triangle collision for patches |
-| 0x61 TRICOLL_BEVEL_INDICES | **Written empty**; see open questions |
+| 0x61 TRICOLL_BEVEL_INDICES | Supporting-plane rule, natively checked against brushes; see open questions |
 
 LEAF_WATER_DATA, WORLD_LIGHT_PARENT_INFOS, PHYSICS_LEVEL, PHYSICS_TRIANGLES and
 VERTEX_RESERVED_5-7 are empty in every surveyed map and stay empty, with the
@@ -140,8 +140,10 @@ See [portal research](RESPAWN_TRICOLL_PORTALS.md).
   Geometric selection remains unresolved. In a coordinate-based Coliseum
   sample, 12,658 of 20,067 unique ordinary references from individual source
   triangles targeted triangles with no exactly shared vertex. Those references
-  cannot be generated reliably by assuming vertex or edge adjacency. remap writes
-  no bevels, as retail does for some headers; limited collision tests pass without
-  them, but hull and edge parity remain unverified.
+  cannot be generated reliably by assuming vertex or edge adjacency. remap
+  writes the shared-vertex supporting-plane rule instead; native sweeps show it
+  matches or approaches native brush contacts and never passes them. See
+  [production triangle bevels](RESPAWN_TRICOLL_PORTALS.md#production-triangle-bevels-and-header-grouping-6-november-2026).
+  Byte parity with retail's lists remains open.
 - **CMA:** see above.
 - **Cubemap choice:** retail mesh assignment is not purely nearest.

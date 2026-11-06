@@ -591,7 +591,7 @@ def build(args):
         brushes.append(box_brush(tuple(min(v,w) for v,w in zip(a,b)),tuple(max(v,w) for v,w in zip(a,b)),prefix+'_clip'))
     def world_entity(cluster):
         return '\n'.join(['{','"classname" "worldspawn"','"skyname" "sky_day01_01"',
-            '"_lightmapscale" "16"','"_bouncescale" "0"','"_skyocclusion" "1"','"_skysamples" "128"','"_skyfixedpattern" "1"',f'"_meshcluster" "{cluster}"',*brushes,'}'])+'\n'
+            '"_lightmapscale" "16"','"_bouncescale" "0"','"_skyocclusion" "1"','"_skysamples" "128"','"_skyfixedpattern" "1"',f'"_meshcluster" "{cluster}"',*(['"_viewportals" "1"'] if args.view_portals else []),*brushes,'}'])+'\n'
     text=''
     text+=entity(classname='light_environment',origin='0 0 1024',angles='45 135 0',pitch='-45',
                  _light='255 244 228 510',_ambient='232 247 255 170',lightEnvironmentIndex='*0',shadows='1')
@@ -741,6 +741,7 @@ if __name__=='__main__':
     p.add_argument('--spawn-open-sky',action='store_true',help='Only spawn under open sky')
     p.add_argument('--fill-floor-notches',action='store_true',help='Complete the main floor where its rectangle is missing edge pieces')
     p.add_argument('--mesh-cluster',type=int,default=MESH_CLUSTER,help='World units per render mesh cluster')
+    p.add_argument('--view-portals',action='store_true',help='Build visibility cells and portals (experimental culling)')
     p.add_argument('--loadscreen',type=Path,help='1920x1080 image; without it the map shows Coliseum\'s')
     p.add_argument('--loadscreen-template',type=Path,help='Base path of a retail loadscreen _gen material .json/.uber pair')
     parsed=p.parse_args()

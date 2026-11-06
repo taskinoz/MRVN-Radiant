@@ -462,6 +462,41 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
             } else { collect(node->children[0]); collect(node->children[1]); }
         };
         collect(tree.headnode);
+        // Open regions no point entity can see into (sealed hollows inside
+        // geometry) become solid, like the outside after a leak test: each
+        // would otherwise need a cell of its own. Reachability follows portals,
+        // i.e. visual connection, so areas behind glass or player clip stay open.
+        // Maps without point entities keep every region.
+        {
+            std::vector<node_t *> stack;
+            for (const entity_t &e : entities) {
+                if (&e == &world || !e.brushes.empty() || e.patches) continue;
+                Vector3 origin;
+                if (!e.read_keyvalue(origin, "origin")) continue;
+                node_t *node = tree.headnode;
+                while (node->planenum != PLANENUM_LEAF) {
+                    const auto &plane = mapplanes[node->planenum].plane;
+                    node = node->children[vector3_dot(origin, plane.normal()) - plane.dist() >= 0 ? 0 : 1];
+                }
+                if (!node->opaque) stack.push_back(node);
+            }
+            if (!stack.empty()) {
+                std::unordered_set<const node_t *> reached(stack.begin(), stack.end());
+                while (!stack.empty()) {
+                    node_t *leaf = stack.back(); stack.pop_back();
+                    for (const portal_t *p = leaf->portals; p;) {
+                        const int side = p->nodes[1] == leaf;
+                        node_t *other = p->nodes[1 - side];
+                        if (p->onnode && !other->opaque && ids.count(other) && reached.insert(other).second) stack.push_back(other);
+                        p = p->next[side];
+                    }
+                }
+                std::size_t sealed = 0;
+                for (node_t *leaf : leaves)
+                    if (!leaf->opaque && !reached.count(leaf)) { leaf->opaque = true; ++sealed; }
+                if (sealed) Sys_Printf("%9zu sealed open regions no entity can see made solid\n", sealed);
+            }
+        }
         // Two sentinel cells occupy the last two bits of the native fixed masks.
         cellBounds = CollapseVisibilityCells(tree.headnode, leaves, ids, Respawn::MaxVisibilityCells);
         if (!cellBounds.empty()) {

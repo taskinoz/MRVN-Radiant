@@ -811,7 +811,13 @@ void Titanfall::EmitBrush(brush_t &brush) {
             if (normal[0] == -1.0f || normal[0] == 1.0f || (normal[0] == 0.0f && normal[1] == 0.0f)
                 || normal[1] == -1.0f || normal[1] == 1.0f || (normal[1] == 0.0f && normal[2] == 0.0f)
                 || normal[2] == -1.0f || normal[2] == 1.0f || (normal[2] == 0.0f && normal[0] == 0.0f)) continue;
-            if (b.planeCount == 255) Error("Collision brush has more than 255 non-axial sides including bevels");
+            if (b.planeCount == 255) {
+                // Bevels only smooth hull traces; drop what does not fit rather than fail.
+                if (pass == 0) Error("Collision brush has more than 255 non-axial sides");
+                static std::size_t droppedBevels = 0;
+                if (droppedBevels++ == 0) Sys_Warning("Collision brush exceeds 255 non-axial sides with bevels; extra bevels dropped\n");
+                continue;
+            }
             Titanfall::EmitPlane(plane);
             ++b.planeCount;
             const auto* shader = side.shaderInfo ? side.shaderInfo : fallbackShader;

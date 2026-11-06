@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <functional>
+#include <numeric>
 #include <map>
 #include <set>
 #include <tuple>
@@ -222,106 +224,144 @@ std::size_t RefCount(const Shared::visNode_t &node) {
     return total;
 }
 
-// Retain the BSP for point classification, but remove convex subdivisions that
-// do not divide visibility. Opaque leaves share one cell without outgoing portals.
-// Merge convex neighbours first, then cluster open regions to the native budget.
-std::vector<MinMax> MergeVisibilityCells(const std::vector<node_t *>& leaves,
-                                        std::unordered_map<const node_t *, std::size_t>& ids,
-                                        std::size_t maxCells) {
-    std::vector<Respawn::ConvexCellHull> hulls(leaves.size());
-    Respawn::CellMergeGroups groups(leaves.size());
-    std::vector<MinMax> groupBounds;
-    for (const auto* leaf : leaves) groupBounds.push_back(leaf->minmax);
-    std::size_t opaque = leaves.size();
-    std::vector<const portal_t *> candidates;
-    std::unordered_set<const portal_t *> seen;
-    for (std::size_t i = 0; i < leaves.size(); ++i) {
-        const auto* leaf = leaves[i];
-        if (leaf->opaque) {
-            if (opaque == leaves.size()) opaque = i;
-            if (i != opaque) groups.join(opaque, i);
-            continue;
-        }
-        std::set<Respawn::CellPoint> points;
-        for (const portal_t *p = leaf->portals; p;) {
-            const int side = p->nodes[1] == leaf;
-            const auto normal = p->plane.plane.normal();
-            Respawn::CellPlane plane{{normal[0], normal[1], normal[2]}, p->plane.plane.dist()};
-            if (!side) plane = Respawn::reverseCellPlane(plane);
-            bool duplicate = false;
-            for (const auto& previous : hulls[i].planes)
-                if (Respawn::sameCellPlane(previous, plane)) { duplicate = true; break; }
-            if (!duplicate) hulls[i].planes.push_back(plane);
-            for (const auto& point : p->winding) points.insert({point[0], point[1], point[2]});
-            if (p->onnode && !p->nodes[1 - side]->opaque && seen.insert(p).second) {
-                if (p->compileFlags & (C_HINT | C_AREAPORTAL))
-                    groups.protect(ids.at(p->nodes[0]), ids.at(p->nodes[1]));
-                else candidates.push_back(p);
-            }
+// Cells are whole BSP subtrees. The TF1/TF2 renderers order cells by a single
+// depth-first walk over camera-facing portals and consume each cell's view
+// region once (TFO client.dll 0x5e9030, 0x5ea2b0), so the cell graph must have
+// a front-to-back order from every viewpoint. Collapsed subtrees keep the BSP's
+// order; merging arbitrary neighbours, even into convex cells, can create cycles
+// that drop regions and hide on-screen geometry. Leaves are numbered in DFS
+// order, so every subtree is a contiguous leaf range.
+std::vector<MinMax> CollapseVisibilityCells(node_t *headnode, const std::vector<node_t *>& leaves,
+                                           std::unordered_map<const node_t *, std::size_t>& ids,
+                                           std::size_t maxCells) {
+    const std::size_t count = leaves.size();
+    struct Edge { std::size_t other; bool protect; };
+    std::vector<std::vector<Edge>> edges(count);
+    // Cells carry the water record, so liquid surfaces stay cell boundaries.
+    std::vector<char> liquid(count, 0);
+    for (std::size_t i = 0; i < count; ++i)
+        for (const brush_t &brush : leaves[i]->brushlist)
+            for (const side_t &side : brush.sides)
+                if (side.shaderInfo && (side.shaderInfo->contentFlags & (CONTENTS_WATER | CONTENTS_SLIME)))
+                    liquid[i] = 1;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (leaves[i]->opaque) continue;
+        for (const portal_t *p = leaves[i]->portals; p;) {
+            const int side = p->nodes[1] == leaves[i];
+            const node_t *other = p->nodes[1 - side];
+            if (p->onnode && !other->opaque && ids.count(other))
+                edges[i].push_back({ids.at(other), (p->compileFlags & (C_HINT | C_AREAPORTAL)) != 0 ||
+                                                   liquid[i] != liquid[ids.at(other)]});
             p = p->next[side];
         }
-        hulls[i].points.assign(points.begin(), points.end());
     }
-    const auto root = [&](std::size_t id) {
-        return groups.root(id);
+    struct Info { node_t *node; std::size_t lo, hi; bool connected, guarded, solid; double volume; int left, right; };
+    std::vector<Info> info;
+    std::vector<std::size_t> parent(count);
+    std::iota(parent.begin(), parent.end(), std::size_t{0});
+    const std::function<std::size_t(std::size_t)> find = [&](std::size_t x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
     };
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (const auto* p : candidates) {
-            const auto a = root(ids.at(p->nodes[0])), b = root(ids.at(p->nodes[1]));
-            if (!groups.canJoin(a, b)) continue;
-            const auto normal = p->plane.plane.normal();
-            const Respawn::CellPlane separator{{-normal[0], -normal[1], -normal[2]}, -p->plane.plane.dist()};
-            if (!Respawn::canMergeCells(hulls[a], hulls[b], separator)) continue;
-            Respawn::mergeCells(hulls[a], hulls[b], separator);
-            hulls[b] = {};
-            groups.join(a, b);
-            groupBounds[a].extend(groupBounds[b]);
-            changed = true;
+    std::size_t next = 0;
+    const std::function<int(node_t *)> walk = [&](node_t *node) -> int {
+        Info here{node, next, next, true, false, false, 0, -1, -1};
+        if (node->planenum == PLANENUM_LEAF) {
+            here.hi = ++next;
+            here.solid = node->opaque;
+        } else {
+            here.left = walk(node->children[0]);
+            here.right = walk(node->children[1]);
+            const Info &l = info[here.left], &r = info[here.right];
+            here.lo = l.lo; here.hi = r.hi;
+            here.guarded = l.guarded || r.guarded;
+            here.solid = l.solid || r.solid;
+            for (std::size_t i = l.lo; i < l.hi; ++i)
+                for (const Edge &e : edges[i])
+                    if (e.other >= r.lo && e.other < r.hi) {
+                        here.guarded |= e.protect;
+                        parent[find(i)] = find(e.other);
+                    }
+            std::size_t root = SIZE_MAX;
+            for (std::size_t i = here.lo; i < here.hi && here.connected; ++i) {
+                if (leaves[i]->opaque) continue;
+                if (root == SIZE_MAX) root = find(i);
+                else here.connected = find(i) == root;
+            }
         }
-    }
-    // R1/R2 renderers have 1024-bit cell masks with two sentinel bits. If exact
-    // convex merging still exceeds its budget, cluster adjacent free regions
-    // through broad openings first. Every external portal remains in the graph;
-    // a concave cluster can increase visibility but cannot open a solid wall.
-    std::size_t count = 0;
-    for (std::size_t i = 0; i < leaves.size(); ++i) count += root(i) == i;
-    std::vector<double> areas;
-    for (const auto* p : candidates) {
-        Vector3 sum(0);
-        for (std::size_t i = 1; i + 1 < p->winding.size(); ++i)
-            sum += vector3_cross(p->winding[i] - p->winding[0], p->winding[i + 1] - p->winding[0]);
-        areas.push_back(vector3_length(sum));
-    }
-    std::size_t clustered = 0;
-    while (count > maxCells) {
-        double best = -1;
-        std::size_t owner = 0, other = 0;
-        for (std::size_t i = 0; i < candidates.size(); ++i) {
-            const auto* p = candidates[i];
-            const auto a = root(ids.at(p->nodes[0])), b = root(ids.at(p->nodes[1]));
-            if (!groups.canJoin(a, b)) continue;
-            auto bounds = groupBounds[a]; bounds.extend(groupBounds[b]);
-            const double score = areas[i] / std::max(double(bounds.area()), 1e-6);
-            if (score > best) { best = score; owner = a; other = b; }
+        const Vector3 size = node->minmax.maxs - node->minmax.mins;
+        here.volume = double(size.x()) * size.y() * size.z();
+        info.push_back(here);
+        return int(info.size() - 1);
+    };
+    const int top = walk(headnode);
+    if (next != count) Error("Visibility leaf numbering is not in BSP order");
+    // A unit is a leaf or collapsed subtree; count its open-cell contribution.
+    std::vector<char> collapsed(info.size(), 0);
+    std::vector<std::size_t> units(info.size(), 0);
+    const auto collapsible = [&](const Info &n) { return n.left >= 0 && n.connected && !n.guarded; };
+    std::size_t cells = 0;
+    // Exact pass: subtrees of open, connected leaves are one convex region.
+    const std::function<void(int)> exact = [&](int index) {
+        Info &n = info[index];
+        if (n.left < 0) { units[index] = n.solid ? 0 : 1; return; }
+        exact(n.left); exact(n.right);
+        units[index] = units[n.left] + units[n.right];
+        if (collapsible(n) && !n.solid) { collapsed[index] = 1; units[index] = 1; }
+    };
+    exact(top);
+    cells = units[top];
+    // Budget pass: collapse the smallest collapsible subtree whose children are
+    // already single units, until the count fits.
+    std::size_t budgetMerges = 0;
+    bool anySolid = false;
+    for (const node_t *leaf : leaves) anySolid |= leaf->opaque;
+    if (anySolid) --maxCells;  // solid leaves share one cell, which also takes a mask bit
+    while (cells > maxCells) {
+        int best = -1;
+        for (std::size_t i = 0; i < info.size(); ++i) {
+            const Info &n = info[i];
+            if (collapsed[i] || !collapsible(n)) continue;
+            if (units[n.left] > 1 || units[n.right] > 1 || units[n.left] + units[n.right] < 2) continue;
+            if (best < 0 || n.volume < info[best].volume) best = int(i);
         }
-        if (best < 0) Error("Visibility needs more than %zu cells after preserving closed regions, hints and area portals", maxCells);
-        groups.join(owner, other);
-        groupBounds[owner].extend(groupBounds[other]);
-        --count;
-        ++clustered;
+        if (best < 0) return {};  // the caller treats more small brushes as detail
+        collapsed[best] = 1;
+        // Propagate the reduced unit count up the tree.
+        cells -= 1;
+        units[best] = 1;
+        for (std::size_t i = best + 1; i < info.size(); ++i)
+            if (info[i].left >= 0 && !collapsed[i]) units[i] = units[info[i].left] + units[info[i].right];
+        ++budgetMerges;
     }
-    Sys_Printf("%9zu cell-budget merges after convex merging\n", clustered);
+    // Assign ids: every leaf takes its highest collapsed ancestor; opaque leaves share one cell.
     std::vector<MinMax> bounds;
-    std::map<std::size_t, std::size_t> cells;
-    for (std::size_t i = 0; i < leaves.size(); ++i) {
-        const auto owner = root(i);
-        const auto entry = cells.emplace(owner, bounds.size());
-        if (entry.second) bounds.emplace_back();
-        bounds[entry.first->second].extend(leaves[i]->minmax);
-        ids[leaves[i]] = entry.first->second;
-    }
+    std::size_t opaqueCell = SIZE_MAX;
+    std::unordered_map<int, std::size_t> ownerCell;
+    const std::function<void(int, int)> assign = [&](int index, int owner) {
+        const Info &n = info[index];
+        if (owner < 0 && collapsed[index]) owner = index;
+        if (n.left >= 0) { assign(n.left, owner); assign(n.right, owner); return; }
+        node_t *leaf = n.node;
+        std::size_t cell;
+        if (leaf->opaque) {
+            if (opaqueCell == SIZE_MAX) { opaqueCell = bounds.size(); bounds.emplace_back(); }
+            cell = opaqueCell;
+        } else if (owner >= 0) {
+            auto found = ownerCell.find(owner);
+            if (found == ownerCell.end()) {
+                found = ownerCell.emplace(owner, bounds.size()).first;
+                bounds.emplace_back();
+            }
+            cell = found->second;
+        } else {
+            cell = bounds.size(); bounds.emplace_back();
+        }
+        bounds[cell].extend(leaf->minmax);
+        ids[leaf] = cell;
+    };
+    assign(top, -1);
+    Sys_Printf("%9zu cell-budget subtree merges\n", budgetMerges);
     if (bounds.size() >= 65535) Error("Portal cell count exceeds the sky-sentinel field");
     return bounds;
 }
@@ -376,34 +416,64 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
 
     // Respawn's parser intentionally bypasses Q3 SetBrushContents. Classify a
     // local copy for the inherited BSP routines using Respawn shader contents.
+    // Small brushes (trim, pillars) split space into many cells without dividing
+    // visibility. If the BSP-ordered cells exceed the native budget, brushes whose
+    // middle dimension is under "_vis_detail" units become detail, raising it until they fit.
     entity_t structural;
-    for (const auto &source : world.brushes) {
-        auto &brush = structural.brushes.emplace_back(source);
-        int contents = 0, flags = 0;
-        for (const auto &side : brush.sides) {
-            if (side.shaderInfo) contents |= side.shaderInfo->contentFlags;  // bevel sides have none
-            flags |= side.compileFlags;
-        }
-        brush.detail = (flags & C_DETAIL) || (contents & CONTENTS_DETAIL);
-        brush.opaque = !(flags & C_TRANSLUCENT) && ((contents & CONTENTS_SOLID) || (flags & C_SKY));
-        brush.compileFlags = flags;
-    }
-    facelist_t faces = MakeStructuralBSPFaceList(structural.brushes);
-    if (faces.empty()) Error("_viewportals requires structural world brushes");
-    tree_t tree = FaceBSP(faces);
-    for (const auto &ref : Shared::visRefs) tree.minmax.extend(ref.minmax);
-    MakeTreePortals(tree);
-    FilterStructuralBrushesIntoTree(structural, tree);
+    tree_t tree{};
     std::vector<node_t *> leaves;
     std::unordered_map<const node_t *, std::size_t> ids;
-    std::function<void(node_t *)> collect = [&](node_t *node) {
-        if (node->planenum == PLANENUM_LEAF) {
-            ids.emplace(node, leaves.size()); leaves.push_back(node);
-        } else { collect(node->children[0]); collect(node->children[1]); }
-    };
-    collect(tree.headnode);
-    // Two sentinel cells occupy the last two bits of the native fixed masks.
-    const auto cellBounds = MergeVisibilityCells(leaves, ids, Respawn::MaxVisibilityCells);
+    std::vector<MinMax> cellBounds;
+    const float requested = world.floatForKey("_vis_detail");
+    std::vector<float> thresholds{requested};
+    for (float step : {16.f, 24.f, 32.f, 48.f, 64.f, 96.f, 128.f, 192.f, 256.f, 384.f, 512.f})
+        if (step > requested) thresholds.push_back(step);
+    for (std::size_t attempt = 0; attempt < thresholds.size(); ++attempt) {
+        const float visDetail = thresholds[attempt];
+        if (attempt) {
+            FreeTree(tree);
+            structural.brushes.clear(); leaves.clear(); ids.clear();
+        }
+        for (const auto &source : world.brushes) {
+            auto &brush = structural.brushes.emplace_back(source);
+            int contents = 0, flags = 0;
+            for (const auto &side : brush.sides) {
+                if (side.shaderInfo) contents |= side.shaderInfo->contentFlags;  // bevel sides have none
+                flags |= side.compileFlags;
+            }
+            brush.detail = (flags & C_DETAIL) || (contents & CONTENTS_DETAIL);
+            const Vector3 size = source.minmax.maxs - source.minmax.mins;
+            // Thin in two axes (pillars, trim), not one (walls, floors).
+            float dims[3] = {size.x(), size.y(), size.z()};
+            std::sort(dims, dims + 3);
+            if (dims[1] < visDetail) brush.detail = true;
+            brush.opaque = !(flags & C_TRANSLUCENT) && ((contents & CONTENTS_SOLID) || (flags & C_SKY));
+            brush.compileFlags = flags;
+        }
+        facelist_t faces = MakeStructuralBSPFaceList(structural.brushes);
+        if (faces.empty()) Error("_viewportals requires structural world brushes");
+        tree = FaceBSP(faces);
+        for (const auto &ref : Shared::visRefs) tree.minmax.extend(ref.minmax);
+        MakeTreePortals(tree);
+        FilterStructuralBrushesIntoTree(structural, tree);
+        std::function<void(node_t *)> collect = [&](node_t *node) {
+            if (node->planenum == PLANENUM_LEAF) {
+                ids.emplace(node, leaves.size()); leaves.push_back(node);
+            } else { collect(node->children[0]); collect(node->children[1]); }
+        };
+        collect(tree.headnode);
+        // Two sentinel cells occupy the last two bits of the native fixed masks.
+        cellBounds = CollapseVisibilityCells(tree.headnode, leaves, ids, Respawn::MaxVisibilityCells);
+        if (!cellBounds.empty()) {
+            if (visDetail > requested)
+                Sys_Warning("Visibility cells fit the native budget only with brushes thinner than %g units in two axes as detail "
+                            "(worldspawn \"_vis_detail\" %g)\n", visDetail, visDetail);
+            break;
+        }
+    }
+    if (cellBounds.empty())
+        Error("Visibility needs more than %zu cells even with brushes under %g units as detail; "
+              "mark small brushes detail", Respawn::MaxVisibilityCells, thresholds.back());
     B::cells_stub.resize(cellBounds.size());
     B::cellBSPNodes_stub.resize(1);
     std::function<void(const node_t *, std::size_t)> emitTree = [&](const node_t *node, std::size_t index) {

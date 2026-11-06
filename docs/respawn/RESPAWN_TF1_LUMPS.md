@@ -343,18 +343,17 @@ Two fixes came out of TF1 testing; both also apply to TF2:
 The original full `_viewportals` E1M1 build had 5,728 cells and 14,864 directed
 portals, and crashed the TFO renderer at `client.dll+0x5ea574`. The native renderer
 uses 1024-bit cell masks with two sentinel bits. Convex merging alone reduced the
-map to 1,832 cells but still crashed during cell traversal. The generator now
-merges convex adjacent free regions, shares one empty cell across opaque leaves,
-and clusters additional adjacent regions to the native budget of 1,022 cells.
-Clustering retains external portal boundaries and can increase overdraw inside
-concave groups; it does not merge through a solid divider or replace the graph
-with all-visible output. Object references in merged cells are deduplicated.
+map to 1,832 cells but still crashed during cell traversal. The generator then
+clustered regions to the native budget of 1,022 cells; since 6 November 2026 its
+cells are whole BSP subtrees instead (see the portal notes).
 
 The resulting E1M1 map has 1,022 cells and 11,132 directed portals. TFO completed
 all six harness traces and three camera views without a crash. The three saved
 screenshots show the requested rooms, floors, walls and doorway geometry. This
-resolves that map's load/traversal crash, but it does not establish complete
-culling, performance or playthrough parity. `_viewportals` remains experimental.
+resolves that map's load/traversal crash. Culling itself was wrong until 6
+November 2026: cells are now whole BSP subtrees, and E1M1's portal build renders
+the same as the portal-free build in R1Delta and TFO (see
+[RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md#in-game-culling-with-_viewportals-6-november-2026)).
 The two-game regression includes a dense 1,156-pillar fixture split by a sealed
 wall: both outputs fit the cell budget, connect points within one side, and keep
 the two sides disconnected.

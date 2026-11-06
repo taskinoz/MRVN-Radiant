@@ -118,9 +118,10 @@ shader has `surfaceparm alphashadow`.
   unresolved near-tie exceptions. This correction has compiler regression
   coverage for TF1 and TF2; the new native flat-entity run was in TFO.
 
-The portal generator now shares the native 1,022-cell budget with TF1. It merges
-convex adjacent regions first, then clusters through broad openings if necessary,
-retaining the full classification BSP and external portals. The two-format stress
+The portal generator now shares the native 1,022-cell budget with TF1. Its cells
+are whole BSP subtrees (since 6 November 2026; see
+[RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md)), retaining the full
+classification BSP and external portals. The two-format stress
 fixture keeps a sealed divider disconnected and retains an authored hint across
 34 sampled crossings. Protected interfaces survive alternate merge paths. TF2
 shader flags now expose `hint`, `skip` and `areaportal`; runtime area-portal

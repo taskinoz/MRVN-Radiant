@@ -22,14 +22,14 @@ structural BSP and portal builder. Respawn parsing bypasses Q3 brush-content
 classification, so a local copy is classified using Respawn contents first.
 Object AABBs touching a split are conservatively referenced on both sides.
 The full leaf BSP remains for point classification. Opaque leaves share one
-cell without outgoing portals. Free leaves first merge through common portals
-only when their union is convex. If necessary, the remaining free regions are
-clustered through broad openings to fit the native limit of 1,022 cells. This
-can increase overdraw within concave clusters. External portals and closed-room
-connectivity remain intact, and merged cells deduplicate their object references.
-Hint and area-portal interfaces are protected between entire merge groups, so
-an alternate route cannot merge both sides of an authored interface. Both
-convex and cell-budget merging enforce this constraint. If protected partitions
+cell without outgoing portals. Cells are whole BSP subtrees, so the renderer's
+front-to-back walk can order them from any viewpoint (see
+[In-game culling](#in-game-culling-with-_viewportals-6-november-2026)); this
+replaced convex merging and clustering on 6 November 2026. Subtrees of connected
+open leaves merge first; to fit the native limit of 1,022 cells, the smallest
+remaining subtrees merge, then small brushes become visibility detail. Cells
+never span hint, area-portal or water interfaces or regions separated by solid,
+and merged cells deduplicate their object references. If protected partitions
 cannot fit the budget, compilation fails instead of dropping the boundaries.
 
 TF1/TF2 shader definitions now accept `$compileflag hint`, `$compileflag skip`
@@ -613,8 +613,8 @@ they showed the floor, ceiling, walls and pillars using the stock Coliseum
 the captures and did not crash. This verifies the tested graph at the native
 budget, not retail culling parity or a full playthrough.
 
-The stress fixture compiles in both formats and verifies that clustering
-preserves connectivity within each half, cannot cross its sealed divider, and
+The stress fixture compiles in both formats and verifies that the cell budget
+(now met by making its pillars visibility detail) preserves connectivity within each half, cannot cross its sealed divider, and
 keeps the authored hint split at 34 sampled crossings. Separate small fixtures
 check hint and area-portal partitions. Native merge-group tests cover protected
 interfaces whose endpoints are joined through alternate paths.
@@ -668,43 +668,71 @@ setting. That workaround did not resolve Origin disconnection.
 
 ### In-game culling with `_viewportals` (6 November 2026)
 
-The traversal tests above showed that portal maps load; they did not compare
-what is drawn. E1M1 built for TF1 with and without `_viewportals` was captured
-from the same 12 cameras in R1Delta, and 4 of them in TFO. Most views match,
-but in one (camera -272 2928, yaw 0) the portal build drops whole walls and
-pillars in both runtimes: the background clear colour shows through. So the
-compiler's portal output is wrong, not either runtime. `_viewportals` remains
-experimental; the default single cell draws everything.
+**Resolved.** E1M1 built for TF1 with `_viewportals` dropped whole walls at one
+camera (-272 2928, yaw 0) in both R1Delta and TFO, compared with the same map
+without portals. After the fix below, all 12 R1Delta views and 4 TFO views
+match the portal-free build apart from HUD and team-colour pixels.
 
-Findings so far:
+**How the renderer culls.** TFO `client.dll` (SHA-256 `0c8bba1e...`):
 
-- **Access roots.** Every retail access node (Angel City, Relic and all six TF2
-  samples) encloses the bounds of the object references under it. remap gave
-  each cell root the cell's own box, which missed the meshes it references in
-  1,021 of 1,022 cells. Roots now cover both the cell and its references, and
-  `portals.py` reports "does not enclose" otherwise. Water-cell assignment now
-  uses the cell's own bounds, kept separately. This did not change the capture.
-- **Mesh ownership.** Retail meshes stay within their cells: each world mesh is
-  referenced by 1.49 cells on average in Angel City (12,348 meshes, 79% by
-  one cell), 1.68 in Relic and 1.35 in Coliseum. remap merges each material into
-  meshes spanning many cells: E1M1 had 222 meshes referenced by 31 cells on
-  average, one by 1,011.
-- **Splitting meshes by cell made it worse.** A trial built the cell tree before
-  meshes, merged faces only within a cell (2,219 meshes) and referenced each
-  mesh from the cells its triangles touch (2.27 per mesh, close to retail). The
-  same camera then lost most distant geometry. The large meshes had been hiding
-  how little of the cell graph the renderer reaches, so the trial was reverted.
-- **An offline traversal model does not reproduce it.** `.local` tooling clipped
-  the view frustum through portals from the camera's cell and ray cast the
-  view: with unrestricted re-entry every visible mesh is referenced by a reached
-  cell, and with visit-once traversal 99 of 1,296 rays miss after the split.
-  The renderer's rule is evidently stricter than either model.
+1. RVA `0x5e9030` finds the camera's cell(s) by descending the cell BSP, then
+   walks a depth-first search over portals whose front faces the camera
+   (portal byte 0 picks the plane sign), **visiting each cell once**. Cells get
+   slots in post-order from the end of an order table, giving a reverse
+   post-order: front to back when the graph has no cycle.
+2. RVA `0x5ea2b0` processes cells in that order. A cell that has view regions
+   (only the camera cell at first) tests each camera-facing portal's vertices
+   against them (outcodes over up to 9 planes), clips, and hands the result to
+   the destination cell. A cell's regions are consumed when its turn comes.
 
-Next step: reverse the traversal in TFO `client.dll` (RVA `0x5e9030`, the mask
-setup above) to learn how a cell is entered and its frustum or screen rectangle
-narrowed. The likely mismatch is remap's clustered cells: merging regions to
-the 1,022-cell budget makes non-convex cells, whereas retail TF1 maps use at
-most 525 cells (Rise).
+TF2 `client.dll` RVA `0x2eae40` (SHA-256 `002b3648...`) has the same structure. If
+camera-facing portals form a cycle, the DFS order puts a cell before a
+predecessor that later passes it a region, and that region is lost. This is
+what hid the walls.
+
+**Why remap's cells broke it.** The cells were merged from BSP leaves, first
+into convex groups and then clustered (non-convexly) to fit 1,022. Both kinds of
+merge can create cycles. Even convex groups can: a partition orders front to back
+from every viewpoint when it is a BSP, not merely when its cells are convex. An
+offline model of the algorithm (`.local` `portal_sim.py --engine`) dropped 18
+to 135 regions per camera on those builds and none on retail Angel City.
+
+**What remap does now** (`CollapseVisibilityCells`):
+
+- Cells are **whole BSP subtrees**. Collapsing a subtree keeps the BSP's
+  ordering, since all its external portals lie on the subtree's convex boundary.
+- Exact pass: a subtree of open leaves connected through internal portals
+  becomes one (convex) cell.
+- Budget pass: if more than 1,022 cells remain (including the shared solid
+  cell), the smallest subtree whose children are single cells and whose open
+  leaves are connected is collapsed, repeatedly. Cells never span a hint, an
+  area portal, a water surface, or open regions separated by solid, so sealed
+  rooms stay disconnected.
+- If that cannot reach the budget, brushes thinner than a threshold in two
+  axes (pillars, trim; not walls or floors) become detail for visibility, and
+  the threshold rises (16, 24, 32 ... 512 units) until the cells fit. remap
+  warns with the value used; worldspawn `"_vis_detail"` sets a starting value.
+  E1M1 settles at 96 units, 1,022 cells with 295 subtree merges.
+- Water is now cell-aligned: a sloped pool's water is its own cell, separate
+  from the air within its bounding box.
+- `portals.py` `ordering_cycles` samples cameras in front of portals and counts
+  camera-facing portals that point back to an earlier cell; the stress fixture
+  must have none. Retail TF1 has some (Angel City 41, Relic 21 over ~100 cameras)
+  that its frustum clipping evidently never reaches; TF2 Coliseum and Glitch have
+  none.
+
+Also from this investigation:
+
+- **Access roots.** Every retail access node (Angel City, Relic and six TF2
+  maps) encloses the bounds of its object references; remap now matches, and
+  `portals.py` reports "does not enclose" otherwise.
+- **Mesh ownership.** Retail meshes stay within their cells (1.35 to 1.68 cells
+  per mesh; 79% of Angel City's by one cell). remap still merges each material
+  into larger meshes; splitting them per cell is not needed for correctness.
+
+Not yet run: a TF2 map with `_viewportals` in Northstar (the harness is not on
+this machine); the TF2 traversal was checked statically. `_viewportals` stays
+opt-in until it is.
 
 ## Provenance and attribution
 

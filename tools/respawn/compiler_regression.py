@@ -15,7 +15,7 @@ import subprocess
 from inspect_bsp import inspect
 from validate_records import load_records, validate
 from game_lump import inspect_game_lump, relocate_bsp
-from portals import locate_cell, connected
+from portals import locate_cell, connected, ordering_cycles
 from tricoll import triangle_indices, decode_bevel_lists, select_bevels
 from decompile_bsp import parse_entities
 
@@ -388,11 +388,16 @@ def portal_budget_fixture(folder, command, reports, game):
         before, after = [locate_cell(r, point) for point in ((255,y,96), (257,y,96))]
         if before == after or not connected(r, before, after):
             raise RuntimeError('cell budget clustering erased an authored hint boundary')
+    if ordering_cycles(r)[1]:
+        raise RuntimeError('visibility cells have camera-facing portal cycles the renderer cannot order')
     solid = locate_cell(r, (544,4,96))
     if solid != locate_cell(r, (-8,128,64)) or r[107][solid][0] or r[119][solid][5]:
         raise RuntimeError('opaque leaves lost their empty shared cell')
-    if len(r[107]) != 1022 or len([p for p, _ in r[106] if p == -1]) <= 1022:
-        raise RuntimeError('stress map did not exercise native cell budget clustering')
+    # Cells must be whole BSP subtrees for the renderer's front-to-back order;
+    # the pillars' leaves exceed the budget, so they become visibility detail.
+    log = path.with_suffix('.log').read_text(errors='replace')
+    if len(r[107]) > 1022 or '"_vis_detail"' not in log:
+        raise RuntimeError('stress map did not exercise the native cell budget')
     reports.append({'game': game, 'fixture': 'portal-budget', 'issues': []})
 
 
@@ -915,9 +920,10 @@ def main():
                     if cell_records[107][cell_index][3] != -1:
                         raise RuntimeError('empty space between separated water brushes was assigned to water')
                 reports.append({'game': game, 'fixture': 'separated-water-cells', 'issues': []})
-                # Both triangular pools have bounding-box coverage above 50%
-                # in the left chamber. Only the larger true volume does.
-                for label, tip, expected_water in (('dry', -128, -1), ('wet', 0, 0)):
+                # Cells follow water surfaces: a sloped pool's water is its own
+                # cell, never merged with the air beside it within its bounding
+                # box (both pools cover over half of that box).
+                for label, tip in (('dry', -128), ('wet', 0)):
                     sloped = folder / ('water-triangle-'+label+'.map')
                     sloped.write_text(portal_fixture()[:-2] + triangle_prism(
                         ((-256,-128,256),(-256,128,256),(tip,-128,256)),0,'compat/water')+'\n}\n')
@@ -925,20 +931,12 @@ def main():
                         subprocess.run(command[:-1]+[str(sloped)],stdout=log,stderr=subprocess.STDOUT,check=True)
                     sloped_bsp = sloped.with_suffix('.bsp')
                     water_records = load_records(sloped_bsp,inspect(sloped_bsp))
-                    index = locate_cell(water_records,(-192,64,64))
-                    if validate(sloped_bsp)['issues'] or water_records[107][index][3] != expected_water:
-                        raise RuntimeError('Triangular water brush was measured as its enclosing bounds')
-                    if label == 'dry':
-                        # Access roots also enclose referenced meshes, so clamp
-                        # the root to the left chamber to get the cell's volume.
-                        bound = water_records[119][index]
-                        chamber = ((-256,-128,0),(-8,128,256))
-                        low = [max(bound[a],chamber[0][a]) for a in range(3)]
-                        high = [min(bound[6+a],chamber[1][a]) for a in range(3)]
-                        cell_volume = math.prod(high[a]-low[a] for a in range(3))
-                        box_volume = math.prod(max(0,min(high[a],(-128,128,256)[a])-max(low[a],(-256,-128,0)[a])) for a in range(3))
-                        if not box_volume > cell_volume/2 > box_volume/2:
-                            raise RuntimeError('Sloped water fixture does not distinguish box and solid coverage')
+                    if validate(sloped_bsp)['issues']:
+                        raise RuntimeError('Sloped water fixture failed validation')
+                    wet = locate_cell(water_records,(-240,-100,64))
+                    dry = locate_cell(water_records,(tip-40,64,64))  # air inside the pool's bounding box
+                    if water_records[107][wet][3] != 0 or water_records[107][dry][3] != -1 or wet == dry:
+                        raise RuntimeError('Sloped water was not separated from the air in its bounding box')
                     reports.append({'game':game,'fixture':'triangular-water-cell-'+label,'issues':[]})
             records = load_records(bsp, inventory)
             if not records[92][0][4] or records[92][1][4] != (4 if game == 'titanfall2' else 0) or not records[92][1][9]:

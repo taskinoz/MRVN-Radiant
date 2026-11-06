@@ -42,6 +42,57 @@ def connected(records, start, end):
     return False
 
 
+def ordering_cycles(records, samples=200):
+    """Count camera-facing portal cycles the TF1/TF2 renderer cannot order.
+
+    Both clients order cells by one depth-first walk over portals whose front
+    faces the camera, visiting each cell once (TFO client.dll 0x5e9030, TF2
+    0x2eae40), then pass each cell's view region on in that order and consume it.
+    A camera-facing portal into a cell ordered earlier is a cycle: whatever it
+    carries is dropped and visible geometry disappears. Cameras sit just in
+    front of sampled portals. Returns (cameras tested, back edges found).
+
+    Retail TF1 has some (Angel City 41, Relic 21 over ~100 cameras), which frustum
+    clipping evidently never exercises; TF2 Coliseum and Glitch have none. remap's
+    cells are whole BSP subtrees and must have none."""
+    cells, portals, vertices, refs, planes = (records[i] for i in (107, 108, 109, 112, 1))
+    regular = [(c, p) for c, cell in enumerate(cells) for p in portals[cell[1]:cell[1] + cell[0]] if p[1] == 0]
+    step = max(1, len(regular) // samples)
+    tested = back = 0
+    for source, p in regular[::step]:
+        points = [vertices[refs[p[4] + k][0]] for k in range(p[2])]
+        plane = planes[p[6]]
+        sign = 1 if p[0] == 0 else -1
+        camera = [sum(q[a] for q in points) / len(points) + plane[a] * sign * 2 for a in range(3)]
+        try:
+            start = locate_cell(records, camera)
+        except ValueError:
+            continue
+        if start != source:
+            continue
+
+        def faces(q):
+            n = planes[q[6]]
+            return (sum(n[a] * camera[a] for a in range(3)) - n[3]) * (1 if q[0] == 0 else -1) > 0
+        visited, order, stack = {start}, [], [(start, 0)]
+        while stack:
+            cell, k = stack[-1]
+            if k < cells[cell][0]:
+                stack[-1] = (cell, k + 1)
+                q = portals[cells[cell][1] + k]
+                if q[1] == 0 and q[5] not in visited and faces(q):
+                    visited.add(q[5]); stack.append((q[5], 0))
+            else:
+                order.append(cell); stack.pop()
+        position = {c: i for i, c in enumerate(reversed(order))}
+        tested += 1
+        for cell in position:
+            for q in portals[cells[cell][1]:cells[cell][1] + cells[cell][0]]:
+                if q[1] == 0 and q[5] in position and faces(q) and position[q[5]] <= position[cell]:
+                    back += 1
+    return tested, back
+
+
 def check_portal_records(records, version=37):
     issues = []
     def error(lump, index, message):

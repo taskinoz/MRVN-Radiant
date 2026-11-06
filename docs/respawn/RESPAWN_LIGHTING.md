@@ -252,7 +252,11 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    a brush or under a lower ceiling. The coarse 256 × 256 × 128 grid fills open
    air. Each set's spacing grows past 65,536 probes. E1M1 went from 1,180 to
    6,824 probes (25% within 24 units of the floor, median 56; neighbours a
-   median 48 apart) and still loads in Northstar. Each
+   median 48 apart) and still loads in Northstar. In third person
+   (`thirdperson`, with cheats), the TF1 E1M1 build in TFO showed the character
+   nearly black at two of four positions with grid probes and lit like its
+   surroundings with walkable probes; TF2 in Northstar looked alike with both.
+   `tfo_harness.py` takes `"view_commands": ["thirdperson"]` for this. Each
    probe gets directional ambient, a bent sky vector, sun visibility from four
    jittered rays, and up to four visible realtime lights. A KD tree with leaves
    of at most 8 indexes them; the optional probe BSP accelerator (0x06/0x07) is

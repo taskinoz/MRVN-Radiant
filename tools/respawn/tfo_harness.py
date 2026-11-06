@@ -12,7 +12,7 @@ spawn. Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
 
 checks.json: {"traces": [[x, y, z, ex, ey, ez], ...],
               "hulls": [[x,y,z,ex,ey,ez,minx,miny,minz,maxx,maxy,maxz], ...],
-              "views": [[x, y, z, pitch, yaw], ...],
+              "views": [[x, y, z, pitch, yaw], ...], "view_commands": ["thirdperson"],
               "drops": [[x, y, z], ...],
               "drop_sequential": true,
               "drop_models": ["models/containers/barrel.mdl", ...],
@@ -166,6 +166,7 @@ SCRIPT = r'''
 ::MRVN_Traces <- %TRACES%
 ::MRVN_Hulls <- %HULLS%
 ::MRVN_Views <- %VIEWS%
+::MRVN_ViewCommands <- %VIEW_COMMANDS%
 ::MRVN_Drops <- %DROPS%
 ::MRVN_DropSequential <- %DROP_SEQUENTIAL%
 ::MRVN_DropModels <- %DROP_MODELS%
@@ -244,6 +245,14 @@ function MRVN_Run( player )
 			wait MRVN_DropWait
 		foreach ( i, prop in dropped )
 			MRVN_LogDrop( i, prop )
+	}
+	if ( MRVN_Views.len() && MRVN_ViewCommands.len() )
+	{
+		ServerCommand( "sv_cheats 1" )
+		wait 1
+		foreach ( command in MRVN_ViewCommands )
+			ClientCommand( player, command )
+		wait 1
 	}
 	foreach ( i, v in MRVN_Views )
 	{
@@ -329,6 +338,11 @@ def write_mod(game, maps, checks):
     drop_wait = checks.get('drop_wait', 4)
     if type(drop_wait) not in (int, float) or not math.isfinite(drop_wait) or drop_wait <= 0:
         raise ValueError('drop_wait must be a positive finite duration')
+    # Console commands for the views, e.g. ["thirdperson"] to see the character's lighting.
+    view_commands = checks.get('view_commands', [])
+    if not isinstance(view_commands, list) or any(
+            not isinstance(c, str) or not re.fullmatch(r'[A-Za-z0-9_ .+-]{1,64}', c) for c in view_commands):
+        raise ValueError('view_commands must be short console commands')
     mods = game/'Mods'
     mod = mods/MOD
     if mod.exists():
@@ -342,6 +356,7 @@ def write_mod(game, maps, checks):
     (scripts/'mrvn_tf1_harness.nut').write_text(SCRIPT.replace('%TRACES%', sq(checks.get('traces', [])))
                                                 .replace('%HULLS%', sq(hulls))
                                                 .replace('%VIEWS%', sq(checks.get('views', [])))
+                                                .replace('%VIEW_COMMANDS%', json.dumps(view_commands))
                                                 .replace('%DROPS%', sq(checks.get('drops', [])))
                                                 .replace('%DROP_SEQUENTIAL%', 'true' if checks.get('drop_sequential', False) else 'false')
                                                 .replace('%DROP_MODELS%', json.dumps(models))

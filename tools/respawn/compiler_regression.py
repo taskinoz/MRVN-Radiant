@@ -929,8 +929,12 @@ def main():
                     if validate(sloped_bsp)['issues'] or water_records[107][index][3] != expected_water:
                         raise RuntimeError('Triangular water brush was measured as its enclosing bounds')
                     if label == 'dry':
+                        # Access roots also enclose referenced meshes, so clamp
+                        # the root to the left chamber to get the cell's volume.
                         bound = water_records[119][index]
-                        low,high = bound[:3],bound[6:9]
+                        chamber = ((-256,-128,0),(-8,128,256))
+                        low = [max(bound[a],chamber[0][a]) for a in range(3)]
+                        high = [min(bound[6+a],chamber[1][a]) for a in range(3)]
                         cell_volume = math.prod(high[a]-low[a] for a in range(3))
                         box_volume = math.prod(max(0,min(high[a],(-128,128,256)[a])-max(low[a],(-256,-128,0)[a])) for a in range(3))
                         if not box_volume > cell_volume/2 > box_volume/2:

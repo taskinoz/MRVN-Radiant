@@ -181,6 +181,15 @@ class PortalTests(unittest.TestCase):
         n = list(r[119][0]); n[5] = 1; r[119][0] = tuple(n)
         self.assertIn('invalid cell access bounds', str(check_portal_records(r, 29)))
 
+    def test_access_node_must_enclose_its_references(self):
+        r = visibility()
+        r[119][0] = (-10, -10, -10, 0, 1, 1, 10, 10, 10, 0, 0)
+        r[120] = [(0,)]
+        r[121] = [(-5, -5, -5, 0, 5, 5, 5, 0)]
+        self.assertEqual(check_portal_records(r), [])
+        r[121] = [(-5, -5, -5, 0, 50, 5, 5, 0)]  # a mesh reaching past its cell's root
+        self.assertIn('does not enclose', str(check_portal_records(r)))
+
     def test_only_global_roots_allow_infinity(self):
         r = visibility()
         r[119][0] = (-math.inf, -math.inf, -math.inf, 0, 0, 0, math.inf, math.inf, math.inf, 0, 0)

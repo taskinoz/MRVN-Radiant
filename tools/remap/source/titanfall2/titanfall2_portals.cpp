@@ -209,7 +209,7 @@ struct PortalGeometry {
 };
 
 void ClearPortals() {
-    B::cellBSPNodes_stub.clear(); B::cells_stub.clear(); B::portals_stub.clear();
+    B::cellBSPNodes_stub.clear(); B::cells_stub.clear(); B::portals_stub.clear(); B::cellBounds.clear();
     B::portalVertices_stub.clear(); B::portalVertices_stub.emplace_back(Vector3(0));
     B::portalVertexReferences_stub.clear(); B::portalEdges_stub.clear(); B::portalEdgeReferences_stub.clear();
     B::portalVertexEdges_stub.clear(); B::portalIntersectHeaders_stub.clear();
@@ -466,13 +466,20 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
     };
     for (const auto &ref : Shared::visRefs) distribute(tree.headnode, ref);
     B::cellAABBNodes.clear(); B::cellAABBNodes.resize(cellBounds.size());
+    B::cellBounds = cellBounds;
     B::objReferences.clear(); B::objReferenceBounds.clear();
     for (std::size_t i = 0; i < cellBounds.size(); ++i) {
         auto& refs = references[i];
         std::sort(refs.begin(), refs.end(), [](const auto& a, const auto& b) { return a.index < b.index; });
         refs.erase(std::unique(refs.begin(), refs.end(), [](const auto& a, const auto& b) { return a.index == b.index; }), refs.end());
         const auto access = Shared::MakeVisTree(std::move(references[i]), 1e30f);
-        WriteAccessNode(access, i, cellBounds[i]);
+        // The renderer frustum-culls each access node by its bounds before its
+        // references, and retail roots enclose every object they reference
+        // (Angel City, Relic: no exceptions). Referenced meshes often reach
+        // outside the cell, so a root must cover them as well as the cell.
+        MinMax rootBounds = cellBounds[i];
+        if (access.minmax.mins.x() <= access.minmax.maxs.x()) rootBounds.extend(access.minmax);
+        WriteAccessNode(access, i, rootBounds);
     }
     Sys_Printf("%9zu visibility cells from %zu BSP leaves, %zu directed portals, %zu portal edges\n",
                cellBounds.size(), leaves.size(), B::portals_stub.size(), B::portalEdges_stub.size() / 2);

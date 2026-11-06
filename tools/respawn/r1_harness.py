@@ -313,7 +313,7 @@ class Control:
     def console(self, command):
         self.call('execute_console_command', {'command': command, 'capture_output': False})
 
-    def squirrel(self, script, attempts=4):
+    def squirrel(self, script, attempts=4, context='server'):
         """Run server Squirrel; return its [MRVN] lines, raising on script errors.
 
         R1Delta gives a script 2 s to reach the engine thread (the first call
@@ -321,7 +321,7 @@ class Control:
         retried scripts must be idempotent."""
         for number in range(attempts):
             try:
-                result = self.call('execute_squirrel', {'context': 'server', 'script': script})
+                result = self.call('execute_squirrel', {'context': context, 'script': script})
                 break
             except RuntimeError as error:
                 if 'Timed out waiting for VM task' not in str(error) or number == attempts - 1:
@@ -385,6 +385,11 @@ def run_checks(control, checks, pid, output, events, screenshots):
             time.sleep(0.2)
         time.sleep(max(0.0, checks['drop_wait'] - (time.monotonic() - start)))
         events += control.squirrel(report % ('DROP', '" z=" + p.GetOrigin().z + ', 'DROP'))
+    if checks['views']:
+        # The pilot loadout menu covers the screen on maps without a match intro.
+        control.squirrel('CloseAllMenus()', context='ui')
+        control.console('unpause nomsg')
+        time.sleep(1)
     for i, v in enumerate(checks['views']):
         control.squirrel(f'local p = GetPlayerArray()[0]; p.SetOrigin( {vec(v[:3])} ); '
                          f'p.SetAngles( Vector( {float(v[3])}, {float(v[4])}, 0 ) ); p.SetVelocity( Vector( 0, 0, 0 ) )')

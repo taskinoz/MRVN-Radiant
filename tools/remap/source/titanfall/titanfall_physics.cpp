@@ -582,9 +582,11 @@ void Titanfall::FinishPhysics() {
 void Titanfall::AssignWaterCells() {
     auto &cells = Titanfall::Bsp::cells_stub;
     const auto &nodes = Titanfall::Bsp::cellAABBNodes;
+    const auto &bounds = Titanfall::Bsp::cellBounds;  // access roots also cover referenced meshes
     std::size_t assigned = 0;
     for (std::size_t i = 0; i < cells.size() && i < nodes.size(); ++i) {
-        const Vector3 mins = nodes[i].mins, maxs = nodes[i].maxs;
+        const Vector3 mins = i < bounds.size() ? bounds[i].mins : nodes[i].mins;
+        const Vector3 maxs = i < bounds.size() ? bounds[i].maxs : nodes[i].maxs;
         double volume = 1;
         for (int a = 0; a < 3; ++a) volume *= std::max(0.0, double(maxs[a]) - mins[a]);
         if (!(volume > 0) || !std::isfinite(volume)) continue;

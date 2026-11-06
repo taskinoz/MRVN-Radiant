@@ -125,6 +125,14 @@ def check_portal_records(records, version=37):
     for i, n in enumerate(access):
         if n[9] + n[3] > len(access) or n[10] + n[4] > len(refs):
             error(119, i, "cell access child/reference slice exceeds table")
+        # The renderer culls a node by its bounds before drawing its references;
+        # every retail node encloses its references (Angel City, Relic).
+        elif all(math.isfinite(v) for v in (*n[:3], *n[6:9])) and len(refs) == len(bounds):
+            for k in range(n[10], n[10] + n[4]):
+                b = bounds[k]
+                if any(b[a] < n[a] - 1 or b[a + 4] > n[a + 6] + 1 for a in range(3)):
+                    error(119, i, "cell access node does not enclose its object reference bounds")
+                    break
         # Retail has global environment roots with flags 0x02 and infinite bounds.
         global_root = i < len(cells) and cells[i][2] & 2
         infinite_root = global_root and all(n[a] == -math.inf and n[a+6] == math.inf for a in range(3))

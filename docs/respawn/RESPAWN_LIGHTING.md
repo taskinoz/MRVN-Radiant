@@ -3,9 +3,10 @@
 For Titanfall 2, `remap` now bakes lightmaps whenever a map places light
 entities (see [Compiler bake](#compiler-bake-titanfall-2)). The output matches the
 retail layout and passes structural checks. It also writes character light
-probes. It has **not yet been tested in-game**. Maps without lights, and the
-Titanfall 1 and Apex writers, still emit placeholder records with atlas index
-`-1`. There is no GI or CSM shadow geometry.
+probes, one diffuse bounce into SKY A, and CSM shadow meshes, and baked maps
+play in Northstar. Titanfall 1 shares the bake (see
+[RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md)). Maps without lights, and the Apex
+writer, still emit placeholder records with atlas index `-1`.
 
 ## Attribution
 
@@ -346,12 +347,11 @@ recorded. `validate_records.py` now enforces the rule.
 
 ## Remaining work
 
-1. Load a baked map in Northstar. Confirm the sun and point-light shadows,
-   character lighting and the fill brightness.
-2. Add indirect (bounce) lighting to SKY A, which retail appears to contain.
-3. Support `light_environment_volume` for menu stages, and splitting oversized
-   charts. Place probes along walkable surfaces rather than only on a grid.
-4. Emit shadow meshes (0x7C–0x7F) so CSM sun shadows use real geometry, as the
-   converter does, and static-prop probe indices (0x66).
-5. Add separate TF1/Online and Apex season profiles. No cross-game bake equivalence
-   is assumed from shared lump numbers.
+Updated 6 November 2026; the earlier list predated work since done (bounce
+lighting, the menu-stage `light_environment_volume`, shadow meshes, static-prop
+probe indices, the TF1 bake, and baked maps loading in Northstar).
+
+1. Place probes along walkable surfaces rather than only on a grid.
+2. Split charts too large for a page instead of scaling them down.
+3. Add Apex season profiles. No cross-game bake equivalence is assumed from
+   shared lump numbers.

@@ -666,6 +666,46 @@ authentication settings; the local research run temporarily enabled insecure
 authentication inside its loopback-only session after startup reset the launch
 setting. That workaround did not resolve Origin disconnection.
 
+### In-game culling with `_viewportals` (6 November 2026)
+
+The traversal tests above showed that portal maps load; they did not compare
+what is drawn. E1M1 built for TF1 with and without `_viewportals` was captured
+from the same 12 cameras in R1Delta, and 4 of them in TFO. Most views match,
+but in one (camera -272 2928, yaw 0) the portal build drops whole walls and
+pillars in both runtimes: the background clear colour shows through. So the
+compiler's portal output is wrong, not either runtime. `_viewportals` remains
+experimental; the default single cell draws everything.
+
+Findings so far:
+
+- **Access roots.** Every retail access node (Angel City, Relic and all six TF2
+  samples) encloses the bounds of the object references under it. remap gave
+  each cell root the cell's own box, which missed the meshes it references in
+  1,021 of 1,022 cells. Roots now cover both the cell and its references, and
+  `portals.py` reports "does not enclose" otherwise. Water-cell assignment now
+  uses the cell's own bounds, kept separately. This did not change the capture.
+- **Mesh ownership.** Retail meshes stay within their cells: each world mesh is
+  referenced by 1.49 cells on average in Angel City (12,348 meshes, 79% by
+  one cell), 1.68 in Relic and 1.35 in Coliseum. remap merges each material into
+  meshes spanning many cells: E1M1 had 222 meshes referenced by 31 cells on
+  average, one by 1,011.
+- **Splitting meshes by cell made it worse.** A trial built the cell tree before
+  meshes, merged faces only within a cell (2,219 meshes) and referenced each
+  mesh from the cells its triangles touch (2.27 per mesh, close to retail). The
+  same camera then lost most distant geometry. The large meshes had been hiding
+  how little of the cell graph the renderer reaches, so the trial was reverted.
+- **An offline traversal model does not reproduce it.** `.local` tooling clipped
+  the view frustum through portals from the camera's cell and ray cast the
+  view: with unrestricted re-entry every visible mesh is referenced by a reached
+  cell, and with visit-once traversal 99 of 1,296 rays miss after the split.
+  The renderer's rule is evidently stricter than either model.
+
+Next step: reverse the traversal in TFO `client.dll` (RVA `0x5e9030`, the mask
+setup above) to learn how a cell is entered and its frustum or screen rectangle
+narrowed. The likely mismatch is remap's clustered cells: merging regions to
+the 1,022-cell budget makes non-convex cells, whereas retail TF1 maps use at
+most 525 cells (Rise).
+
 ## Provenance and attribution
 
 - Inherited NetRadiant `FaceBSP`, `MakeTreePortals`,

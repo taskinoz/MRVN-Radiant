@@ -456,6 +456,7 @@ namespace Titanfall {
         inline std::vector<Vector3>               occlusionMeshVertices;
         inline std::vector<uint16_t>              occlusionMeshIndices;
         inline std::vector<CellAABBNode_t>        cellAABBNodes;
+        inline std::vector<MinMax>                cellBounds;  // each cell's own volume; access roots can be larger
         inline std::vector<uint16_t>              objReferences;
         inline std::vector<ObjReferenceBounds_t>  objReferenceBounds;
         inline std::vector<LevelInfo_t>           levelInfo;  // Only one entry! used a vector to keep load / save code simple

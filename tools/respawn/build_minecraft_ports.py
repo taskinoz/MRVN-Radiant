@@ -36,7 +36,7 @@ from minecraft_world import sections
 from minecraft_scenery import menu_stage, sky_dome, sky_texture, sky_void_texture
 
 SCALE = 48
-VERSION = '0.5.1'
+VERSION = '0.5.2'
 # Each map owns its asset names: every installed mod's pak loads with Coliseum,
 # and a shared name would make one map draw the other map's copy of a texture.
 ASSET_ROOT = 'world/minecraft_ports/'

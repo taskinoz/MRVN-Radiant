@@ -721,6 +721,15 @@ to 135 regions per camera on those builds and none on retail Angel City.
   that its frustum clipping evidently never reaches; TF2 Coliseum and Glitch have
   none.
 
+- Open regions no point entity can see into (sealed hollows) become solid
+  before cells are counted, as the outside does after a leak test; maps without
+  point entities keep every region.
+- **Limit found on blocky maps:** the Minecraft Glitch port with `--view-portals`
+  still needs more than 1,022 connected subtree cells even after about 960
+  sealed hollows are made solid and with brushes under 512 units as detail. Its
+  open areas cannot be grouped into that many whole subtrees while keeping each
+  cell connected. Portals stay off for the converters.
+
 Also from this investigation:
 
 - **Access roots.** Every retail access node (Angel City, Relic and six TF2

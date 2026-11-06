@@ -135,13 +135,18 @@ void Shared::MakeMeshes(const entity_t &e) {
     int brush_order = 0;
     for (const brush_t &brush : e.brushes) {
         bool visible = false, translucent = false;
+        int contents = 0;
         for (const side_t &side : brush.sides) {
             if (side.bevel || !side.shaderInfo)
                 continue;
             visible |= !(side.shaderInfo->compileFlags & C_NODRAW);
             translucent |= (side.shaderInfo->compileFlags & C_TRANSLUCENT) != 0;
+            contents |= side.shaderInfo->contentFlags;
         }
-        if (visible && !translucent) {
+        // Render-only brushes ("$contentflag nonsolid", e.g. Source func_illusionary)
+        // do not hide faces they touch, as they never did in their source engine.
+        const bool nonsolid = !(contents & CONTENTS_SOLID);
+        if (visible && !translucent && !nonsolid) {
             Respawn::Csg::Solid &solid = solids.emplace_back();
             // Bevel sides carry no side.plane; their plane lives in mapplanes.
             for (const side_t &side : brush.sides) {

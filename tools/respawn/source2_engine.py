@@ -112,6 +112,54 @@ ACCESSOR = {5120: 'i1', 5121: 'u1', 5122: 'i2', 5123: 'u2', 5125: 'u4', 5126: 'f
 WIDTH = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
 
 
+def read_exr(path):
+    """RGB float array from a scanline OpenEXR file with no or ZIP/ZIPS compression
+    (what Source2Viewer writes for HDR sky textures)."""
+    import struct, zlib
+    data = Path(path).read_bytes()
+    if data[:4] != b'\x76\x2f\x31\x01': raise ValueError('not an OpenEXR file')
+    pos = 8; header = {}
+    while data[pos]:
+        end = data.index(b'\0', pos); name = data[pos:end].decode(); pos = end+1
+        end = data.index(b'\0', pos); kind = data[pos:end].decode(); pos = end+1
+        size = struct.unpack_from('<i', data, pos)[0]; pos += 4
+        header[name] = (kind, data[pos:pos+size]); pos += size
+    pos += 1
+    channels = []; raw = header['channels'][1]; q = 0
+    while raw[q]:
+        end = raw.index(b'\0', q); name = raw[q:end].decode(); q = end+1
+        pixel_type = struct.unpack_from('<i', raw, q)[0]; q += 16
+        channels.append((name, pixel_type))
+    x0, y0, x1, y1 = struct.unpack('<4i', header['dataWindow'][1])
+    width, height = x1-x0+1, y1-y0+1
+    compression = header['compression'][1][0]
+    if compression not in (0, 2, 3): raise ValueError(f'unsupported EXR compression {compression}')
+    lines_per_block = 16 if compression == 3 else 1
+    blocks = (height+lines_per_block-1)//lines_per_block
+    offsets = struct.unpack_from(f'<{blocks}Q', data, pos)
+    sizes = {1: 2, 2: 4, 0: 4}; dtypes = {1: np.float16, 2: np.float32, 0: np.uint32}
+    planes = {name: np.zeros((height, width), np.float32) for name, _ in channels}
+    for offset in offsets:
+        y, length = struct.unpack_from('<ii', data, offset)
+        chunk = data[offset+8:offset+8+length]
+        lines = min(lines_per_block, y1+1-y)
+        expected = lines*width*sum(sizes[t] for _, t in channels)
+        if compression and length < expected:
+            t = np.frombuffer(zlib.decompress(chunk), np.uint8).astype(np.int32)
+            t = np.cumsum(t-128) + 128  # undo the byte delta predictor
+
+            t = (t & 0xff).astype(np.uint8)
+            half = (len(t)+1)//2; chunk = np.empty(len(t), np.uint8)
+            chunk[0::2] = t[:half]; chunk[1::2] = t[half:]
+            chunk = chunk.tobytes()
+        q = 0
+        for line in range(lines):
+            for name, pixel_type in channels:
+                n = width*sizes[pixel_type]
+                planes[name][y-y0+line] = np.frombuffer(chunk[q:q+n], dtypes[pixel_type]).astype(np.float32); q += n
+    return np.stack([planes[c] for c in 'RGB'], -1)
+
+
 class GLTF:
     """A glTF 2.0 export: flattened node transforms, mesh primitives and material base colour images."""
 
@@ -130,8 +178,8 @@ class GLTF:
         raw = np.ndarray((a['count'], width), dtype, buffer, start, (stride, dtype.itemsize))
         return raw.astype(np.float64 if dtype.kind == 'f' else np.int64)
 
-    def instances(self):
-        """(mesh index, 4x4 world matrix) for every node with a mesh."""
+    def instances(self, names=False):
+        """(mesh index, 4x4 world matrix[, node name]) for every node with a mesh."""
         nodes = self.data['nodes']; out = []
         def walk(i, parent):
             n = nodes[i]
@@ -144,7 +192,7 @@ class GLTF:
                                 [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
                 local = np.eye(4); local[:3, :3] = rot*np.array(s); local[:3, 3] = t
             world = parent@local
-            if 'mesh' in n: out.append((n['mesh'], world))
+            if 'mesh' in n: out.append((n['mesh'], world, n.get('name', '')) if names else (n['mesh'], world))
             for c in n.get('children', []): walk(c, world)
         scene = self.data['scenes'][self.data.get('scene', 0)]
         for i in scene['nodes']: walk(i, np.eye(4))

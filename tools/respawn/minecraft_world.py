@@ -63,7 +63,11 @@ def read_nbt(data):
 def chunks(archive, bounds=None):
     """Yield overworld chunks without extracting user-controlled ZIP paths."""
     with zipfile.ZipFile(archive) as z:
-        for name in z.namelist():
+        names = z.namelist()
+        if not any(n.endswith('.mca') for n in names) and any(n.endswith('.mcr') for n in names):
+            raise ValueError('world saved before Minecraft 1.2 (McRegion .mcr files); '
+                             'open it in Minecraft 1.2 to 1.12 first, then run tools/respawn/upgrade_minecraft_world.py')
+        for name in names:
             path = Path(name)
             if path.parent.name != 'region' or path.suffix != '.mca': continue
             if any(p in ('DIM1', 'DIM-1') for p in path.parts): continue
@@ -98,6 +102,9 @@ def sections(archive, bounds=None):
             if bounds and not bounds[1]-15 <= sec['Y']*16 <= bounds[4]: continue
             bs = sec.get('block_states', {})
             palette = bs.get('palette', sec.get('Palette', []))
+            if not palette and 'Blocks' in sec:
+                raise ValueError('world saved before Minecraft 1.13 (numeric block IDs); '
+                                 'upgrade it first with tools/respawn/upgrade_minecraft_world.py')
             if not palette: continue
             if len(palette) == 1:
                 yield (chunk['xPos']*16, sec['Y']*16, chunk['zPos']*16), palette, [0]*4096

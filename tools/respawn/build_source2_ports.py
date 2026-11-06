@@ -17,7 +17,7 @@ from PIL import Image
 from build_source_ports import (ASSET_ROOT, LUXEL_SIZE, MESH_CLUSTER, Materials, assemble, prop_charts, sanitize, spread, valve_face,
                                 write_props)
 from compiler_regression import entity
-from source2_engine import GLTF, Physics, entities
+from source2_engine import GLTF, Physics, entities, read_exr
 
 INCHES_PER_METRE = 1/0.0254
 # Render triangles kept after simplification; the Titanfall 2 world index budget is about 1M triangles.
@@ -53,6 +53,36 @@ def export(args):
     dump(f'maps/{level}/entities/default_ents.vents_c', 'DATA', 'entities.txt')
 
 
+def sky_texture(args, ents, size=512):
+    """The env_sky panorama as the sky dome's polar image (centre zenith, edge horizon), or None.
+
+    CS2 skies are equirectangular HDR textures (row 0 the zenith). They are exported
+    once from the game's pak01 next to gameinfo.gi and tone mapped to the horizon."""
+    sky = next((e for e in ents if e.get('classname') == 'env_sky'), None)
+    name = str((sky or {}).get('skyname', '')).replace('resource_name:', '').strip('"')
+    if not name.endswith('.vmat') or not args.gameinfo: return None
+    pak = args.gameinfo.parent/'pak01_dir.vpk'; out = args.export/'sky-export'; stem = Path(name).stem
+    def find():
+        # Source2Viewer writes single-file dumps beside or inside -o depending on what exists.
+        hits = sorted(out.rglob(stem+'.exr')) + sorted(args.export.glob(stem+'.exr')) if out.is_dir() else sorted(args.export.glob(stem+'.exr'))
+        return hits[0] if hits else None
+    exr = find()
+    if exr is None:
+        out.mkdir(parents=True, exist_ok=True)
+        subprocess.run([str(args.vrf), '-i', str(pak), '--vpk_filepath', name+'_c', '-o', str(out.resolve()), '-d'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        exr = find()
+    if exr is None: return None
+    pano = read_exr(exr); h, w = pano.shape[:2]
+    pano = np.clip(pano/max(np.percentile(pano, 99), 1e-6), 0, 1)**(1/2.2)
+    v, u = np.mgrid[0:size, 0:size]
+    dx, dy = (u+.5)/size*2-1, (v+.5)/size*2-1
+    r = np.minimum(np.hypot(dx, dy), 1); azimuth = np.arctan2(dy, dx)
+    rows = np.clip((r*(h/2-1)).astype(int), 0, h-1)  # r 0 = zenith, 1 = horizon
+    cols = ((azimuth/(2*np.pi)) % 1*w).astype(int) % w
+    return Image.fromarray((pano[rows, cols]*255).astype(np.uint8)).convert('RGBA')
+
+
 class SceneMaterials(Materials):
     """glTF materials to Titanfall 2 ones, keyed by material name."""
 
@@ -74,14 +104,19 @@ class SceneMaterials(Materials):
         return self.names[index]
 
 
-def render_charts(gltf, materials, budget=TRIANGLE_BUDGET):
+def render_charts(gltf, materials, budget=TRIANGLE_BUDGET, entity_models=False):
     """Opaque render triangles in Source units, simplified to the budget by snapping vertices to a grid.
 
     Each kept triangle keeps its own corners' texture coordinates and normals, so
     texture seams survive; only positions move, by at most one grid cell.
     """
     parts = []; skipped = Counter()
-    for mesh, matrix in gltf.instances():
+    for mesh, matrix, node in gltf.instances(names=True):
+        # Source2Viewer names world geometry n0_...; other nodes are entity models
+        # (doors, breakables, game-mode blockers, physics props). Their collision is
+        # not in the world physics, so they would render as walls you walk through.
+        if not entity_models and not node.startswith('n0_'):
+            skipped['entity model meshes (doors, breakables, blockers)'] += 1; continue
         for material_index, positions, normals, uvs, triangles in gltf.primitives(mesh):
             material = materials.name(material_index) if material_index is not None else None
             if material is None: skipped['cutout, translucent or tool triangles'] += len(triangles); continue
@@ -94,8 +129,12 @@ def render_charts(gltf, materials, budget=TRIANGLE_BUDGET):
             parts.append((material, p, n, uvs, triangles))
     points = np.concatenate([part[1] for part in parts]); first = np.cumsum([0]+[len(part[1]) for part in parts])
     total = sum(len(part[4]) for part in parts)
+    # Snap within each mesh only: averaging a cell across meshes lifted decals and
+    # trim lying just above the ground off it (and sank the ground under them).
+    part_of = np.repeat(np.arange(len(parts)), [len(part[1]) for part in parts])
     for cell in GRID_CELLS:
-        _, cluster = np.unique(np.floor(points/cell).astype(np.int64), axis=0, return_inverse=True); cluster = cluster.reshape(-1)
+        keys = np.concatenate([np.floor(points/cell).astype(np.int64), part_of[:, None]], 1)
+        _, cluster = np.unique(keys, axis=0, return_inverse=True); cluster = cluster.reshape(-1)
         kept = 0
         for (material, p, n, uvs, triangles), start in zip(parts, first):
             t = cluster[triangles+start]
@@ -198,7 +237,7 @@ def build(args):
     gltf = GLTF(args.export/'world.gltf')
     prefix = ASSET_ROOT+args.name+'/'
     materials = SceneMaterials(gltf, prefix)
-    charts, lo, hi, cell, skipped = render_charts(gltf, materials, args.triangle_budget)
+    charts, lo, hi, cell, skipped = render_charts(gltf, materials, args.triangle_budget, args.entity_models)
     print(f'{args.name}: {sum(len(c[2])//3 for c in charts)} render triangles in {len(charts)} charts, '
           f'vertices snapped to a {cell}-unit grid', flush=True)
     write_props(out/'assets/models/source_props.rsm', charts)
@@ -215,6 +254,11 @@ def build(args):
     sun = next((e for e in ents if e.get('classname') == 'light_environment'), {})
     sky = tuple(sun.get('skycolor', [120, 160, 210]))
     sky_image = Image.new('RGBA', (64, 64), sky+(255,)); void = tuple(int(c*.8) for c in sky)+(255,)
+    panorama = sky_texture(args, ents)
+    if panorama is not None:
+        sky_image = panorama
+        edge = np.asarray(panorama)[panorama.height//2, -2]  # a horizon pixel colours the void below
+        void = tuple(int(c) for c in edge[:3])+(255,)
     converted = ('''Render meshes, textures (base colour only), physics collision, lights and spawns are
 converted. Render meshes are simplified by snapping vertices to a grid. Cutout and
 translucent materials (glass, decals), wires, the 3D skybox, doors, physics props
@@ -238,6 +282,7 @@ if __name__ == '__main__':
                    help='Map becomes mp_source_NAME')
     for name in ('output', 'remap', 'repak', 'material-template'): p.add_argument('--'+name, type=Path, required=True)
     p.add_argument('--display-name')
+    p.add_argument('--entity-models', action='store_true', help='Also render entity models (doors, breakables, blockers); they get no collision')
     p.add_argument('--kill-z', type=float)
     p.add_argument('--triangle-budget', type=int, default=TRIANGLE_BUDGET, help='Render triangles to simplify to')
     p.add_argument('--collision', choices=('all', 'hulls', 'none'), default='all', help='Physics collision to convert')

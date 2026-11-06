@@ -29,7 +29,7 @@ from pack_vpk import pack_files
 from rpak import RPak
 from source_engine import (BSP, Content, CONTENTS_GRATE, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, CONTENTS_WINDOW, Model,
                            SURF_HINT, SURF_NODRAW, SURF_SKIP, SURF_SKY, SURF_SKY2D, angle_matrix, material_info, read_vtf,
-                           vtf_size)
+                           vtf_size, VERTEXES, EDGES, SURFEDGES, FACES)
 from validate_records import load_records, validate
 import stbsp
 
@@ -49,6 +49,9 @@ MAX_LIGHTMAP_PAGES = 6
 # Displacement collision grid size (control points per side); remap collides each grid quad separately.
 DISPLACEMENT_COLLISION = 5
 # Brush entities that stand still in the original; doors and breakables are left out, so their openings are open.
+NONSOLID = '_ns'  # material suffix of render-only (non-colliding) brushes
+# Brush entities that render but never collide in Source.
+RENDER_ONLY_ENTITIES = {'func_illusionary'}
 STATIC_BRUSH_ENTITIES = {'func_brush', 'func_wall', 'func_lod', 'func_detail', 'func_wall_toggle'}
 TOOL_MATERIALS = {'tools/toolsclip': '_clip', 'tools/toolsplayerclip': '_clip', 'tools/toolsblack': '_black'}
 # Ground NPC nodes are on walkable floor; HL2 has no multiplayer spawns to use.
@@ -176,7 +179,13 @@ class Materials:
 
     def __init__(self, bsp, content, prefix):
         self.bsp = bsp; self.content = content; self.prefix = prefix
-        self.textures = {}; self.missing = Counter(); self.invisible = set()
+        self.textures = {}; self.missing = Counter(); self.invisible = set(); self.nonsolid = set()
+
+    def render_only(self, name):
+        """A non-colliding variant of a material, for Source func_illusionary and non-solid brushes."""
+        base = name[len(self.prefix):]
+        if base.startswith('_'): return name  # nodraw, sky and clip stay as they are
+        self.nonsolid.add(base); return name+NONSOLID
 
     def name(self, texinfo_index):
         if texinfo_index < 0: return self.prefix+'_nodraw'
@@ -242,6 +251,19 @@ class Materials:
                 dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
                 files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
             shader.append(f'textures/{self.prefix}{name}\n{{\n $shadertype LitBumpGeneric\n'+(' $compileflag sky\n' if name.startswith('_sky') else '')+'}\n')
+            if name in self.nonsolid:
+                # The same textures under a second name whose shader has no collision.
+                for suffix in ('_colpass_wld', '_wld'):
+                    src = assets/('material/'+self.prefix+name+suffix+'.rpak')
+                    spec = json.loads(src.with_suffix('.json').read_text())
+                    spec['name'] = self.prefix+name+NONSOLID+('_colpass' if suffix.startswith('_colpass') else '')
+                    if not suffix.startswith('_colpass'):
+                        spec['$colpassMaterial'] = 'material/'+self.prefix+name+NONSOLID+'_colpass_wld.rpak'
+                    dst = assets/('material/'+self.prefix+name+NONSOLID+suffix+'.rpak')
+                    dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
+                    files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
+                shutil.copyfile(png, assets/('textures/'+self.prefix+name+NONSOLID+'.png'))
+                shader.append(f'textures/{self.prefix}{name}{NONSOLID}\n{{\n $shadertype LitBumpGeneric\n $contentflag nonsolid\n}}\n')
         shaders = assets/'shaders'; shaders.mkdir(parents=True, exist_ok=True)
         (shaders/'source_ports.shader').write_text('\n'.join(shader))
         pak = 'source_'+args.name
@@ -299,6 +321,43 @@ def prop_charts(positions, normals, uvs, triangles):
     return out
 
 
+def face_charts(bsp, model, offset, materials):
+    """Render-only charts from a brush model's compiled faces.
+
+    Non-solid entity brushes (func_illusionary) are not listed in the BSP's leaves,
+    so their brushes cannot be recovered; their faces are the reliable source."""
+    import struct as _struct
+    lumps = bsp.lumps
+    if not hasattr(bsp, '_face_cache'):
+        points = np.frombuffer(lumps[VERTEXES], np.float32).reshape(-1, 3)
+        edges = np.frombuffer(lumps[EDGES], np.uint16).reshape(-1, 2)
+        surfedges = np.frombuffer(lumps[SURFEDGES], np.int32)
+        faces = list(_struct.iter_unpack('<HBBihhhh4Bif2i2iiHHI', lumps[FACES]))
+        bsp._face_cache = (points, edges, surfedges, faces)
+    points, edges, surfedges, faces = bsp._face_cache
+    first, count = bsp.models[model][10], bsp.models[model][11]
+    charts = []
+    for face in faces[first:first+count]:
+        planenum, side, _, firstedge, numedges, texinfo, dispinfo = face[:7]
+        if texinfo < 0 or dispinfo >= 0: continue
+        material = materials.name(texinfo)
+        if material[len(materials.prefix):].startswith('_'): continue  # nodraw, sky, invisible glass and water
+        info = bsp.texinfo[texinfo]
+        width, height = next((t[1], t[2]) for t in bsp.texdata if t[0] == info.material)
+        normal = np.array(bsp.planes[planenum][0], float) * (-1 if side else 1)
+        polygon = [points[edges[e][0]] if e >= 0 else points[edges[-e][1]] for e in surfedges[firstedge:firstedge+numedges]]
+        polygon = [np.asarray(v, float)+offset for v in polygon]
+        keep = [k for k in range(3) if k != int(np.abs(normal).argmax())]
+        verts = []
+        for v in polygon:
+            u = (np.dot(v-offset, info.s[:3])+info.s[3])/width; t = (np.dot(v-offset, info.t[:3])+info.t[3])/height
+            verts.append((v, normal, (u, t), v[keep]/16))
+        # Source faces wind clockwise seen from the front, as Respawn front faces do.
+        tris = [k for i in range(1, len(polygon)-1) for k in (0, i, i+1)]
+        charts.append((material, verts, tris))
+    return charts
+
+
 def write_props(path, charts):
     """RSM1: per chart a material, vertices (xyz, normal, uv, colour, lightmap uv) and triangles."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,13 +401,14 @@ def convert_props(bsp, materials, skybox_box):
     return charts, brushes, skipped
 
 
-def brush_text(bsp, brush, materials, offset=(0, 0, 0), clip=False):
+def brush_text(bsp, brush, materials, offset=(0, 0, 0), clip=False, nonsolid=False):
     faces = []
     for side in brush.sides:
         if side.bevel: continue
         dist = side.dist+sum(n*o for n, o in zip(side.normal, offset))
         if clip: material = materials.prefix+'_clip'
         else: material = materials.name(side.texinfo)
+        if nonsolid: material = materials.render_only(material)
         if side.texinfo >= 0:
             info = bsp.texinfo[side.texinfo]
             s = (*info.s[:3], info.s[3]-sum(a*o for a, o in zip(info.s, offset)))
@@ -444,25 +504,32 @@ def build(args):
         skybox = {i for i in world if all(lo[a] <= v for a, v in enumerate(bsp.brush_bounds(bsp.brushes[i])[0]))
                   and all(v <= hi[a] for a, v in enumerate(bsp.brush_bounds(bsp.brushes[i])[1]))}
     brushes = []; skipped = Counter(); boxes = []
-    def add(index, offset=(0, 0, 0)):
-        brush = bsp.brushes[index]
-        if brush.contents & (CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE): clip = False
+    def add(index, offset=(0, 0, 0), render_only=False):
+        brush = bsp.brushes[index]; clip = False
+        if render_only: pass
+        elif brush.contents & (CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE): pass
         elif brush.contents & CONTENTS_PLAYERCLIP: clip = True
+        elif brush.contents == 0:
+            # Empty contents: visible but non-solid world brushes (Source's non-solid detail).
+            render_only = True; skipped['non-solid world brush (render only)'] += 1
         else: skipped[f'contents {brush.contents:#x}'] += 1; return
         lo, hi = bsp.brush_bounds(brush)
         boxes.append([l+o for l, o in zip(lo, offset)]+[h+o for h, o in zip(hi, offset)])
-        brushes.append(brush_text(bsp, brush, materials, offset, clip))
+        brushes.append(brush_text(bsp, brush, materials, offset, clip, render_only))
     for i in world:
         if i in skybox: skipped['3D skybox'] += 1
         else: add(i)
+    render_only_charts = []
     for e in bsp.entities:
         model = e.get('model', '')
         if not model.startswith('*'): continue
         if e.get('classname') in STATIC_BRUSH_ENTITIES and e.get('angles', '0 0 0') in ('0 0 0', ''):
             for i in bsp.model_brushes(int(model[1:])): add(i, origin(e))
+        elif e.get('classname') in RENDER_ONLY_ENTITIES and e.get('angles', '0 0 0') in ('0 0 0', ''):
+            render_only_charts.extend(face_charts(bsp, int(model[1:]), np.array(origin(e)), materials))
         else: skipped[e.get('classname')] += 1
     charts, prop_brushes, prop_skipped = convert_props(bsp, materials, skybox_box) if args.props else ([], [], Counter())
-    skipped.update(prop_skipped); brushes += prop_brushes
+    skipped.update(prop_skipped); brushes += prop_brushes; charts += render_only_charts
     patches = []; collision = []; contents_keys = []
     for d in bsp.displacements():
         coarse = displacement_collision(d, prefix+'_nodraw')

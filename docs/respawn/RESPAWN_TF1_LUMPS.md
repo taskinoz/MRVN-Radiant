@@ -516,8 +516,17 @@ collision defect. The harness's `drop_samples` option logs drop positions every
 
 - **PHYSICS_TRIANGLES (1.4 MB in Angel City):** precomputed virtual-mesh hulls,
   one per TRICOLL header. remap leaves it empty, so the engine builds them at
-  load; the blob layout is not decoded. Maps with more than 8,192 world TRICOLL
-  headers would lose VPhysics on the rest.
+  load. Partly decoded (6 November 2026): sizes `0`, `0xfffe` and `0xffff` are
+  null (82 in Angel City), and the 5,806 sizes plus the 11,614-byte header sum
+  to the lump exactly. Each blob starts with a hull count (`01 00 00 00`) and
+  then byte counts for one convex outer hull of the header's triangles: faces,
+  a second count equal to or below the faces, edges (always 1.5 × faces, a
+  closed triangulated hull) and a fourth count. For example, header 0 (14
+  vertices, 12 triangles) gives 18 faces and 27 edges, a hull of 11 vertices; a
+  flat quad gives a 4-face, 6-edge double-sided sliver. The per-face records
+  that follow, likely Source's packed virtual-mesh hull, are not decoded.
+  Writing the lump would only save load time. Maps with more than 8,192 world
+  TRICOLL headers would lose VPhysics on the rest.
 - **Patch collision coverage:** correctly facing flat-entity rays and isolated
   VPhysics drops pass in TFO. The new six-surface sweep fixture covers 156
   front-facing world ray/hull cases. Exact convex merging fixes the reproduced

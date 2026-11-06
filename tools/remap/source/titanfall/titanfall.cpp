@@ -302,6 +302,14 @@ void CompileR1BSPFile() {
     // Write entity partitions we used
     Titanfall::EmitEntityPartitions();
 
+    // R1Delta's gametype script places connecting players at an info_intermission;
+    // without one, CodeCallback_OnClientConnectionStarted errors and the match never starts.
+    // Every retail map has them (in the BSP entity lump). TFO tolerates their absence.
+    if (std::none_of(entities.begin(), entities.end(),
+                     [](const entity_t &e) { return striEqual(e.classname(), "info_intermission"); })) {
+        Sys_Warning("No info_intermission: R1Delta will not start a match on this map\n");
+    }
+
     // Generate vis tree for worldspawn, we do this here as we'll need portals once we reverse further
     Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
     Shared::MergeVisTree(Shared::visRoot);

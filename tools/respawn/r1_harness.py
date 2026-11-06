@@ -43,6 +43,7 @@ DEFAULT_MODEL = 'models/containers/barrel.mdl'
 ADDON_LIST = re.compile(r'\s*"AddonList"\s*\{[^{}]*\}\s*', re.I | re.S)
 MAP_NAME = re.compile(r'[A-Za-z0-9_]+')
 MODEL_NAME = re.compile(r'models/[A-Za-z0-9_/-]+\.mdl')
+MODEL_EXTENSIONS = {'.mdl', '.vvd', '.vvc', '.vtx', '.phy', '.ani', '.vcs'}
 PROTOCOL = '2025-06-18'
 BATCH = 120  # rows per Squirrel call; R1Delta captures at most 500 output lines
 
@@ -119,7 +120,22 @@ def find_game(explicit=None):
     raise ValueError('could not read R1Delta InstallPath; pass --game')
 
 
-def prepare(app, game, maps, map_name, models=None, run_id=None):
+def model_files(source, models):
+    """Loose files of each drop model (.mdl and its .vvd/.vtx/.phy/... siblings)
+    from a model tree such as Titanfall Online's assets_dump."""
+    source = resolve_dir(source, 'model files')
+    found = []
+    for model in sorted(set(models)):
+        stem = source / model[:-len('.mdl')]
+        files = sorted(p for p in stem.parent.glob(stem.name + '.*')
+                       if p.is_file() and p.suffix.lower() in MODEL_EXTENSIONS and not linked(p))
+        if not any(p.suffix.lower() == '.mdl' for p in files):
+            raise ValueError(f'{model} is not in {source}')
+        found += [(p, Path(model).parent / p.name) for p in files]
+    return found
+
+
+def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=None):
     """Stage an owned addon with the compiled map (maps=None: a retail map) and,
     when models is not None, a level-init precache script for drop models.
 
@@ -127,7 +143,13 @@ def prepare(app, game, maps, map_name, models=None, run_id=None):
     unprecached model removes itself on spawn. With developer > 0, _mapspawn.nut
     includes test/myscript during level init on any map, so the harness stages
     that script (and launches with +developer 1). Per-map level scripts in an
-    addon were not loaded."""
+    addon were not loaded.
+
+    TF1 keeps most model render data in per-map VPKs (mp_common has only some
+    .mdl/.phy files), and a custom map mounts no map VPK. Its models then load
+    with empty keyvalues, so prop_physics finds no prop_data and deletes itself
+    ("no propdata ... DELETED", server.dll 0x1c3c54). model_source copies each
+    drop model's loose files into the addon."""
     app = resolve_dir(app, 'R1Delta app')
     game = resolve_dir(game, 'Titanfall install')
     r1 = game / 'r1'
@@ -145,6 +167,7 @@ def prepare(app, game, maps, map_name, models=None, run_id=None):
     session = {'run_id': run_id, 'app': str(app), 'game': str(game), 'r1': str(r1), 'map': map_name, 'addon': None}
     if maps is None and models is None:
         return session
+    staged = model_files(model_source, set(models or ()) | {DEFAULT_MODEL}) if model_source and models is not None else []
     source = None
     if maps is not None:
         maps = resolve_dir(maps, 'map build')
@@ -182,6 +205,9 @@ def prepare(app, game, maps, map_name, models=None, run_id=None):
                 if item.is_file() and item.name.startswith(map_name) and (
                         item.suffix.lower() in ('.bsp', '.ent', '.bsp_lump') or '.bsp.' in item.name):
                     shutil.copyfile(item, target / item.name)
+        for item, relative in staged:
+            (addon / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(item, addon / relative)
         if models is not None:
             script = addon / hook
             script.parent.mkdir(parents=True)
@@ -348,7 +374,8 @@ def run_checks(control, checks, pid, output, events, screenshots):
         invalid = [line.split()[1] for line in spawned if line.endswith('valid=false')]
         if invalid:
             names = sorted({models[int(i)] for i in invalid})
-            raise RuntimeError(f'drops {invalid} did not spawn as physics props in R1Delta (models {names})')
+            raise RuntimeError(f'drops {invalid} did not spawn as physics props in R1Delta (models {names}); '
+                               'on a compiled map, stage the model files with --model-files')
         report = ('foreach ( i, p in ::MRVN_Drops ) { if ( IsValid( p ) ) printl( "[MRVN] %s " + i + %s" origin=" + '
                   'p.GetOrigin() + " velocity=" + p.GetVelocity() ); else printl( "[MRVN] %s " + i + " z=gone" ) }')
         start = time.monotonic()
@@ -433,6 +460,9 @@ def attempt(session, checks, output, timeout):
                 raise TimeoutError('no player spawned')
             time.sleep(2)
         report['loaded'] = True
+        # The pilot loadout menu runs "setpause nomsg" on maps without a match
+        # intro, which stops server time (and physics); "unpause" is a no-op otherwise.
+        control.console('unpause nomsg')
         time.sleep(3)
         report['events'].append('BEGIN')
         run_checks(control, checks, process.pid, output, report['events'], report['screenshots'])
@@ -459,6 +489,9 @@ def main(argv=None):
     p.add_argument('--maps', type=Path, help='Folder with the compiled .bsp/.ent; omit for a retail map')
     p.add_argument('--map', required=True)
     p.add_argument('--checks', type=Path)
+    p.add_argument('--model-files', type=Path,
+                   help="Loose model tree (e.g. Titanfall Online's assets_dump) to stage drop models from; "
+                        'needed for drops on compiled maps')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--timeout', type=int, default=300, help='Seconds to start, load and spawn')
     p.add_argument('--attempts', type=int, default=3)
@@ -468,7 +501,7 @@ def main(argv=None):
     checks = validate_checks(json.loads(args.checks.read_text()) if args.checks else {})
     args.output.mkdir(parents=True, exist_ok=True)
     session = prepare(find_app(args.r1delta), find_game(args.game), args.maps, args.map,
-                      checks['drop_models'] if checks['drops'] else None)
+                      checks['drop_models'] if checks['drops'] else None, model_source=args.model_files)
     try:
         for number in range(1, args.attempts + 1):
             report = attempt(session, checks, args.output, args.timeout)

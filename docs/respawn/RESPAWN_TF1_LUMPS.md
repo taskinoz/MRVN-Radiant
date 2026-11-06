@@ -87,24 +87,48 @@ registry `InstallPath` and its newest `%LOCALAPPDATA%/R1Delta/app-*`.
   harness refuses to shadow an existing one. Runtime `PrecacheModel` has no
   effect, and per-map addon level scripts were not loaded.
 - **Drops:** `models/containers/barrel.mdl` is the default: barrels spawn as
-  physics props on retail maps, while `crate.mdl` and `projectile_rocket.mdl`
-  never do. Unspawned drops fail the run with the model named.
+  physics props, while `crate.mdl` and `projectile_rocket.mdl` never do. On a
+  compiled map pass `--model-files` (see below). Unspawned drops fail the run with the model named.
 - **Results:** retail Angel City (16 traces, 16 barrels) passed with every barrel
   on its traced floor. On the compiled closed-solid bevel map, all 5,148 traces
   and hull sweeps matched TFO within 0.001 unit (5,130 exactly).
 - **Coordinate limit:** R1Delta refuses maps past +/-16384 units ("Map coordinate
   extents are too large!!") where TFO loads them; remap now warns for TF1.
 
-**Open: physics props on compiled maps.** In R1Delta, `prop_physics` is removed
-silently on spawn on every remap-compiled map tried (brush-only and patch maps,
-scripted or placed in the entity lump), but works on retail Angel City and works
-on the same compiled maps in TFO. Precaching (verified hook), world bounds keys
-(`world_mins`/`world_maxs`, which retail writes and remap does not), spawn height
-and retail Angel City's own PHYSICS_COLLIDE all failed to change it. Loading
-retail Angel City under another name crashed, so it could not separate R1Delta's
-custom-map path from remap output. Prop drops in R1Delta are unverified until
-this is resolved; traces and hulls are unaffected.
+**Physics props on compiled maps (resolved 6 November 2026).** `prop_physics`
+was removed on spawn on every compiled map. The map was not at fault; there were
+two separate causes:
 
+1. **Model content.** R1Delta runs TFO's `server.dll` and `vphysics.dll`
+   (`r1delta/bin`, `bin_nexon`) on TF1's engine, and mounts `mp_common` plus the
+   map's own VPK. TF1 keeps most model files in per-map VPKs: `barrel.mdl` is in
+   Angel City's and 17 others but not `mp_common`, and `mp_common` holds only
+   some models' `.mdl`/`.phy` without their render files. On a custom map those
+   models load with empty keyvalues, so `CBaseProp::Spawn` finds no `prop_data`
+   and deletes the prop ("uses model ..., which has no propdata which means it
+   must be used on a prop_static. DELETED", `server.dll` RVA 0x1c3c54, printed
+   only as a developer warning). A breakpoint on `UTIL_Remove` (0x25b7d0) found
+   the caller; the model's keyvalues had no subkeys on the compiled map and a
+   `prop_data` key on Angel City. Copying the model's loose files (here from
+   TFO's `assets_dump`) into an addon fixes it: `--model-files DIR`. A
+   distributed TF1 map must likewise ship the models it uses.
+2. **Paused server.** On a map without a match intro, the pilot loadout menu
+   runs `setpause nomsg`, so server time stops about 1.2 s after load and
+   physics never steps (drops hung at their spawn height). The harness sends
+   `unpause nomsg` once the player exists.
+
+A third requirement surfaced on the way: R1Delta's gametype script puts each
+connecting player at an `info_intermission`; with none, the connect callback
+errors (`viewPoint` is null in `SetPlayerToDefaultViewPoint`) and the match
+never starts. Retail maps place them in the BSP entity lump, as remap does;
+remap now warns when a TF1 map has none. TFO tolerates their absence.
+
+With all three, 16 barrels on the compiled `vstats` map (8 over a patch, i.e.
+virtual-mesh collision, 8 over a brush) fell and came to rest at z 15.56..15.69,
+lying on their sides. Small props spawned outside a script call are also made
+client-side and removed on the server in TFO's code
+(`sv_pushaway_clientside_size` 30, volume test at 0x1cfb7e), which is why
+`crate.mdl` and other small models never spawn from the harness.
 
 ## Materials
 

@@ -49,6 +49,23 @@ class R1HarnessTests(unittest.TestCase):
         self.assertIn('"UserMod" "1"', listing)
         self.assertNotIn('MRVN.TF1Harness', listing)
 
+    def test_drop_model_files_are_staged_from_a_loose_tree(self):
+        dump = self.root / 'assets_dump/models/containers'
+        dump.mkdir(parents=True)
+        for name in ('barrel.mdl', 'barrel.vvd', 'barrel.dx11.vtx', 'barrel.phy', 'barrel.txt', 'barrel_lid.mdl'):
+            (dump / name).write_bytes(b'x')
+        session = r1_harness.prepare(self.app, self.game, self.maps, 'mp_test', [], run_id='a' * 32,
+                                     model_source=self.root / 'assets_dump')
+        addon = Path(session['addon'])
+        staged = sorted(p.name for p in (addon / 'models/containers').iterdir())
+        self.assertEqual(staged, ['barrel.dx11.vtx', 'barrel.mdl', 'barrel.phy', 'barrel.vvd'])
+        r1_harness.cleanup(session)
+        self.assertFalse(addon.exists())
+        with self.assertRaisesRegex(ValueError, 'crate.mdl is not in'):
+            r1_harness.prepare(self.app, self.game, self.maps, 'mp_test', ['models/containers/crate.mdl'],
+                               run_id='b' * 32, model_source=self.root / 'assets_dump')
+        self.assertFalse((self.r1 / 'addons' / ('MRVN.TF1Harness.' + 'b' * 32)).exists())
+
     def test_cleanup_accepts_the_games_tab_indented_listing(self):
         session = self.prepare()
         name = Path(session['addon']).name

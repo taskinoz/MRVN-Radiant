@@ -995,13 +995,20 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
         const double z = std::sqrt((k + 0.5) / 64), r = std::sqrt(1 - z * z), a = k * 2.39996323;
         sky.push_back({r * std::cos(a), r * std::sin(a), z});
     }
-    const V3 jitter[4] = {{6, 0, 0}, {-6, 0, 0}, {0, 6, 0}, {0, -6, 0}};
-    // Fraction of four jittered rays that reach `to` (a point, or a direction when `directional`).
+    // A probe lights a whole character, not a point: sample visibility over a
+    // character-sized volume around it (points inside brushes are skipped).
+    const V3 jitter[8] = {{12, 0, 20}, {-12, 0, 20}, {0, 12, 20}, {0, -12, 20},
+                          {12, 0, -20}, {-12, 0, -20}, {0, 12, -20}, {0, -12, -20}};
+    // Fraction of the jittered rays that reach `to` (a point, or a direction when `directional`).
     auto visibility = [&](V3 p, V3 to, bool directional) {
-        int open = 0;
-        for (const V3& j : jitter)
+        int open = 0, used = 0;
+        for (const V3& j : jitter) {
+            if (occluders.inside(p + j)) continue;
+            ++used;
             if (!occluders.blocked(p + j, directional ? p + j + to : to)) ++open;
-        return open / 4.0;
+        }
+        if (!used) return occluders.blocked(p, directional ? p + to : to) ? 0.0 : 1.0;
+        return open / double(used);
     };
     const Light* sun = nullptr;
     for (const Light& light : lights)
@@ -1017,8 +1024,10 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
         const double fraction = visible / sky.size();
         const V3 direction = visible > 0 ? normalize(bent) : V3{};
         V3 fill = ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
+        // Full-sphere gathers are noisy: 32 rays let neighbouring probes 64 units
+        // apart differ 6-fold beside a light (E1M1), so probes take 8x the texel count.
         if (bounce)
-            fill = fill + gatherBounce(p, {0, 0, 1}, occluders, *bounce, options.bounceSamples * 2, options.bounceDistance,
+            fill = fill + gatherBounce(p, {0, 0, 1}, occluders, *bounce, options.bounceSamples * 8, options.bounceDistance,
                                        detail::hash(std::uint32_t(i * 3266489917u)), true) * options.bounceScale;
 
         Probe& probe = probes[i];

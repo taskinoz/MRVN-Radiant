@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from build_minecraft_ports import (BARRIER_THICKNESS, barrier_boxes, bc1_level, fill_floor_notches, glass_roof_rules, largest_band, largest_group, merge_cubes, Models,
+from build_minecraft_ports import (BARRIER_THICKNESS, HIDDEN, barrier_boxes, bc1_level, bury_terrain, fill_floor_notches, glass_roof_rules, largest_band, largest_group, merge_cubes, Models,
                                    torch_parts, torch_sites, visibility_coverage, zipline_routes)
 from minecraft_scenery import HORIZON, SKY_LEVEL, sky_dome, sky_texture
 from minecraft_world import read_nbt
@@ -34,6 +34,28 @@ class MinecraftTests(unittest.TestCase):
                         self.assertNotIn((x,y,z),restored)
                         restored[x,y,z]=mat
         self.assertEqual(blocks,restored)
+
+    def test_terrain_fills_sealed_caves_and_hides_buried_faces(self):
+        # A 5x5x5 stone block with a sealed 1-block cave in the middle and an open shaft
+        # from the top down to y 2; the shaft must stay open, the cave must fill.
+        stone=('stone',)*6
+        cubes={(x,y,z):stone for x in range(5) for y in range(5) for z in range(5)}
+        del cubes[2,2,2]  # sealed cave
+        for y in (2,3,4): del cubes[0,y,0]  # open shaft
+        filled=bury_terrain(cubes,set(),(0,0,0,4,4,4))
+        self.assertEqual(filled,[(2,2,2)])
+        self.assertNotIn((0,3,0),cubes)
+        self.assertTrue(all(f==HIDDEN for f in cubes[2,1,2]))  # buried: touches only blocks
+        self.assertEqual(cubes[2,4,2][1],'stone')               # top face open to the sky
+        self.assertEqual(cubes[2,0,2][0],HIDDEN)                # below the bounds counts as ground
+        self.assertEqual(cubes[1,3,0][5],'stone')               # west face into the shaft
+
+    def test_terrain_glass_lets_the_sky_in(self):
+        # A glass-roofed room is not a sealed cave.
+        stone=('stone',)*6
+        cubes={(x,y,z):stone for x in range(3) for y in range(3) for z in range(3)}
+        del cubes[1,1,1]; cubes[1,2,1]=('glass',)*6
+        self.assertEqual(bury_terrain(cubes,{(1,2,1)},(0,0,0,2,2,2)),[])
 
     def test_merge_solid_room_to_one_brush(self):
         blocks={(x,y,z):('a',)*6 for x in range(5) for y in range(3) for z in range(7)}

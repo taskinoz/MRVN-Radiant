@@ -60,12 +60,43 @@ Unset options are worked out from the world, and printed:
 | `--iron-bar-ziplines` | Off | Iron bar lines stand in for ziplines |
 | `--fill-floor-notches` | Off | The world's terrain is missing a piece at its edge; enclosed pits stay open |
 | `--spawn-open-sky` | Off | Spawns land in sealed rooms; don't use it under roof beams |
+| `--terrain` | Off | The world is natural terrain (see below) |
+| `--luxel-size N` | 16 | The compile exceeds the 1,000-mesh budget at the largest cluster |
 | `--loadscreen IMAGE --loadscreen-template BASE` | Coliseum's image | You have a 1920x1080 capture |
 
 Check each new map in-game. A good loading screen needs a capture from a built map, so build
 twice: once to take the shot (`impulse 200` hides the weapon, `cl_drawhud 0` the HUD), then
 with `--loadscreen`. Presets `uma` and `glitch` hold the inspected settings for those worlds;
 UMA's roof glass is `white_stained_glass:50`.
+
+## Natural worlds: Survival Games
+
+7 November 2026. *The Original Survival Games Map* (2012, probably Vareide) is a
+forest island about 1,000 blocks across in a glass dome, saved before Minecraft
+1.13. `upgrade_minecraft_world.py` upgrades it with the official 1.20.6 server
+(`--forceUpgrade`, 75 s). At 48 units per block the island is 48,000 units, so
+the `survival_games` preset converts the 321-block square around the cornucopia
+(2.8 million blocks). Three limits fell in turn:
+
+- **Collision brush index (16 bits).** One brush per exposed block gave 306,164
+  brushes. Hiding buried faces and filling caves sealed from the sky still left
+  140,036, because the bumpy surface merges poorly. `--terrain` therefore makes
+  every textured material `$contentflag nonsolid` and adds collision as the same
+  cubes merged by occupancy alone, as `_nodraw` boxes: 116,076 render brushes and
+  39,358 collision brushes. Hidden faces use `_nodraw_ns` (nodraw and nonsolid):
+  a plain `_nodraw` side is solid and would make its render brush collide. remap
+  now leaves brushes with no contents out of the collision lumps
+  (`CollisionBrushes`); before, they were emitted and spent the index.
+- **Mesh budget.** With 23 lightmap pages, each texture was split once per page:
+  1,166 meshes at the largest cluster. The worldspawn key is
+  `_remap_luxelsize` (`_lightmapscale` has no effect on Respawn lightmaps);
+  32 units gives 16 pages and 899 meshes.
+- **Spawns.** No single floor height in terrain, so terrain mode accepts any
+  height that passes the open-floor checks.
+
+The BSP is 385 MB (lightmaps 134 MB, realtime-light lightmaps 151 MB), the player
+ZIP 90 MB. It loads in Northstar with no script errors. 16 lightmap pages is more
+than any earlier converted map used.
 
 Coordinates transform to `(X,-Z,Y)` around the anchor at 48 Source units per block, allowing
 a 72-unit pilot under two-block doors.

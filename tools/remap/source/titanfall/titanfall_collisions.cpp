@@ -64,6 +64,9 @@ std::vector<brush_t> CollisionBrushes(entity_t& entity) {
     std::vector<brush_t> brushes;
     for (auto& brush : entity.brushes) {
         ClassifyCollisionBrush(brush); // EmitPhysicsModel still reads the originals.
+        // Render-only brushes ($contentflag nonsolid) block nothing; emitting them
+        // would only spend the 16-bit collision brush index.
+        if (brush.contentFlags == 0 && !brush.recoveredContents) continue;
         brushes.push_back(brush);
     }
     if (g_game->bspVersion != 29 && g_game->bspVersion != 37) return brushes;

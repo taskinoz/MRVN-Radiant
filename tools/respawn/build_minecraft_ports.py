@@ -82,7 +82,14 @@ PRESETS = {
                invisible_block=['white_stained_glass:50']),
     'glitch':dict(bounds=(-64,188,-68,180,225,48),anchor=(64,199,-8),spawns=((42,9),(143,-16)),display_name='Glitch (Minecraft)',
                   author='Oblivering',source_url='https://www.planetminecraft.com/project/glitch-titanfall-2/',
-                  kill_z=-192,iron_bar_ziplines=True,spawn_open_sky=True,fill_floor_notches=True)}
+                  kill_z=-192,iron_bar_ziplines=True,spawn_open_sky=True,fill_floor_notches=True),
+    # A natural island inside a 1000-block glass dome: too large for the +/-16384 world, so
+    # this is the 321-block square around the cornucopia. Terrain mode keeps the buried
+    # ground within the collision brush index, and coarser lightmaps within the mesh budget.
+    'survival_games':dict(bounds=(-1737,36,-780,-1417,110,-460),anchor=(-1577,64,-620),spawns=((-1577,-740),(-1577,-500)),
+                          display_name='Survival Games (Minecraft)',author='Vareide',
+                          source_url='https://www.planetminecraft.com/project/the-original-survival-games-map/',
+                          terrain=True,luxel_size=32,mesh_cluster=12288)}
 
 
 def largest_group(cells):
@@ -159,6 +166,7 @@ def resolve_settings(args):
     """Fill unset options from the world's preset, then from detecting the build."""
     for key,value in PRESETS.get(args.name,{}).items():
         if getattr(args,key) in (None,False,[]):setattr(args,key,value)
+    args.luxel_size=args.luxel_size or 16;args.mesh_cluster=args.mesh_cluster or MESH_CLUSTER
     if not (args.bounds and args.anchor and args.spawns):
         if not args.world:raise ValueError('--blocks needs --bounds, --anchor and --spawns')
         bounds,anchor,spawns,roofs=detect_build(args.world)
@@ -293,6 +301,45 @@ def merge_cubes(cubes):
                 for c in range(z,Z): del remaining[a,b,c]
         boxes.append(((x,y,z),(X,Y,Z),mat))
     return boxes
+
+
+HIDDEN = '_nodraw_ns'  # a face nothing can see, on a render-only brush: draws and blocks nothing
+SEE_THROUGH = ('glass','leaves','ice','_pane','iron_bars')
+STEPS = {'down':(0,-1,0),'up':(0,1,0),'south':(0,0,1),'east':(1,0,0),'north':(0,0,-1),'west':(-1,0,0)}
+
+
+def bury_terrain(cubes,see_through,bounds):
+    """Hide what a natural world keeps underground, so it merges into a few boxes.
+
+    Sealed caves (air that can't reach the sky through anything but solid blocks)
+    become solid, and every face against a full block, or below the bounds, becomes
+    nodraw. Returns the filled cells."""
+    lo=np.array(bounds[:3]);size=np.array(bounds[3:])-lo+1
+    blocking=np.zeros(size,bool)
+    for p in cubes:
+        if p not in see_through:blocking[tuple(np.array(p)-lo)]=True
+    reach=np.zeros(size,bool);reach[:,-1,:]=~blocking[:,-1,:]
+    while True:
+        grown=reach.copy()
+        for axis in range(3):
+            moved=np.zeros_like(reach)
+            src=[slice(None)]*3;dst=[slice(None)]*3
+            src[axis]=slice(0,-1);dst[axis]=slice(1,None);moved[tuple(dst)]|=reach[tuple(src)]
+            src[axis]=slice(1,None);dst[axis]=slice(0,-1);moved[tuple(dst)]|=reach[tuple(src)]
+            grown|=moved
+        grown&=~blocking
+        if (grown==reach).all():break
+        reach=grown
+    filled=[tuple(int(v) for v in np.array(p)+lo) for p in zip(*np.nonzero(~blocking&~reach))]
+    for p in filled:cubes[p]=(HIDDEN,)*6
+    for (x,y,z),mat in cubes.items():
+        new=list(mat)
+        for i,face in enumerate(FACES):
+            dx,dy,dz=STEPS[face];n=(x+dx,y+dy,z+dz)
+            # Glass and leaves draw with an opaque backing, so they hide what they touch too.
+            if n in cubes or n[1]<bounds[1]:new[i]=HIDDEN
+        cubes[x,y,z]=tuple(new)
+    return filled
 
 
 def zipline_routes(blocks):
@@ -460,6 +507,8 @@ def materials(models, names, out, args, prefix):
     for name in sorted(names):
         if name=='_nodraw':
             shader.append('textures/'+prefix+name+'\n{\n $compileflag nodraw\n}\n');continue
+        if name==HIDDEN:
+            shader.append('textures/'+prefix+name+'\n{\n $compileflag nodraw\n $contentflag nonsolid\n}\n');continue
         if name=='_clip':
             shader.append('textures/'+prefix+name+'\n{\n $compileflag nodraw\n $contentflag playerclip\n}\n');continue
         if name=='_sky': im=sky_texture()
@@ -494,7 +543,7 @@ def materials(models, names, out, args, prefix):
             files.append({'_type':'matl','_path':dst.relative_to(assets).as_posix()})
         shader.append('textures/'+prefix+name+'\n{\n $shadertype LitBumpGeneric\n'+
                       (' $compileflag sky\n' if name.startswith('_sky') else '')+
-                      (' $contentflag nonsolid\n' if name.startswith('_torch') else '')+'}\n')
+                      (' $contentflag nonsolid\n' if name.startswith('_torch') or (args.terrain and not name.startswith('_')) else '')+'}\n')
     shaders=assets/'shaders';shaders.mkdir(parents=True);(shaders/'minecraft_ports.shader').write_text('\n'.join(shader))
     manifest={'version':7,'name':'minecraft_'+args.name,'keepDevOnly':True,'assetsDir':str(assets),
               'outputDir':str(out/'pak-build'),'compressLevel':0,'hasDynamicLibrary':False,'files':files}
@@ -532,6 +581,11 @@ def build(args):
             names.update(mat)
             if lo==(0,0,0) and hi==(16,16,16) and len(shapes)==1: cubes[x,y,z]=mat
             else: small.append((tuple(v+a/16 for v,a in zip((x,y,z),lo)),tuple(v+b/16 for v,b in zip((x,y,z),hi)),mat))
+    if args.terrain:
+        see_through={(x,y,z) for x,y,z,s in blocks if any(t in s['Name'] for t in SEE_THROUGH)}
+        filled=bury_terrain(cubes,see_through,args.bounds)
+        print(f'terrain: filled {len(filled)} sealed cave cells',flush=True)
+        names.add(HIDDEN)
     # Find spawn sites with two blocks of air and a full solid floor. Keep
     # spawns on the primary gameplay elevation, away from decorative rooftops.
     occupied={(x,y,z):s for x,y,z,s in blocks if s['Name'].split(':')[-1] not in SKIP or (x,y,z) in clip_cells}
@@ -540,7 +594,8 @@ def build(args):
     spawn_targets=args.spawns
     middle=tuple((a+b)/2 for a,b in zip(*spawn_targets))
     for (x,y,z),mat in cubes.items():
-        if y != anchor[1] or mat[1] in ('_sky','_nodraw') or 'glass' in mat[1] or 'leaves' in mat[1]:continue
+        # Terrain has no single main floor; the open-floor checks below keep spawns sensible.
+        if (y != anchor[1] and not args.terrain) or mat[1] in ('_sky','_nodraw') or 'glass' in mat[1] or 'leaves' in mat[1]:continue
         # Headroom above the pilot, not just two blocks: a low overhang traps the hull.
         if any((x,y+d,z) in occupied for d in (1,2,3,4)):continue
         # Sealed, unlit rooms pass every other check, but under roof beams this rule would
@@ -570,7 +625,8 @@ def build(args):
     names.add('_clip')
     stage_brushes,stage_materials=menu_stage(prefix,MENU_Z)
     names.update(stage_materials)
-    boxes=merge_cubes(cubes)+small
+    # In terrain mode, cubes with every face hidden have nothing to draw; collision covers them.
+    boxes=merge_cubes({p:m for p,m in cubes.items() if not args.terrain or any(f!=HIDDEN for f in m)})+small
     pak=materials(models,names,out,args,prefix)
     brushes=[]; geometry=[]
     for lo,hi,mat in boxes:
@@ -578,6 +634,14 @@ def build(args):
         lines=box_brush(low,high,'TEMP').splitlines()
         for i,m in enumerate(mat): lines[i+1]=lines[i+1].replace('TEMP',prefix+m).replace(' 0 0 0 1 1 0 0 0',' 0 0 0 0.1875 0.1875 0 0 0')
         brushes.append('\n'.join(lines));geometry.append([low,high,mat])
+    if args.terrain:
+        # Collision brushes are indexed with 16 bits. Textured brushes only render here;
+        # what collides is the same space merged by occupancy alone, which takes far fewer.
+        solid=merge_cubes({p:('_nodraw',)*6 for p in cubes})+[b for b in small if not b[2][0].startswith('_torch')]
+        for a,b,_ in solid:
+            a=transform(a);b=transform(b)
+            brushes.append(box_brush(tuple(min(v,w) for v,w in zip(a,b)),tuple(max(v,w) for v,w in zip(a,b)),prefix+'_nodraw'))
+        print(f'terrain: {len(boxes)} render brushes, {len(solid)} collision brushes',flush=True)
     lo=tuple(min(b[0][i] for b in geometry) for i in range(3));hi=tuple(max(b[1][i] for b in geometry) for i in range(3))
     # Sky dome around the build. The level script kills pilots before they reach its floor.
     sky_centre=((lo[0]+hi[0])//2,(lo[1]+hi[1])//2);sky_base=lo[2]-2000
@@ -591,7 +655,7 @@ def build(args):
         brushes.append(box_brush(tuple(min(v,w) for v,w in zip(a,b)),tuple(max(v,w) for v,w in zip(a,b)),prefix+'_clip'))
     def world_entity(cluster):
         return '\n'.join(['{','"classname" "worldspawn"','"skyname" "sky_day01_01"',
-            '"_lightmapscale" "16"','"_bouncescale" "0"','"_skyocclusion" "1"','"_skysamples" "128"','"_skyfixedpattern" "1"',f'"_meshcluster" "{cluster}"',*(['"_viewportals" "1"'] if args.view_portals else []),*brushes,'}'])+'\n'
+            '"_lightmapscale" "16"',f'"_remap_luxelsize" "{args.luxel_size}"','"_bouncescale" "0"','"_skyocclusion" "1"','"_skysamples" "128"','"_skyfixedpattern" "1"',f'"_meshcluster" "{cluster}"',*(['"_viewportals" "1"'] if args.view_portals else []),*brushes,'}'])+'\n'
     text=''
     text+=entity(classname='light_environment',origin='0 0 1024',angles='45 135 0',pitch='-45',
                  _light='255 244 228 510',_ambient='232 247 255 170',lightEnvironmentIndex='*0',shadows='1')
@@ -740,7 +804,9 @@ if __name__=='__main__':
     p.add_argument('--iron-bar-ziplines',action='store_true',help='Turn iron bar lines into ziplines, for maps that use them that way')
     p.add_argument('--spawn-open-sky',action='store_true',help='Only spawn under open sky')
     p.add_argument('--fill-floor-notches',action='store_true',help='Complete the main floor where its rectangle is missing edge pieces')
-    p.add_argument('--mesh-cluster',type=int,default=MESH_CLUSTER,help='World units per render mesh cluster')
+    p.add_argument('--mesh-cluster',type=int,help='World units per render mesh cluster')
+    p.add_argument('--luxel-size',type=int,help='World units per lightmap texel; raise it on large maps to stay within the mesh budget')
+    p.add_argument('--terrain',action='store_true',help='Natural worlds: fill sealed caves and hide faces between blocks so buried ground merges')
     p.add_argument('--view-portals',action='store_true',help='Build visibility cells and portals (experimental culling)')
     p.add_argument('--loadscreen',type=Path,help='1920x1080 image; without it the map shows Coliseum\'s')
     p.add_argument('--loadscreen-template',type=Path,help='Base path of a retail loadscreen _gen material .json/.uber pair')

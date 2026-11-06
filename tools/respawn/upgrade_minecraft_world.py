@@ -70,7 +70,7 @@ def upgrade(world_zip, output, java, cache):
         (server/'eula.txt').write_text('eula=true\n')
         (server/'server.properties').write_text('level-name=world\nonline-mode=false\nserver-port=0\nenable-query=false\n'
                                                 'spawn-protection=0\nmax-players=1\n')
-        jar = server_jar(cache)
+        jar = server_jar(Path(cache).resolve())
         process = subprocess.Popen([str(java), '-Xmx4G', '-jar', str(jar), '--forceUpgrade', '--nogui'], cwd=server,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         done = False

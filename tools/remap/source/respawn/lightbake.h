@@ -34,6 +34,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Respawn::Bake {
@@ -914,6 +915,72 @@ inline std::vector<V3> probePositions(const Occluders& occluders, V3 lo, V3 hi, 
             for (double x = lo.x; x <= hi.x; x += spacing)
                 if (!occluders.inside({x, y, z})) points.push_back({x, y, z});
     return points;
+}
+
+/*
+    Probes where characters stand. Retail probe sets are adaptive, not a grid:
+    neighbours are a median 56-58 units apart in Glitch and Angel City (128 in
+    Coliseum), a quarter lie within about 60 units of the floor below, and
+    almost none share an xy column. This adds, over every upward-facing lit
+    triangle, a world-aligned `spacing` lattice (plus each triangle's centre, so
+    stair steps and ledges get one) at `heights` above the surface, skipping
+    points inside brushes. Lattice cells deduplicate overlapping floors. The
+    spacing grows until the count fits under `maxProbes`.
+*/
+inline std::vector<V3> walkableProbePositions(const std::vector<Chart>& charts, const Occluders& occluders,
+                                              double spacing = 64, std::vector<double> heights = {24, 72},
+                                              std::size_t maxProbes = 65536) {
+    struct Floor { V3 a, b, c; };
+    std::vector<Floor> floors;
+    for (const Chart& chart : charts) {
+        if (chart.constant >= 0) continue;  // self-lit sky shells
+        for (std::size_t t = 0; t + 2 < chart.triangles.size(); t += 3) {
+            const V3 a = chart.positions[chart.triangles[t]], b = chart.positions[chart.triangles[t + 1]],
+                     c = chart.positions[chart.triangles[t + 2]];
+            V3 n = cross(b - a, c - a);
+            const double len = length(n);
+            if (!(len > 1e-9)) continue;
+            n = n * (1 / len);
+            const V3 shading = chart.normals[chart.triangles[t]];
+            if (dot(n, shading) < 0) n = n * -1.0;  // orient by the surface's shading normal
+            if (n.z > 0.7) floors.push_back({a, b, c});
+        }
+    }
+    for (;;) {
+        std::unordered_set<std::uint64_t> seen;
+        std::vector<V3> points;
+        auto key = [&](double x, double y, double z) {
+            const auto q = [&](double v, double s) { return std::uint64_t(std::int64_t(std::floor(v / s)) + (1 << 20)) & 0x1fffff; };
+            return q(x, spacing) | (q(y, spacing) << 21) | (q(z, 24.0) << 42);
+        };
+        auto add = [&](V3 surface) {
+            for (double h : heights) {
+                const V3 p = surface + V3{0, 0, h};
+                if (!seen.insert(key(p.x, p.y, p.z)).second || occluders.inside(p)) continue;
+                if (occluders.blocked(surface + V3{0, 0, 1}, p)) continue;  // a ceiling lower than this layer
+                points.push_back(p);
+            }
+        };
+        for (const Floor& f : floors) {
+            const V3 lo = vmin(vmin(f.a, f.b), f.c), hi = vmax(vmax(f.a, f.b), f.c);
+            const double d = (f.b.y - f.c.y) * (f.a.x - f.c.x) + (f.c.x - f.b.x) * (f.a.y - f.c.y);
+            if (std::abs(d) < 1e-9) continue;
+            auto lift = [&](double x, double y, V3& out) {
+                const double u = ((f.b.y - f.c.y) * (x - f.c.x) + (f.c.x - f.b.x) * (y - f.c.y)) / d;
+                const double v = ((f.c.y - f.a.y) * (x - f.c.x) + (f.a.x - f.c.x) * (y - f.c.y)) / d;
+                if (u < -1e-6 || v < -1e-6 || u + v > 1 + 1e-6) return false;
+                out = f.a * u + f.b * v + f.c * (1 - u - v);
+                return true;
+            };
+            V3 surface;
+            for (double y = std::ceil(lo.y / spacing) * spacing; y <= hi.y; y += spacing)
+                for (double x = std::ceil(lo.x / spacing) * spacing; x <= hi.x; x += spacing)
+                    if (lift(x, y, surface)) add(surface);
+            add((f.a + f.b + f.c) * (1.0 / 3));
+        }
+        if (points.size() <= maxProbes || spacing > 4096) return points;
+        spacing *= 1.25;
+    }
 }
 
 inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::vector<Light>& lights, V3 ambient,

@@ -733,6 +733,10 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     std::vector<V3> probePoints;
     try {
         probePoints = Respawn::Bake::probePositions(occluders, lo, hi);
+        // Dense probes where characters stand, as retail places them; the grid covers open air.
+        const auto walkable = Respawn::Bake::walkableProbePositions(Titanfall::Bsp::lightmapCharts, occluders);
+        probePoints.insert(probePoints.end(), walkable.begin(), walkable.end());
+        Sys_Printf("%9zu walkable-surface light probes\n", walkable.size());
         Titanfall2::Bsp::lightprobes = Respawn::Bake::bakeProbes(probePoints, Titanfall2::Bsp::bakeLights,
                                                                   Titanfall2::Bsp::ambient, occluders, options,
                                                                   &result.bounce);

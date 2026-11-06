@@ -241,8 +241,16 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    cosine-weighted rays. SKY A is a fill of ambient × 0.04 × (0.4 + 0.6 ×
    visibility), plus static (`realtime 0`) lights. That is about 0.03 for a
    typical ambient, in line with retail and the converter.
-6. Character probes sit on a 256 × 256 × 128 grid over the lit geometry; the
-   spacing grows past 65,536 probes, and points inside brushes are skipped. Each
+6. Character probes sit where characters stand, plus a coarse grid for open
+   air. Retail probe sets are adaptive (neighbours a median 56–58 units apart in
+   Glitch and Angel City, 128 in Coliseum; a quarter within about 60 units of the
+   floor; almost none share an xy column; Glitch has 73,760). Over every
+   upward-facing lit triangle, a world-aligned 64-unit lattice plus the
+   triangle's centre get probes 24 and 72 units above the surface, unless inside
+   a brush or under a lower ceiling. The coarse 256 × 256 × 128 grid fills open
+   air. Each set's spacing grows past 65,536 probes. E1M1 went from 1,180 to
+   6,824 probes (25% within 24 units of the floor, median 56; neighbours a
+   median 48 apart) and still loads in Northstar. Each
    probe gets directional ambient, a bent sky vector, sun visibility from four
    jittered rays, and up to four visible realtime lights. A KD tree with leaves
    of at most 8 indexes them; the optional probe BSP accelerator (0x06/0x07) is
@@ -351,7 +359,6 @@ Updated 6 November 2026; the earlier list predated work since done (bounce
 lighting, the menu-stage `light_environment_volume`, shadow meshes, static-prop
 probe indices, the TF1 bake, and baked maps loading in Northstar).
 
-1. Place probes along walkable surfaces rather than only on a grid.
-2. Split charts too large for a page instead of scaling them down.
-3. Add Apex season profiles. No cross-game bake equivalence is assumed from
+1. Split charts too large for a page instead of scaling them down.
+2. Add Apex season profiles. No cross-game bake equivalence is assumed from
    shared lump numbers.

@@ -730,9 +730,14 @@ Also from this investigation:
   per mesh; 79% of Angel City's by one cell). remap still merges each material
   into larger meshes; splitting them per cell is not needed for correctness.
 
-Not yet run: a TF2 map with `_viewportals` in Northstar (the harness is not on
-this machine); the TF2 traversal was checked statically. `_viewportals` stays
-opt-in until it is.
+**Titanfall 2 in Northstar.** The Quake E1M1 test map built for TF2 with
+`_viewportals` (1,022 cells, `_vis_detail` raised to 96) renders pixel-identically
+to the portal-free build in all 12 views (`MapTest.Harness` client camera,
+window captures, Northstar 1.31.13). The same map built by the previous
+clustering code crashed the TF2 client while loading, with an access violation
+at `client.dll+0x2e8281`. `_viewportals` remains opt-in: its automatic detail
+escalation is new, and maps whose structure cannot fit 1,022 subtree cells stop
+with an error rather than falling back to a single cell.
 
 ## Provenance and attribution
 

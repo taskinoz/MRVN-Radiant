@@ -229,7 +229,9 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
 1. Brush faces and patches are unwrapped at 16 units per texel. Patches use
    their row and column arc length. Islands are packed tallest first into
    1024² shelf pages with a 2-texel gutter. Islands larger than a page are
-   scaled down. Page sizes are rounded up to powers of two, as retail pages are.
+   cut on a page-sized grid in lightmap space, each tile its own mesh at full
+   resolution (cuts add vertices where grid lines cross the island's edges);
+   they used to be shrunk as a whole. Page sizes are rounded up to powers of two, as retail pages are.
 2. Lit material sorts point at their page, and vertex UVs are normalised to it.
 3. For each texel, the four realtime lights with the highest contribution ×
    visibility get slots. Suns keep their slot even when fully shadowed, as
@@ -359,6 +361,5 @@ Updated 6 November 2026; the earlier list predated work since done (bounce
 lighting, the menu-stage `light_environment_volume`, shadow meshes, static-prop
 probe indices, the TF1 bake, and baked maps loading in Northstar).
 
-1. Split charts too large for a page instead of scaling them down.
-2. Add Apex season profiles. No cross-game bake equivalence is assumed from
+1. Add Apex season profiles. No cross-game bake equivalence is assumed from
    shared lump numbers.

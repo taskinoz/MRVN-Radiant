@@ -401,6 +401,28 @@ def portal_budget_fixture(folder, command, reports, game):
     reports.append({'game': game, 'fixture': 'portal-budget', 'issues': []})
 
 
+
+def lightmap_split_fixture(folder, command, reports, game):
+    # A lit floor about 1,500 texels long at 16 units per texel: larger than a
+    # 1,024-texel page, it must be cut into page tiles, not shrunk as a whole.
+    path = folder / 'lightmap-split.map'
+    path.write_text('{\n"classname" "worldspawn"\n' + box((-12000, -512, -16), (12000, 512, 0), 'bump') + '\n}\n'
+                    + entity(classname='light_environment', origin='0 0 512', pitch='-60', angles='60 30 0',
+                             _light='255 240 220 600', _ambient='150 180 255 100'))
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    if validate(bsp)['issues']:
+        raise RuntimeError(f'lightmap split: {validate(bsp)["issues"]}')
+    if 'split into page-sized tiles' not in path.with_suffix('.log').read_text(errors='replace'):
+        raise RuntimeError('oversized lightmap island was not split')
+    data = bsp.read_bytes()
+    offset, size = struct.unpack_from('<II', data, 16 + 16 * 0x53)  # LIGHTMAP_HEADERS: type, width, height
+    texels = sum(w * h for _, w, h in struct.iter_unpack('<IHH', data[offset:offset + size]))
+    if texels < 24000 * 1024 / 256:  # the top face alone at full resolution
+        raise RuntimeError('split lightmap lost resolution')
+    reports.append({'game': game, 'fixture': 'lightmap-split', 'issues': []})
+
 # A floor with a roof over its x<0 half. The sun travels down at 60 degrees
 # towards +x+y, so the roof's shadow reaches past its edge to about x=+84.
 LIT_FIXTURE = (
@@ -1045,6 +1067,7 @@ def main():
             portal_boundary_fixtures(folder, command, reports, game)
             portal_budget_fixture(folder, command, reports, game)
         if game == "titanfall2":
+            lightmap_split_fixture(folder, command, reports, game)
             submodel_path = folder / 'submodel-bounds.map'
             submodel_path.write_text('{\n"classname" "worldspawn"\n' +
                 box((0,0,0),(64,64,64),'bump') + '\n}\n' +

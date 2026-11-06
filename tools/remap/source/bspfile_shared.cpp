@@ -636,10 +636,101 @@ void Shared::MergeVisTree(Shared::visNode_t &node) {
     MakeLightmapUVs()
     recalculate lightmap uvs for Shared::meshes
 */
+namespace {
+Shared::Vertex_t LerpVertex(const Shared::Vertex_t &a, const Shared::Vertex_t &b, float t) {
+    Shared::Vertex_t v = a;
+    v.xyz = a.xyz + (b.xyz - a.xyz) * t;
+    v.normal = a.normal + (b.normal - a.normal) * t;
+    if (vector3_length(v.normal) > 1e-6f) v.normal = vector3_normalised(v.normal);
+    v.textureUV = a.textureUV + (b.textureUV - a.textureUV) * t;
+    v.lightmapUV = a.lightmapUV + (b.lightmapUV - a.lightmapUV) * t;
+    v.lightmapStep = a.lightmapStep + (b.lightmapStep - a.lightmapStep) * t;
+    for (int c = 0; c < 4; ++c)
+        v.colour[c] = static_cast<uint8_t>(std::lround(a.colour[c] + (b.colour[c] - a.colour[c]) * t));
+    return v;
+}
+
+// Clip a polygon to lightmap-space u (axis 0) or v (axis 1) >= or <= a line.
+std::vector<Shared::Vertex_t> ClipLightmap(const std::vector<Shared::Vertex_t> &poly, int axis, float line, bool keepAbove) {
+    std::vector<Shared::Vertex_t> out;
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Shared::Vertex_t &a = poly[i], &b = poly[(i + 1) % poly.size()];
+        const float da = (a.lightmapUV[axis] - line) * (keepAbove ? 1 : -1);
+        const float db = (b.lightmapUV[axis] - line) * (keepAbove ? 1 : -1);
+        if (da >= 0) out.push_back(a);
+        if ((da >= 0) != (db >= 0)) out.push_back(LerpVertex(a, b, da / (da - db)));
+    }
+    return out;
+}
+
+/*
+    An island larger than a lightmap page used to be shrunk as a whole, losing
+    resolution over the entire face or patch. Instead, cut it on a page-sized
+    grid in lightmap space: each tile becomes its own mesh and island at full
+    resolution. Cuts add vertices where a grid line crosses the island's edges.
+*/
+std::size_t SplitOversizedIslands(float limit) {
+    std::size_t split = 0;
+    const std::size_t count = Shared::islands.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        const Shared::Island_t island = Shared::islands[i];
+        Shared::Mesh_t &source = Shared::meshes.at(island.mesh);
+        if (CHECK_FLAG(source.shaderInfo->compileFlags, C_SKY)) continue;  // sky shells shrink to a constant
+        const Vector2 size = island.bounds.maxs - island.bounds.mins;
+        if (std::max(size.x(), size.y()) <= limit) continue;
+        const int tilesX = static_cast<int>(std::ceil(size.x() / limit)), tilesY = static_cast<int>(std::ceil(size.y() / limit));
+        std::map<std::pair<int, int>, Shared::Mesh_t> tiles;
+        for (std::size_t t = 0; t + 2 < source.triangles.size(); t += 3) {
+            const std::vector<Shared::Vertex_t> tri = {source.vertices[source.triangles[t]], source.vertices[source.triangles[t + 1]],
+                                                       source.vertices[source.triangles[t + 2]]};
+            for (int ty = 0; ty < tilesY; ++ty) for (int tx = 0; tx < tilesX; ++tx) {
+                const float u0 = island.bounds.mins.x() + tx * limit, v0 = island.bounds.mins.y() + ty * limit;
+                std::vector<Shared::Vertex_t> poly = tri;
+                if (tx > 0) poly = ClipLightmap(poly, 0, u0, true);
+                if (tx + 1 < tilesX && poly.size() >= 3) poly = ClipLightmap(poly, 0, u0 + limit, false);
+                if (ty > 0 && poly.size() >= 3) poly = ClipLightmap(poly, 1, v0, true);
+                if (ty + 1 < tilesY && poly.size() >= 3) poly = ClipLightmap(poly, 1, v0 + limit, false);
+                if (poly.size() < 3) continue;
+                Shared::Mesh_t &tile = tiles[{tx, ty}];
+                if (tile.vertices.empty()) { tile.shaderInfo = source.shaderInfo; tile.lightmapPage = source.lightmapPage; }
+                if (tile.vertices.size() + poly.size() > 65535) Error("Lightmap tile exceeds 16-bit mesh indices");
+                const uint16_t base = static_cast<uint16_t>(tile.vertices.size());
+                for (const auto &v : poly) { tile.vertices.push_back(v); tile.minmax.extend(v.xyz); }
+                for (std::size_t k = 1; k + 1 < poly.size(); ++k) {
+                    tile.triangles.push_back(base);
+                    tile.triangles.push_back(static_cast<uint16_t>(base + k));
+                    tile.triangles.push_back(static_cast<uint16_t>(base + k + 1));
+                }
+            }
+        }
+        if (tiles.size() < 2) continue;
+        bool first = true;
+        for (auto &[key, tile] : tiles) {
+            Shared::Island_t part;
+            for (const auto &v : tile.vertices) part.bounds.extend(v.lightmapUV);
+            if (first) {
+                part.mesh = island.mesh;
+                Shared::meshes[island.mesh] = std::move(tile);
+                Shared::islands[i] = part;
+                first = false;
+            } else {
+                part.mesh = static_cast<int>(Shared::meshes.size());
+                Shared::meshes.push_back(std::move(tile));
+                Shared::islands.push_back(part);
+            }
+        }
+        ++split;
+    }
+    return split;
+}
+} // namespace
+
 void Shared::MakeLightmapUVs() {
     // Lightmap UVs stay in texel units here; writers normalize them once page
     // sizes are final.
     const float  limit = Shared::lightmapPageSize - 2.0f * Shared::lightmapGutter - 2.0f;
+    if (const std::size_t split = SplitOversizedIslands(limit))
+        Sys_Printf("%9zu lightmap islands larger than a page split into page-sized tiles\n", split);
 
     // Shelf packing wastes far less space with islands sorted tallest first.
     std::vector<const Shared::Island_t*>  order;

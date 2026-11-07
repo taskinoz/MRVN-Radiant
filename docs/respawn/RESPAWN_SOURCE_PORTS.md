@@ -127,6 +127,14 @@ skips them.
   while surfing is undone (previous velocity, gravity applied, clipped against any ramp swept into)
   unless a hull sweep along the last tick hits a wall, floor or ceiling, or the pilot teleported.
   Server script frames here are 0.1 s apart.
+  Ramp bugs happen in Counter-Strike surf too, so this fix is opt-in: `--rampbug-fix`.
+- **Surf mode hooks.** Surf maps' level scripts are `untyped` and publish
+  `getroottable().MRVN_SurfMap` (the start room as a box 384 units around the spawns, from 64 below
+  to 512 above, plus a start origin and yaw) and call `getroottable().MRVN_SurfTeleported( player,
+  destination )` on every teleport. The `MRVN.Surf` game mode (Titanfall-2-Custom-Maps
+  `modes/surf`) times runs from these: leaving the start box starts a run, a teleport into it
+  finishes one, any other teleport ends it. The map works without the mode. Squirrel pitfalls:
+  only untyped functions can be stored in the root table, and values read from it need `expect`.
 - `--surf-trace` logs `[surftrace] time origin velocity ground crouched sliding mantling normal` ten
   times a second while a pilot is on a ramp or left one in the last 3 s. Demo recording crashed
   Northstar 1.31 on `stop` (access violation in ntdll; the .dem had a header and no ticks).

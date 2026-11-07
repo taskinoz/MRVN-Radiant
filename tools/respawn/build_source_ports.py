@@ -729,7 +729,19 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     for lo, hi, v, brushes in pushes:
         a, b = brush_range(brushes)
         adds += f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} >, {a}, {b} )\n'
-    (scripts/(level+'.nut')).write_text('''global function CodeCallback_MapInit
+    # For the Surf game mode (MRVN.Surf): the start room, as a box around the spawns, and a hook
+    # called on every teleport. Shared through the root table so the map works without the mode.
+    surf_export = surf_teleport = ''
+    if surf:
+        pts = np.array([s['origin'] for s in spawninfo])
+        smin = pts.min(0)-(384, 384, 64); smax = pts.max(0)+(384, 384, 512)
+        o = spawninfo[0]['origin']
+        surf_export = (f' getroottable().MRVN_SurfMap <- {{ startMins = < {smin[0]:g}, {smin[1]:g}, {smin[2]:g} >, '
+                       f'startMaxs = < {smax[0]:g}, {smax[1]:g}, {smax[2]:g} >, startOrigin = < {o[0]:g}, {o[1]:g}, {o[2]:g} >, '
+                       f'startYaw = {float(spawninfo[0]["yaw"]):.1f} }}\n')
+        surf_teleport = ('    if ( "MRVN_SurfTeleported" in getroottable() )\n'
+                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k] )\n')
+    (scripts/(level+'.nut')).write_text(('untyped\n' if surf else '')+'''global function CodeCallback_MapInit
 struct
 {
  array<vector> mins
@@ -867,14 +879,14 @@ void function KillFallenPilots()
     player.SetOrigin( file.destinations[k] )
     player.SetAngles( <0, file.yaws[k], 0> )
     player.SetVelocity( <0, 0, 0> )
-    break
+SURF_TELEPORT    break
    }
   }
   wait 0.05
  }
 }
-'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', (' thread SurfRamps()' if surf else '')+(' thread SurfTrace()\n thread SurfEvents()' if surf and getattr(args, 'surf_trace', False) else ''))
-      + (SURF_SCRIPT if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
+'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF_TELEPORT', surf_teleport).replace('SURF', surf_export+(' thread SurfRamps()' if surf else '')+(' thread SurfTrace()\n thread SurfEvents()' if surf and getattr(args, 'surf_trace', False) else ''))
+      + ((SURF_SCRIPT if getattr(args, 'rampbug_fix', False) else SURF_SCRIPT.replace(RAMPBUG_CALL, '')) if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
     # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
     shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
@@ -906,6 +918,10 @@ Extract {modname} into R2Northstar/mods and run `map {level} tdm`.
     return metadata
 
 
+# Ramp bugs happen in Source surf too, so the fix is opt-in (--rampbug-fix).
+RAMPBUG_CALL = '''   if ( surfing && player in file.lastVel )
+    FixRampBug( player, o )
+'''
 SURF_SCRIPT = '''
 // Surf ramps. Standing, Titanfall counts a slope as ground well past Source's 45.6 degree
 // walkable limit: ground movement stops a pilot sliding along a 52 degree ramp within half a
@@ -1167,5 +1183,6 @@ if __name__ == '__main__':
     p.add_argument('--surf', action=argparse.BooleanOptionalAction, default=None,
                    help='No ground friction on slopes steeper than Source allows standing on, so surf ramps work (default: on for surf_ maps)')
     p.add_argument('--surf-trace', action='store_true', help='Log surfing pilot position, velocity and state to the console 10 times a second (play-test diagnosis)')
+    p.add_argument('--rampbug-fix', action='store_true', help='Undo ramp bugs (seam snags between ramp brushes), as surf servers\' rampbug plugins do; off by default, as in Source')
     p.add_argument('--no-props', dest='props', action='store_false', help='Leave static props out')
     print(json.dumps(build(p.parse_args()), indent=2))

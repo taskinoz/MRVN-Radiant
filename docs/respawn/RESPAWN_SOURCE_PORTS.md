@@ -107,6 +107,15 @@ skips them.
   and undoes both (`UnforceCrouch()`) a quarter second after the pilot leaves it. No player setting
   or convar sets Titanfall's ground-slope limit (the player settings have `stepHeight`,
   `stepTestDist`, `airSpeed` and `airAcceleration`, nothing for slopes).
+  On a ramp the script also cancels auto-mantle (`IsMantling`/`IsTraversing` → `ClearTraverse()`)
+  and slide boosts (`IsSliding` with a speed jump), restoring the previous frame's velocity, and logs
+  each as `[surf]`: a rising ramp ahead can read as a wall with a ledge, and a crouch on a frame
+  counted as ground starts a slide. (Reported in play as being pushed forward with no lift on
+  surf_utopia's curved second ramp; not reproduced with scripted input, so unconfirmed.)
+- **Sky dome fitted to the geometry.** The dome was a hemisphere sized by the map's width; surf_utopia
+  fills the world's corners and is as tall as it is wide, so the sky cut through ramps near the
+  corners. `fit_dome` now makes it a half-ellipsoid that clears every brush box by 1,000 units, kept
+  within ±32,768 (surf_utopia: 32,479 across, 32,738 high).
 
 `surf_utopia_v3` (the TF2 build from the fastdl.me mirror, 0.1.0): 5,130 brushes, 6 static props
 (its ramp sections and credits are models with collision), every material packed in the map but

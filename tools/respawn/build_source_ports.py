@@ -614,8 +614,31 @@ doors, breakables, decals, overlays and normal maps are not.
     metadata = {'brushes': len(brushes), 'displacements': displacement_count, 'textures': len(materials.textures),
                 'skipped': dict(skipped), 'invisible_glass': sorted(materials.invisible), 'missing_materials': dict(materials.missing),
                 'static_props': len(bsp.static_props()), 'prop_charts': len(charts), 'prop_collision_brushes': len(prop_brushes)}
-    return assemble(args, out, materials, dict(brushes=brushes, patches=patches, keys=contents_keys, charts=charts),
+    return assemble(args, out, materials, dict(brushes=brushes, patches=patches, keys=contents_keys, charts=charts, boxes=boxes),
                     lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp), pushes(bsp))
+
+
+def fit_dome(boxes, centre, base, lo, hi, margin=1000):
+    """Radius and height of the half-ellipsoid sky dome that clears every brush box by `margin`.
+
+    A hemisphere sized by the map's width alone cut through surf_utopia, which fills the
+    Source world's corners and is as tall as it is wide. Of the widths that clear it, the one
+    with the smallest larger semi-axis is kept, so the dome stays as near the map as it can."""
+    width = max(16000, math.hypot(hi[0]-lo[0], hi[1]-lo[1])/2+4000)
+    if boxes is None or not len(boxes): return width, width
+    boxes = np.asarray(boxes, float)
+    corners = np.array([(boxes[:, 3*i], boxes[:, 1+3*j], boxes[:, 2+3*k]) for i in (0, 1) for j in (0, 1) for k in (0, 1)])
+    r = np.hypot(corners[:, 0]-centre[0], corners[:, 1]-centre[1]).ravel()+margin
+    h = (corners[:, 2]-base).ravel()+margin
+    # Keep the dome inside the +-32768 coordinate range where a width that does exists.
+    limit = 32768-64-max(abs(centre[0]), abs(centre[1]))
+    start = max(width, r.max()+1)
+    widths = [a for a in np.linspace(start, start*1.6, 97) if a <= limit] or [start]
+    best = None
+    for a in widths:
+        c = max(width, float(np.max(h/np.sqrt(1-(r/a)**2))))
+        if best is None or max(a, c) < max(best): best = (float(a), c)
+    return best
 
 
 def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights, source, converted, metadata, teleports=(), pushes=()):
@@ -624,13 +647,13 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     """Sky dome, menu stage, spawns and lights around converted world geometry; compile, validate and package the mod."""
     prefix = materials.prefix; brushes = world['brushes']
     centre = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
-    radius = max(16000, math.hypot(hi[0]-lo[0], hi[1]-lo[1])/2+4000)
     sky_base = lo[2]-2000
-    sky = sky_dome(prefix+'_sky', prefix+'_sky_void', centre, radius, sky_base, floor=False)
+    radius, height = fit_dome(world.get('boxes'), centre, sky_base, lo, hi)
+    sky = sky_dome(prefix+'_sky', prefix+'_sky_void', centre, radius, sky_base, floor=False, height=height)
     sky.append(valve_box((centre[0]-radius, centre[1]-radius, sky_base-64), (centre[0]+radius, centre[1]+radius, sky_base), prefix+'_sky_void'))
     floor = (Counter(m for b in brushes for m in re.findall(r' (\S+) \[ [^\]]*\] \[ [^\]]*\]', b)
                      if not m.endswith(('_nodraw', '_clip', '_skyhole'))).most_common(1) or [(prefix+'_black', 0)])[0][0].removeprefix(prefix)
-    menu_z = sky_base+radius+2000
+    menu_z = sky_base+height+2000
     stage = menu_stage(prefix, menu_z, floor)
     middle = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
     pak = materials.build(out, args, sky_image, void)
@@ -725,6 +748,7 @@ struct
  array<float> planeDists
  array<int> planeEnds
  table<entity, float> rampTimes
+ table<entity, vector> rampVelocities
 } file
 void function CodeCallback_MapInit()
 {
@@ -884,6 +908,10 @@ SURF_SCRIPT = '''
 // second. Crouched, the same ramp is not ground (tested in Northstar): the pilot keeps their
 // speed along it and slides down it as in Source. So on anything steeper than Source's limit
 // pilots are crouched, with no ground friction, until a quarter second after leaving it.
+// Two Titanfall moves fight surfing there: auto-mantle (a rising ramp ahead reads as a wall
+// with a ledge, and the pilot is vaulted forward) and slides (crouching at speed on a frame
+// counted as ground starts one, with its forward boost). Both are cancelled on a ramp and the
+// previous frame's velocity restored; each cancel is logged as [surf].
 void function SurfRamps()
 {
  while ( true )
@@ -907,7 +935,19 @@ void function SurfRamps()
      player.ForceCrouch()
      player.SetGroundFrictionScale( 0.0 )
     }
+    else if ( player.IsMantling() || player.IsTraversing() )
+    {
+     printl( "[surf] cancelled a mantle at " + o )
+     player.ClearTraverse()
+     player.SetVelocity( file.rampVelocities[player] )
+    }
+    else if ( player.IsSliding() && Length( player.GetVelocity() ) > Length( file.rampVelocities[player] ) + 40.0 )
+    {
+     printl( "[surf] cancelled a slide boost at " + o )
+     player.SetVelocity( file.rampVelocities[player] )
+    }
     file.rampTimes[player] <- Time()
+    file.rampVelocities[player] <- player.GetVelocity()
    }
    else if ( surfing && Time() - file.rampTimes[player] > 0.25 )
     StopSurfing( player )
@@ -918,6 +958,7 @@ void function SurfRamps()
 void function StopSurfing( entity player )
 {
  delete file.rampTimes[player]
+ delete file.rampVelocities[player]
  player.UnforceCrouch()
  player.SetGroundFrictionScale( 1.0 )
 }

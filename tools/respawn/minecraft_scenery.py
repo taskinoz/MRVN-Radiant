@@ -54,7 +54,9 @@ def sky_void_texture():
     return Image.new('RGBA',(64,64),colour)
 
 
-def sky_dome(material,floor_material,centre=(0,0),radius=16000,base=-3000,floor=True):
+def sky_dome(material,floor_material,centre=(0,0),radius=16000,base=-3000,floor=True,height=None):
+    """An upper half-ellipsoid of sky: `radius` across, `height` (default `radius`) up from `base`."""
+    height=radius if height is None else height
     patches=[]
     # 24 azimuth sectors, 6 polar bands. UVs match sky_texture's projection;
     # row-azimuth/column-polar winding faces inward.
@@ -68,7 +70,7 @@ def sky_dome(material,floor_material,centre=(0,0),radius=16000,base=-3000,floor=
                     theta=max((band+col/2)*(math.pi/2)/6,.0001)
                     x=radius*math.sin(theta)*math.cos(phi)
                     y=radius*math.sin(theta)*math.sin(phi)
-                    z=base+radius*math.cos(theta)
+                    z=base+height*math.cos(theta)
                     r=theta/(math.pi/2)
                     points.append(f'( {centre[0]+x:g} {centre[1]+y:g} {z:g} {.5+r*math.cos(phi)/2:g} {.5+r*math.sin(phi)/2:g} )')
                 rows.append('( '+' '.join(points)+' )')

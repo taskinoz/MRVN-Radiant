@@ -16,7 +16,10 @@ namespace Respawn {
 // with it and whose plane supports it: every source vertex lies within 1/32
 // unit in front of that plane and at least one lies more than 1/32 behind it.
 // Sources whose physical front normal, cross(v2 - v0, v1 - v0), has Z below
-// -0.5 select nothing.
+// -0.5 select nothing. A target whose plane duplicates one already in the
+// source's list (normals within 1e-5, distances within 1/32) is skipped: it
+// clips nothing more. Retail TF2 lists never repeat a plane; on Coliseum
+// geometry this drops 40% of the references (85,709 to 51,064).
 //
 // This is not retail's exact selector. Every sampled retail reference satisfies
 // the support conditions, and in TF1 (Angel City) every one also shares a
@@ -72,7 +75,14 @@ inline std::vector<std::vector<std::uint32_t>> selectTricollBevels(const std::ve
                 highest = std::max(highest, distance);
                 lowest = std::min(lowest, distance);
             }
-            if (highest <= slab && lowest < -slab) references[i].push_back(j);
+            if (!(highest <= slab && lowest < -slab)) continue;
+            bool duplicate = false;
+            for (const auto k : references[i]) {
+                const Plane& kept = planes[k];
+                if (kept.n[0] * plane.n[0] + kept.n[1] * plane.n[1] + kept.n[2] * plane.n[2] >= 1.0 - 1e-5 &&
+                    std::fabs(kept.d - plane.d) <= slab) { duplicate = true; break; }
+            }
+            if (!duplicate) references[i].push_back(j);
         }
     }
     return references;

@@ -525,8 +525,8 @@ static void SetBrushContents( brush_t& b ){
 		compileFlags &= ~C_DETAIL;
 	}
 
-	/* all translucent brushes that aren't specifically made structural will be detail */
-	if ( ( compileFlags & C_TRANSLUCENT ) && !( compileFlags & C_STRUCTURAL ) ) {
+	/* all translucent or alpha-tested brushes that aren't specifically made structural will be detail */
+	if ( ( compileFlags & ( C_TRANSLUCENT | C_ALPHASHADOW ) ) && !( compileFlags & C_STRUCTURAL ) ) {
 		compileFlags |= C_DETAIL;
 	}
 
@@ -542,7 +542,7 @@ static void SetBrushContents( brush_t& b ){
 	}
 
 	/* opaque? */
-	if ( compileFlags & C_TRANSLUCENT ) {
+	if ( compileFlags & ( C_TRANSLUCENT | C_ALPHASHADOW ) ) {
 		b.opaque = false;
 	}
 	else{

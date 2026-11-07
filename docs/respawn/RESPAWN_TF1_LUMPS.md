@@ -516,17 +516,27 @@ collision defect. The harness's `drop_samples` option logs drop positions every
 
 - **PHYSICS_TRIANGLES (1.4 MB in Angel City):** precomputed virtual-mesh hulls,
   one per TRICOLL header. remap leaves it empty, so the engine builds them at
-  load. Partly decoded (6 November 2026): sizes `0`, `0xfffe` and `0xffff` are
-  null (82 in Angel City), and the 5,806 sizes plus the 11,614-byte header sum
-  to the lump exactly. Each blob starts with a hull count (`01 00 00 00`) and
-  then byte counts for one convex outer hull of the header's triangles: faces,
-  a second count equal to or below the faces, edges (always 1.5 × faces, a
-  closed triangulated hull) and a fourth count. For example, header 0 (14
-  vertices, 12 triangles) gives 18 faces and 27 edges, a hull of 11 vertices; a
-  flat quad gives a 4-face, 6-edge double-sided sliver. The per-face records
-  that follow, likely Source's packed virtual-mesh hull, are not decoded.
-  Writing the lump would only save load time. Maps with more than 8,192 world
-  TRICOLL headers would lose VPhysics on the rest.
+  load. Layout, decoded 7 November 2026 and consistent for all 5,724 Angel City,
+  3,320 Relic and 651 Colony blobs (`.local/respawn/phys_tri_probe.py`):
+
+  | Bytes | Contents |
+  | --- | --- |
+  | 2 + 2n | `u16` count (= TRICOLL headers), then `u16` size per header; 0, `0xfffe`, `0xffff` mean none |
+  | 4 | hull count (always 1 here) |
+  | 4 | byte counts: faces F, a count no larger than F, edges E (= 1.5 F), a fourth count |
+  | 4F | per face: one byte, then three edge indices |
+  | 1 | one byte |
+  | 2E | per edge: two vertex indices, local to the header's vertices |
+
+  The face bytes fit equally as one leading byte, then three edge indices plus one
+  byte per face; the data does not decide between the two. Blob size is always
+  9 + 4F + 2E. Edges chained in face order form each face's
+  triangle, counter-clockwise seen from outside for 94-99% of faces (the rest are
+  flat or slivers). For example header 0 (14 vertices, 12 triangles) has 18
+  faces, 27 edges and 11 hull vertices; a flat quad is a 4-face, 6-edge double-
+  sided sliver. Still unknown: the second and fourth counts, the per-face byte
+  and the single byte (neither edge-direction bits nor a source-triangle index).
+  As the engine builds hulls itself, writing this lump would only save load time.
 - **Patch collision coverage:** correctly facing flat-entity rays and isolated
   VPhysics drops pass in TFO. The new six-surface sweep fixture covers 156
   front-facing world ray/hull cases. Exact convex merging fixes the reproduced

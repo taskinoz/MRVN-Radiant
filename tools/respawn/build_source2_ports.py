@@ -86,13 +86,14 @@ def sky_texture(args, ents, size=512):
 class SceneMaterials(Materials):
     """glTF materials to Titanfall 2 ones, keyed by material name."""
 
-    def __init__(self, gltf, prefix):
-        super().__init__(None, None, prefix); self.gltf = gltf; self.names = {}
+    def __init__(self, gltf, prefix, templates=None):
+        super().__init__(None, None, prefix, templates); self.gltf = gltf; self.names = {}
 
     def name(self, index):
         if index not in self.names:
             name, image, alpha, factor = self.gltf.material(index)
-            if alpha != 'OPAQUE': self.names[index] = None  # Cutout and blended surfaces: no template for them yet.
+            kind = {'MASK': 'cutout', 'BLEND': 'translucent'}.get(alpha) if self.templates else None
+            if alpha != 'OPAQUE' and not kind: self.names[index] = None  # Cutout and blended surfaces need templates.
             elif any(s in name.lower() for s in SKIP_MATERIALS): self.names[index] = None
             else:
                 base = sanitize(name)
@@ -100,6 +101,7 @@ class SceneMaterials(Materials):
                 if image is None or not image.exists(): self.missing[name] += 1
                 values = {'tint': list(factor[:3])+[1]} if any(abs(f-1) > .01 for f in factor[:3]) else {}
                 self.textures.setdefault(base, (image, size[0], size[1], values))
+                if kind: self.kinds[base] = kind
                 self.names[index] = self.prefix+base
         return self.names[index]
 
@@ -236,7 +238,7 @@ def build(args):
     export(args)
     gltf = GLTF(args.export/'world.gltf')
     prefix = ASSET_ROOT+args.name+'/'
-    materials = SceneMaterials(gltf, prefix)
+    materials = SceneMaterials(gltf, prefix, args.material_templates)
     charts, lo, hi, cell, skipped = render_charts(gltf, materials, args.triangle_budget, args.entity_models)
     print(f'{args.name}: {sum(len(c[2])//3 for c in charts)} render triangles in {len(charts)} charts, '
           f'vertices snapped to a {cell}-unit grid', flush=True)
@@ -281,6 +283,7 @@ if __name__ == '__main__':
     p.add_argument('--name', required=True, type=lambda v: v if v.replace('_', '').isalnum() and v.islower() else p.error('--name must be lowercase letters, digits and _'),
                    help='Map becomes mp_source_NAME')
     for name in ('output', 'remap', 'repak', 'material-template'): p.add_argument('--'+name, type=Path, required=True)
+    p.add_argument('--material-templates', type=Path, help='Directory from extract_material_templates.py: cutout and blended materials draw as such')
     p.add_argument('--display-name')
     p.add_argument('--entity-models', action='store_true', help='Also render entity models (doors, breakables, blockers); they get no collision')
     p.add_argument('--kill-z', type=float)

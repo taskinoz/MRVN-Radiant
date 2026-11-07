@@ -610,7 +610,9 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                 continue;
             const int flags = side.shaderInfo->compileFlags;
             sky |= (flags & C_SKY) != 0;
-            translucent |= (flags & C_TRANSLUCENT) != 0;
+            // Alpha-tested surfaces would shadow as solid sheets here; their sun
+            // shadows come from the alpha-tested shadow meshes at run time.
+            translucent |= (flags & (C_TRANSLUCENT | C_ALPHASHADOW)) != 0;
             visible |= (flags & C_NODRAW) == 0;
         }
         if (!visible || sky || translucent)
@@ -636,6 +638,12 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         for (uint32_t m = model.firstMesh; m < model.firstMesh + opaqueEnd; ++m) {
             const auto &mesh = Titanfall::Bsp::meshes.at(m);
             if (mesh.flags & (S_SKY | S_TRANSLUCENT)) continue;
+            {
+                const int16_t texture = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).textureData;
+                const uint32_t name = Titanfall::Bsp::textureData.at(texture).name_index;
+                const shaderInfo_t *shader = ShaderInfoForShaderNull(&Titanfall::Bsp::textureDataData.at(Titanfall::Bsp::textureDataTable.at(name)));
+                if (shader && (shader->compileFlags & (C_ALPHASHADOW | C_TRANSLUCENT))) continue;
+            }
             const auto base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
             for (uint32_t t = 0; t < mesh.triCount; ++t) {
                 V3 points[3];

@@ -523,6 +523,30 @@ are about twice as long and always fall under the shared-vertex supporting-plane
 rule; TF2 selects fewer adjacent planes and more non-adjacent ones. remap's rule
 is therefore a superset of TF1 retail behavior and a different selection for TF2.
 
+### TF2 retail lists, measured (7 November 2026)
+
+Every one of Coliseum's 31,893 retail references (`.local/respawn/bev-*` scripts,
+all candidate pairs within 64 units of AABB gap) has these properties:
+
+- the source lies behind the target's plane within 1/32 and some vertex more than
+  1/32 behind it (the support test remap already uses);
+- normals within 90 degrees (dot product 0.0015 to 0.99999);
+- **no plane is listed twice for one source**; remap's lists did repeat planes,
+  typically both triangles of a neighbouring quad;
+- at most 10 references per source; 9,560 of 16,632 triangles have any;
+- targets reach up to 49.7 units of AABB gap (median 2.0, 90% within 10.9),
+  close to a Titan-sized hull, though no gap or angle threshold separates them
+  from the 5.9 million supporting candidates (best: precision 8% at gap 0).
+
+Planes that recur elsewhere in the mesh do not explain the far references: only
+1,234 of the 20,792 references to triangles that share no vertex with their source
+have a coplanar sibling that does.
+
+**Change.** remap now drops a target whose plane duplicates one already in the
+source's list (normals within 1e-5, distances within 1/32); it clips nothing
+more. On Coliseum geometry this cuts 85,709 references to 51,064 and matches
+retail's no-repeat property. The full TF2 selector remains unknown.
+
 ## Visibility records
 
 | Lump | Layout | Meaning |

@@ -93,7 +93,9 @@ def select_bevels(triangles):
                 if j == i or not n or not set(t) & set(other):
                     continue
                 distances = [sum(a*b for a, b in zip(n, p)) - d for p in t]
-                if max(distances) <= 1/32 and min(distances) < -1/32:
+                if max(distances) <= 1/32 and min(distances) < -1/32 and not any(
+                        sum(a*b for a, b in zip(planes[k][0], n)) >= 1 - 1e-5 and abs(planes[k][1] - d) <= 1/32
+                        for k in chosen):
                     chosen.append(j)
         result[i] = chosen
     return result

@@ -24,7 +24,11 @@ For Team Fortress 2, pass both `--game-dir ...\Team Fortress 2\tf` and `--game-d
   Patches are Bezier-sampled, so terrain is slightly smoothed.
 - Materials: VMTs are resolved through the map's pakfile first, following cubemap `patch`
   materials to their base, and grouped by `$basetexture`. Textures are converted to BC1, capped at 1024 px.
-  Alpha is composited onto dark grey; clear `$translucent` glass becomes invisible solid.
+  Without `--material-templates`, alpha is composited onto dark grey and clear `$translucent`
+  glass becomes invisible solid. With it (see [RESPAWN_MATERIAL_TEMPLATES.md](RESPAWN_MATERIAL_TEMPLATES.md)),
+  `$translucent` materials blend and `$alphatest` ones are cut out, on brushes and props, with
+  uncompressed RGBA textures; a blended texture with no transparency (often a missing glass texture)
+  is drawn as faint glass, alpha 70. The CS2 converter does the same for glTF `BLEND` and `MASK`.
 - Lights: `light` and `light_spot` become static baked lights, `light_environment` the sun.
   Source lights without distances get `_zero_percent_distance` = 100*sqrt(brightness/2), clamped 256-2048.
 - 2D skybox: the six faces are reprojected into the Minecraft ports' azimuthal sky dome.
@@ -41,13 +45,15 @@ For Team Fortress 2, pass both `--game-dir ...\Team Fortress 2\tf` and `--game-d
   convex piece of their `.phy` (IVP ledges, metres with Y down, converted to inches with Z up).
   Only the ledge tree's leaves are pieces: internal nodes also point at ledges, the convex hull of
   their whole subtree, and reading those filled Jump Academy's spawn cave with solid.
-  Cutout and translucent prop parts (foliage cards, wires, glass) are skipped, as are props
+  Without templates, cutout and translucent prop parts (foliage cards, wires, glass) are skipped, as are props
   inside the 3D skybox room. `--no-props` leaves props out.
 - Spawns: TF2 team spawns, otherwise HL2 ground `info_node`s at the two ends of the map's main axis.
   `--spawns X1 Y1 X2 Y2` overrides this.
 
 Not converted: dynamic and physics props (`prop_dynamic`, `prop_physics`), the 3D skybox's
-contents, water, decals, overlays, normal maps and cutout transparency.
+contents, water, decals, overlays and normal maps; cutouts and translucency need `--material-templates`.
+Alpha-tested surfaces cast no baked shadow (the Titanfall 2 bake would shadow them as solid sheets);
+their sun shadows come from the alpha-tested shadow meshes at run time.
 
 ## Results
 

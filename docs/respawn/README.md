@@ -32,8 +32,9 @@ says what was tested in game and what wasn't. The tools are indexed in
 | Note | Covers |
 | --- | --- |
 | [RESPAWN_NORTHSTAR_TEST.md](RESPAWN_NORTHSTAR_TEST.md) | Quake E1M1 test mod |
-| [RESPAWN_MINECRAFT_PORTS.md](RESPAWN_MINECRAFT_PORTS.md) | Minecraft world converter (UMA, Glitch) |
+| [RESPAWN_MINECRAFT_PORTS.md](RESPAWN_MINECRAFT_PORTS.md) | Minecraft world converter (UMA, Glitch, Survival Games): terrain, glass, water, redstone |
 | [RESPAWN_SOURCE_PORTS.md](RESPAWN_SOURCE_PORTS.md) | Source 1 and CS2 converters (Trainstation, Jump Academy 2, Nuke) |
+| [RESPAWN_MATERIAL_TEMPLATES.md](RESPAWN_MATERIAL_TEMPLATES.md) | Translucent and alpha-tested world materials from retail Coliseum; decoding v7 paks |
 | [RESPAWN_BOX_GENESIS.md](RESPAWN_BOX_GENESIS.md) | Authored `mp_box` test yard |
 | [RESPAWN_MP_BOX.md](RESPAWN_MP_BOX.md) | Repairing and relighting a Titanfall Online port |
 | [RESPAWN_TF2_TO_APEX.md](RESPAWN_TF2_TO_APEX.md) | TF2 to Apex geometry port |

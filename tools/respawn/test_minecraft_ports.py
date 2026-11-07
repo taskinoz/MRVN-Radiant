@@ -6,7 +6,10 @@ import unittest
 import numpy as np
 
 from build_minecraft_ports import (BARRIER_THICKNESS, HIDDEN, barrier_boxes, bc1_level, bury_terrain, fill_floor_notches, glass_roof_rules, largest_band, largest_group, merge_cubes, Models,
-                                   torch_parts, torch_sites, visibility_coverage, zipline_routes)
+                                   torch_parts, torch_sites, visibility_coverage, zipline_routes,
+                                   see_through_kind, water_bodies, SUBMERGED, SCALE, WATER, WATER_TOP)
+import minecraft_redstone
+from PIL import Image
 from minecraft_scenery import HORIZON, SKY_LEVEL, sky_dome, sky_texture
 from minecraft_world import read_nbt
 
@@ -179,6 +182,55 @@ class MinecraftTests(unittest.TestCase):
                       (0,0,0,0,150,150,1,1,1,0,150)],
                  120:[(i,) for i in range(300)],123:[(0,0,300,0,0,0,0)]}
         self.assertEqual(visibility_coverage(records)['missing_world_meshes'],0)
+
+    def test_see_through_kinds(self):
+        clear=Image.new('RGBA',(16,16),(255,255,255,0))
+        solid=Image.new('RGBA',(16,16),(90,90,90,255))
+        holes=solid.copy();holes.paste((0,0,0,0),(0,0,8,16))
+        self.assertEqual(see_through_kind('red_stained_glass',clear),'translucent')
+        self.assertEqual(see_through_kind('iron_bars',holes),'cutout')
+        self.assertIsNone(see_through_kind('oak_leaves',holes))           # opt-in only
+        self.assertEqual(see_through_kind('oak_leaves',holes,True),'cutout')
+        self.assertIsNone(see_through_kind('stone',solid))
+
+    def test_terrain_keeps_faces_behind_clear_blocks(self):
+        stone=('stone',)*6;glass=('glass',)*6
+        cubes={(0,0,0):stone,(1,0,0):glass,(2,0,0):glass}
+        bury_terrain(cubes,{(1,0,0),(2,0,0)},(0,0,0,2,1,0),clear={(1,0,0),(2,0,0)})
+        self.assertEqual(cubes[0,0,0][3],'stone')    # east face, seen through the glass
+        self.assertEqual(cubes[1,0,0][5],HIDDEN)     # glass pressed against stone draws nothing
+        self.assertEqual(cubes[1,0,0][3],HIDDEN)     # glass against the same glass hides
+
+    def test_water_surface_and_kill_depth(self):
+        water={'Name':'minecraft:water','Properties':{'level':'0'}}
+        # A 1-deep pool at x 0 and a 4-deep one at x 1, both with their surface in y 9.
+        blocks=[(0,9,0,water)]+[(1,y,0,water) for y in range(6,10)]
+        slabs,kills=water_bodies(blocks)
+        self.assertEqual({(a[0],b[0]) for a,b,_ in slabs},{(0,2)})
+        self.assertAlmostEqual(slabs[0][1][1],9+WATER_TOP)
+        self.assertEqual(slabs[0][2][:2],(WATER,WATER))
+        # Only the deep column kills, from its bed to SUBMERGED below the surface.
+        self.assertEqual(len(kills),1)
+        (lo,hi),=kills
+        self.assertEqual((lo[0],hi[0],lo[1]),(1,2,6))
+        self.assertAlmostEqual(hi[1],9+WATER_TOP-SUBMERGED/SCALE)
+
+    def test_redstone_piston_and_plate_circuits(self):
+        def b(x,y,z,name,**props): return (x,y,z,{'Name':'minecraft:'+name,**({'Properties':props} if props else {})})
+        blocks=[b(0,0,0,'lever',face='floor'),b(1,0,0,'redstone_wire'),b(2,0,0,'sticky_piston',facing='up',extended='false'),
+                b(2,1,0,'iron_block'),
+                b(20,0,0,'stone_pressure_plate'),b(20,-1,0,'tnt'),
+                b(40,0,0,'sticky_piston',facing='east',extended='true'),b(41,0,0,'piston_head',facing='east'),
+                b(42,0,0,'stone'),b(40,0,1,'stone_button')]
+        mechs,moving=minecraft_redstone.mechanisms(blocks)
+        self.assertEqual(len(mechs),3)
+        lever,plate,door=mechs
+        self.assertEqual(lever['moves'],[{'cells':[(2,1,0)],'delta':(0,1,0)}])
+        self.assertEqual(plate['tnt'],[(20,-1,0)])
+        self.assertEqual(door['moves'],[{'cells':[(41,0,0),(42,0,0)],'delta':(-1,0,0)}])  # retracts, pulling the block
+        self.assertEqual(moving,{(2,1,0),(20,-1,0),(41,0,0),(42,0,0)})
+        script=minecraft_redstone.level_script(mechs,lambda p:tuple(v*48 for v in p),48)
+        self.assertIn('"mrvn_rs_0_m0"',script);self.assertIn('< 0.0, 48.0, 0.0 >',script)
 
 
 if __name__=='__main__': unittest.main()

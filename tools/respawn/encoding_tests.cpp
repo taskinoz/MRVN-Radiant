@@ -369,6 +369,9 @@ int main() {
             const auto ridge = Respawn::selectTricollBevels({a, b});
             require(ridge[0] == std::vector<std::uint32_t>{1} && ridge[1] == std::vector<std::uint32_t>{0},
                     "Convex ridge faces select each other");
+            const T bCoplanar{{{{0, 64, 0}}, {{0, 128, 0}}, {{64, 64, -64}}}};  // same plane as b
+            require(Respawn::selectTricollBevels({a, b, bCoplanar})[0] == std::vector<std::uint32_t>{1},
+                    "A repeated bevel plane is listed once");
             const T c{{{{0, 0, 0}}, {{-64, 0, 64}}, {{0, 64, 0}}}};   // faces (+x, +z)
             const T d{{{{0, 0, 0}}, {{0, 64, 0}}, {{64, 0, 64}}}};    // faces (-x, +z)
             const auto valley = Respawn::selectTricollBevels({c, d});

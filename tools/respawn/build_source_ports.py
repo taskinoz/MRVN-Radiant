@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 
 from build_minecraft_ports import MESH_BUDGET, visibility_coverage, write_dds_bc1
-from build_quake_materials import solid
+from build_quake_materials import solid, write_dds
 from compiler_regression import entity
 from inspect_bsp import inspect
 from minecraft_scenery import SKY_LEVEL, sky_dome
@@ -177,9 +177,19 @@ def spread(points, target, count=4):
 class Materials:
     """Source materials to Titanfall 2 ones, keyed by base texture so cubemap patches share one."""
 
-    def __init__(self, bsp, content, prefix):
+    def __init__(self, bsp, content, prefix, templates=None):
         self.bsp = bsp; self.content = content; self.prefix = prefix
         self.textures = {}; self.missing = Counter(); self.invisible = set(); self.nonsolid = set()
+        # extract_material_templates.py output: with it, $translucent and $alphatest
+        # textures draw blended and alpha-tested instead of opaque or invisible.
+        self.templates = templates; self.kinds = {}
+
+    def see_through(self, values):
+        """'translucent', 'cutout' or None for a Source material's keys."""
+        if not self.templates: return None
+        if values.get('$translucent') == '1': return 'translucent'
+        if values.get('$alphatest') == '1': return 'cutout'
+        return None
 
     def render_only(self, name):
         """A non-colliding variant of a material, for Source func_illusionary and non-solid brushes."""
@@ -200,10 +210,12 @@ class Materials:
             shader, values = material_info(self.content, material)
         except KeyError:
             self.missing[material] += 1; shader, values = None, {}
-        if shader == 'water' or values.get('$translucent') == '1' and 'glass' in material:
+        kind = self.see_through(values)
+        if shader == 'water' or not kind and values.get('$translucent') == '1' and 'glass' in material:
             # Clear glass stays solid but unseen: an opaque pane would hide the room.
             self.invisible.add(material); return self.prefix+'_nodraw'
         base = sanitize(values.get('$basetexture', material))
+        if kind: self.kinds[base] = kind
         self.textures.setdefault(base, (values.get('$basetexture'), texdata[1], texdata[2], values))
         return self.prefix+base
 
@@ -224,11 +236,14 @@ class Materials:
                 if values.get('tint'): image = Image.fromarray(np.clip(np.asarray(image)*np.array(values['tint']), 0, 255).astype(np.uint8))
             except (KeyError, ValueError, AttributeError, OSError):
                 self.missing[name] += 1; image = Image.new('RGBA', (64, 64), (128, 128, 128, 255))
+            if self.kinds.get(name) == 'translucent' and image.getextrema()[3][0] == 255:
+                # Blended without any transparency (often a missing glass texture): faint glass instead of a grey wall.
+                image = Image.blend(image, Image.new('RGBA', image.size, (200, 215, 225, 255)), 0.5); image.putalpha(70)
             if min(image.size) < 4:
                 # A pak with a BC1 texture smaller than one 4x4 block never finishes loading.
                 image = image.resize((max(4, image.width), max(4, image.height)), Image.Resampling.NEAREST)
-            if image.getextrema()[3][0] < 255:
-                # Alpha-tested fences and decals become opaque: no cutout template yet.
+            if image.getextrema()[3][0] < 255 and name not in self.kinds:
+                # Without templates, alpha-tested fences and decals become opaque.
                 backing = Image.new('RGBA', image.size, (60, 60, 60, 255)); backing.alpha_composite(image); image = backing
             images[name] = (image, width, height)
         for name in ('_nodraw', '_skyhole', '_clip'):
@@ -237,11 +252,23 @@ class Materials:
             image, width, height = entry if isinstance(entry, tuple) else (entry, entry.width, entry.height)
             # Remap divides texinfo texels by this image's size, so it keeps the BSP's texture size.
             png = assets/('textures/'+self.prefix+name+'.png'); png.parent.mkdir(parents=True, exist_ok=True)
-            Image.new('RGB', (width, height)).save(png)
+            if name in self.kinds:
+                # The lightmapper reads alpha-tested shadows from this image's alpha.
+                image.convert('RGBA').resize((width, height), Image.Resampling.NEAREST).save(png)
+            else:
+                Image.new('RGB', (width, height)).save(png)
             scale = min(1, MAX_TEXTURE/max(image.size))
             if scale < 1: image = image.resize((int(image.width*scale), int(image.height*scale)), Image.Resampling.LANCZOS)
-            albedo = texture(name, mip_levels(image.convert('RGBA')))
-            for suffix in ('_colpass_wld', '_wld'):
+            kind = self.kinds.get(name)
+            if kind:
+                # BC1 has no alpha channel to blend or test.
+                path = 'texture/'+self.prefix+name+'.rpak'
+                write_dds(assets/Path(path).with_suffix('.dds'), mip_levels(image.convert('RGBA')), True)
+                files.append({'_type': 'txtr', '_path': path, '$disableStreaming': True}); albedo = path
+                write_see_through(assets, files, self.templates, kind, self.prefix+name, image.size, albedo, flats)
+            else:
+                albedo = texture(name, mip_levels(image.convert('RGBA')))
+            for suffix in (() if kind else ('_colpass_wld', '_wld')):
                 src = args.material_template.with_name(args.material_template.name+suffix)
                 spec = json.loads(src.with_suffix('.json').read_text())
                 spec.update(name=self.prefix+name+('_colpass' if suffix.startswith('_colpass') else ''), width=image.width, height=image.height)
@@ -250,11 +277,13 @@ class Materials:
                 dst = assets/('material/'+self.prefix+name+suffix+'.rpak'); dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
                 files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
-            shader.append(f'textures/{self.prefix}{name}\n{{\n $shadertype LitBumpGeneric\n'+(' $compileflag sky\n' if name.startswith('_sky') else '')+'}\n')
+            flags = {'translucent': ' $compileflag trans\n', 'cutout': ' $compileflag alphashadow\n'}.get(kind, '')
+            shader.append(f'textures/{self.prefix}{name}\n{{\n $shadertype LitBumpGeneric\n'+(' $compileflag sky\n' if name.startswith('_sky') else '')+flags+'}\n')
             if name in self.nonsolid:
                 # The same textures under a second name whose shader has no collision.
                 for suffix in ('_colpass_wld', '_wld'):
                     src = assets/('material/'+self.prefix+name+suffix+'.rpak')
+                    if not src.with_suffix('.json').exists(): continue  # translucent ones have no colpass
                     spec = json.loads(src.with_suffix('.json').read_text())
                     spec['name'] = self.prefix+name+NONSOLID+('_colpass' if suffix.startswith('_colpass') else '')
                     if not suffix.startswith('_colpass'):
@@ -263,7 +292,7 @@ class Materials:
                     dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
                     files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
                 shutil.copyfile(png, assets/('textures/'+self.prefix+name+NONSOLID+'.png'))
-                shader.append(f'textures/{self.prefix}{name}{NONSOLID}\n{{\n $shadertype LitBumpGeneric\n $contentflag nonsolid\n}}\n')
+                shader.append(f'textures/{self.prefix}{name}{NONSOLID}\n{{\n $shadertype LitBumpGeneric\n $contentflag nonsolid\n{flags}}}\n')
         shaders = assets/'shaders'; shaders.mkdir(parents=True, exist_ok=True)
         (shaders/'source_ports.shader').write_text('\n'.join(shader))
         pak = 'source_'+args.name
@@ -275,17 +304,37 @@ class Materials:
         return RPak(out/'pak-build'/(pak+'.rpak'))
 
 
+def write_see_through(assets, files, templates, kind, material, size, albedo, flats):
+    """Translucent or alpha-tested world material from extract_material_templates.py output."""
+    def clone(key, name, textures, extra={}):
+        spec = json.loads((templates/(key+'.json')).read_text())
+        spec.update(name=name, width=size[0], height=size[1], **extra); spec['$textures'] = textures
+        dst = assets/('material/'+name+'_wld.rpak'); dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(templates/(key+'.uber'), dst.with_suffix('.uber'))
+        files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
+        return dst.relative_to(assets).as_posix()
+    if kind == 'translucent':
+        return clone('translucent_wld', material, {'0': albedo, **flats})
+    # Alpha-tested depth passes, or the holes cast shadows and fill the depth prepass.
+    depth = {f'$depth{K}Material': clone(f'cutout_{k}_wld', 'depth/'+material+'_'+k, {'0': albedo})
+             for k, K in (('shadow', 'Shadow'), ('prepass', 'Prepass'), ('vsm', 'VSM'))}
+    colpass = clone('cutout_colpass_wld', material+'_colpass', {'0': albedo, **flats}, depth)
+    return clone('cutout_wld', material, {'0': albedo, **flats}, {**depth, '$colpassMaterial': colpass})
+
+
 def prop_material(materials, candidates):
-    """Material for a prop mesh, or None for cutout and translucent ones (no cutout template yet)."""
+    """Material for a prop mesh, or None for additive ones, and for cutout and translucent ones without templates."""
     for name in candidates:
         try: shader, values = material_info(materials.content, name)
         except KeyError: continue
-        if any(values.get(k) == '1' for k in ('$translucent', '$alphatest', '$additive')): return None
+        kind = materials.see_through(values)
+        if values.get('$additive') == '1' or not kind and any(values.get(k) == '1' for k in ('$translucent', '$alphatest')): return None
         vtf = values.get('$basetexture')
         try: width, height = vtf_size(materials.content.read('materials/'+vtf.replace('\\', '/').lower()+'.vtf'))
         except (KeyError, AttributeError): width, height = 64, 64
         base = sanitize(vtf or name)
         materials.textures.setdefault(base, (vtf, width, height, values))
+        if kind: materials.kinds[base] = kind
         return materials.prefix+base
     materials.missing[candidates[0] if candidates else '?'] += 1
     return None
@@ -495,7 +544,7 @@ def build(args):
     bsp = BSP(args.bsp)
     content = Content(args.game_dir, bsp.pakfile)
     prefix = ASSET_ROOT+args.name+'/'
-    materials = Materials(bsp, content, prefix)
+    materials = Materials(bsp, content, prefix, args.material_templates)
     world = bsp.model_brushes(0)
     skybox = bsp.skybox_brushes(world); skybox_box = None
     if skybox:
@@ -617,7 +666,7 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     if report['issues']: raise ValueError(report['issues'])
     coverage = visibility_coverage(load_records(path.with_suffix('.bsp'), inspect(path.with_suffix('.bsp'))))
     (out/'visibility-coverage.json').write_text(json.dumps(coverage, indent=2))
-    stbsp.write(out/(level+'.stbsp'), [(n, a['guid']) for a, n in pak.materials() if not n.endswith('_colpass')], lo[:2], hi[:2])
+    stbsp.write(out/(level+'.stbsp'), [(n, a['guid']) for a, n in pak.materials() if not n.endswith('_colpass') and not n.startswith('depth/')], lo[:2], hi[:2])
     modname = 'MRVN.Source'+args.name.title().replace('_', ''); mod = out/modname; maps = mod/'mod/maps'; maps.mkdir(parents=True)
     members = {}
     for part in ('env', 'fx', 'script', 'snd', 'spawn'):
@@ -742,6 +791,7 @@ if __name__ == '__main__':
     p.add_argument('--name', required=True, type=lambda v: v if v.replace('_', '').isalnum() and v.islower() else p.error('--name must be lowercase letters, digits and _'),
                    help='Map becomes mp_source_NAME')
     for name in ('output', 'remap', 'repak', 'material-template'): p.add_argument('--'+name, type=Path, required=True)
+    p.add_argument('--material-templates', type=Path, help='Directory from extract_material_templates.py: translucent and alpha-tested materials draw as such')
     p.add_argument('--display-name')
     p.add_argument('--spawns', type=float, nargs=4, metavar=('X1', 'Y1', 'X2', 'Y2'), help='Centre of each team\'s spawn area, Source units')
     p.add_argument('--kill-z', type=float)

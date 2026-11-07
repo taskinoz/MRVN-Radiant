@@ -34,6 +34,7 @@ import numpy as np
 import stbsp
 from minecraft_world import sections
 from minecraft_scenery import menu_stage, sky_dome, sky_texture, sky_void_texture
+import minecraft_redstone
 
 SCALE = 48
 VERSION = '0.5.2'
@@ -89,7 +90,7 @@ PRESETS = {
     'survival_games':dict(bounds=(-1737,36,-780,-1417,110,-460),anchor=(-1577,64,-620),spawns=((-1577,-740),(-1577,-500)),
                           display_name='Survival Games (Minecraft)',author='Vareide',
                           source_url='https://www.planetminecraft.com/project/the-original-survival-games-map/',
-                          terrain=True,luxel_size=32,mesh_cluster=12288)}
+                          terrain=True,luxel_size=48,mesh_cluster=12288,redstone=True)}
 
 
 def largest_group(cells):
@@ -305,15 +306,28 @@ def merge_cubes(cubes):
 
 HIDDEN = '_nodraw_ns'  # a face nothing can see, on a render-only brush: draws and blocks nothing
 SEE_THROUGH = ('glass','leaves','ice','_pane','iron_bars')
+
+
+def see_through_kind(name, im, cutout_leaves=False):
+    """'translucent' for glass and ice (alpha blended), 'cutout' for other textures
+    with holes (alpha tested), else None (drawn opaque on a backing colour)."""
+    alpha=np.asarray(im.getchannel('A'))
+    if (alpha<128).mean()<=0.02 and (alpha>=250).all(): return None
+    if 'glass' in name or name=='ice': return 'translucent'
+    if name.endswith('_leaves') and not cutout_leaves: return None
+    return 'cutout' if (alpha<128).mean()>0.02 else None
+
+
 STEPS = {'down':(0,-1,0),'up':(0,1,0),'south':(0,0,1),'east':(1,0,0),'north':(0,0,-1),'west':(-1,0,0)}
 
 
-def bury_terrain(cubes,see_through,bounds):
+def bury_terrain(cubes,see_through,bounds,clear=()):
     """Hide what a natural world keeps underground, so it merges into a few boxes.
 
     Sealed caves (air that can't reach the sky through anything but solid blocks)
     become solid, and every face against a full block, or below the bounds, becomes
-    nodraw. Returns the filled cells."""
+    nodraw, unless that block is one of ``clear`` (drawn see-through) with other
+    faces. Returns the filled cells."""
     lo=np.array(bounds[:3]);size=np.array(bounds[3:])-lo+1
     blocking=np.zeros(size,bool)
     for p in cubes:
@@ -332,14 +346,51 @@ def bury_terrain(cubes,see_through,bounds):
         reach=grown
     filled=[tuple(int(v) for v in np.array(p)+lo) for p in zip(*np.nonzero(~blocking&~reach))]
     for p in filled:cubes[p]=(HIDDEN,)*6
-    for (x,y,z),mat in cubes.items():
+    original=dict(cubes)
+    for (x,y,z),mat in original.items():
         new=list(mat)
         for i,face in enumerate(FACES):
             dx,dy,dz=STEPS[face];n=(x+dx,y+dy,z+dz)
-            # Glass and leaves draw with an opaque backing, so they hide what they touch too.
-            if n in cubes or n[1]<bounds[1]:new[i]=HIDDEN
+            # Opaque-backed glass and leaves hide what they touch; see-through ones don't.
+            if n[1]<bounds[1] or (n in original and not (n in clear and original[n]!=mat)):new[i]=HIDDEN
         cubes[x,y,z]=tuple(new)
     return filled
+
+
+WATER = 'water_still'
+WATER_TOP = 14/16  # still water's surface within its block
+SUBMERGED = 64  # world units below the surface at which a pilot is under, and dies
+
+
+def vectors(points):
+    """Squirrel vector literals, comma separated."""
+    return ', '.join('< '+', '.join(f'{v:.1f}' for v in p)+' >' for p in points)
+
+
+def water_bodies(blocks):
+    """Water surfaces and kill volumes for Titanfall 2, which has no swimming.
+
+    As in retail single-player levels, water is a see-through surface over a kill
+    volume: returns (surface cells merged into boxes, kill boxes in block units).
+    A kill box covers columns deep enough to go under, from their deepest bed up to
+    SUBMERGED units below the surface: pilots wade through shallow water and die
+    where they would go under."""
+    water={(x,y,z) for x,y,z,s in blocks if s['Name'].split(':')[-1] in ('water','bubble_column')
+           or s.get('Properties',{}).get('waterlogged')=='true'}
+    surface={p:((WATER,)*2+(HIDDEN,)*4) for p in water if (p[0],p[1]+1,p[2]) not in water}
+    columns={}
+    for x,y,z in surface:
+        depth=1
+        while (x,y-depth,z) in water: depth+=1
+        top=y+WATER_TOP-SUBMERGED/SCALE
+        if top>y-depth+1: columns[x,y,z]=depth
+    # One box per rectangle of equal surface height, down to its deepest bed.
+    kills=[]
+    for a,b,_ in merge_cubes({p:0 for p in columns}):
+        bed=min(a[1]-columns[x,a[1],z]+1 for x in range(a[0],b[0]) for z in range(a[2],b[2]))
+        kills.append(((a[0],bed,a[2]),(b[0],a[1]+WATER_TOP-SUBMERGED/SCALE,b[2])))
+    slabs=[((a[0],a[1]+WATER_TOP-1/16,a[2]),(b[0],a[1]+WATER_TOP,b[2]),m) for a,b,m in merge_cubes(surface)]
+    return slabs,kills
 
 
 def zipline_routes(blocks):
@@ -494,7 +545,32 @@ def write_dds_bc1(path,levels):
     path.write_bytes(header+b''.join(encoded))
 
 
-def materials(models, names, out, args, prefix):
+def block_texture(models,name):
+    """A block texture as RGBA, tinted like the game; animated strips keep frame one."""
+    try: im=Image.open(io.BytesIO(models.jar.read('assets/minecraft/textures/block/'+name+'.png'))).convert('RGBA')
+    except KeyError: raise ValueError('missing block texture '+name)
+    if im.height>im.width: im=im.crop((0,0,im.width,im.width))
+    if name.endswith('_leaves') and not name.startswith(('cherry','azalea','flowering_azalea')):
+        im=ImageChops.multiply(im,Image.new('RGBA',im.size,(115,165,80,255)))
+    if name in ('grass_block_top','grass_block_side_overlay'):
+        im=ImageChops.multiply(im,Image.new('RGBA',im.size,(135,185,90,255)))
+    if name==WATER:
+        im=ImageChops.multiply(im,Image.new('RGBA',im.size,(63,118,228,255)));im.putalpha(176)
+    return im
+
+
+def texture_kinds(models,names,args):
+    """{name: 'translucent' | 'cutout'} for textures drawn see-through; needs --material-templates."""
+    if not getattr(args,'material_templates',None): return {}
+    kinds={}
+    for name in names:
+        if name.startswith('_'): continue
+        kind='translucent' if name==WATER else see_through_kind(name,block_texture(models,name),args.cutout_leaves)
+        if kind: kinds[name]=kind
+    return kinds
+
+
+def materials(models, names, out, args, prefix, kinds={}):
     assets = out/'assets'; files=[]; substitutions={}
     def tx(name, levels, srgb, compress=False):
         path='texture/minecraft_ports/'+args.name+'/'+name+'.rpak'
@@ -517,22 +593,37 @@ def materials(models, names, out, args, prefix):
             im=Image.open(io.BytesIO(models.jar.read('assets/minecraft/textures/block/torch.png'))).convert('RGBA')
             im=im.crop((7,6,9,8) if name=='_torch_flame' else (7,8,9,16)).resize((16,16),Image.Resampling.NEAREST)
         else:
-            try: im=Image.open(io.BytesIO(models.jar.read('assets/minecraft/textures/block/'+name+'.png'))).convert('RGBA')
-            except KeyError: raise ValueError('missing block texture '+name)
-            if im.height>im.width: im=im.crop((0,0,im.width,im.width))
-            if name.endswith('_leaves') and not name.startswith(('cherry','azalea','flowering_azalea')):
-                im=ImageChops.multiply(im,Image.new('RGBA',im.size,(115,165,80,255)))
-            if name in ('grass_block_top','grass_block_side_overlay'):
-                im=ImageChops.multiply(im,Image.new('RGBA',im.size,(135,185,90,255)))
-            if im.getextrema()[3][0]<255:
+            im=block_texture(models,name)
+            if name in kinds:
+                substitutions[name]=kinds[name]
+            elif im.getextrema()[3][0]<255:
                 base=Image.new('RGBA',im.size,(105,145,100,255) if 'leaves' in name else (172,192,201,255))
                 base.alpha_composite(im);im=base
                 substitutions[name]='alpha composited onto opaque backing'
         if not name.startswith('_sky'):
             im=im.resize((im.width*16,im.height*16),Image.Resampling.NEAREST)
         dest=assets/('textures/'+prefix+name+'.png');dest.parent.mkdir(parents=True,exist_ok=True);im.save(dest)
-        albedo=tx(name,mip_chain(im.width,im.height,im.tobytes()),True,True)
-        for suffix in ('_colpass_wld','_wld'):
+        # See-through textures keep their alpha, which BC1 cannot hold.
+        albedo=tx(name,mip_chain(im.width,im.height,im.tobytes()),True,name not in kinds)
+        kind=kinds.get(name)
+        if kind:
+            def clone(key,material,textures,extra={}):
+                spec=json.loads((args.material_templates/(key+'.json')).read_text())
+                spec.update(name=material,width=im.width,height=im.height,**extra);spec['$textures']=textures
+                dst=assets/('material/'+material+'_wld.rpak');dst.parent.mkdir(parents=True,exist_ok=True)
+                dst.with_suffix('.json').write_text(json.dumps(spec,indent=2))
+                shutil.copyfile(args.material_templates/(key+'.uber'),dst.with_suffix('.uber'))
+                files.append({'_type':'matl','_path':dst.relative_to(assets).as_posix()})
+                return dst.relative_to(assets).as_posix()
+            if kind=='translucent':
+                clone('translucent_wld',prefix+name,{'0':albedo,**flats})
+            else:
+                # Alpha-tested depth passes, or the holes cast shadows and fill the depth prepass.
+                depth={f'$depth{K}Material':clone(f'cutout_{k}_wld','depth/'+prefix+name+'_'+k,{'0':albedo})
+                       for k,K in (('shadow','Shadow'),('prepass','Prepass'),('vsm','VSM'))}
+                colpass=clone('cutout_colpass_wld',prefix+name+'_colpass',{'0':albedo,**flats},depth)
+                clone('cutout_wld',prefix+name,{'0':albedo,**flats},{**depth,'$colpassMaterial':colpass})
+        for suffix in (() if kind else ('_colpass_wld','_wld')):
             src=args.material_template.with_name(args.material_template.name+suffix)
             spec=json.loads(src.with_suffix('.json').read_text())
             spec.update(name=prefix+name+('_colpass' if suffix.startswith('_colpass') else ''),width=im.width,height=im.height)
@@ -543,7 +634,8 @@ def materials(models, names, out, args, prefix):
             files.append({'_type':'matl','_path':dst.relative_to(assets).as_posix()})
         shader.append('textures/'+prefix+name+'\n{\n $shadertype LitBumpGeneric\n'+
                       (' $compileflag sky\n' if name.startswith('_sky') else '')+
-                      (' $contentflag nonsolid\n' if name.startswith('_torch') or (args.terrain and not name.startswith('_')) else '')+'}\n')
+                      {'translucent':' $compileflag trans\n','cutout':' $compileflag alphashadow\n'}.get(kinds.get(name),'')+
+                      (' $contentflag nonsolid\n' if name.startswith('_torch') or name==WATER or (args.terrain and not name.startswith('_')) else '')+'}\n')
     shaders=assets/'shaders';shaders.mkdir(parents=True);(shaders/'minecraft_ports.shader').write_text('\n'.join(shader))
     manifest={'version':7,'name':'minecraft_'+args.name,'keepDevOnly':True,'assetsDir':str(assets),
               'outputDir':str(out/'pak-build'),'compressLevel':0,'hasDynamicLibrary':False,'files':files}
@@ -570,6 +662,9 @@ def build(args):
     clip_cells={}
     def transform(p): return ((p[0]-anchor[0])*SCALE,-(p[2]-anchor[2])*SCALE,(p[1]-anchor[1])*SCALE)
     routes=zipline_routes(blocks) if args.iron_bar_ziplines else []
+    # Redstone pistons, doors and TNT: their blocks become script-moved brush entities.
+    mechs,moving=minecraft_redstone.mechanisms(blocks) if args.redstone else ([],set())
+    mover_shapes={}
     for x,y,z,state in blocks:
         name=state['Name'].split(':')[-1];counts[name]+=1
         # Barrier blocks, and glass the author used as a roof, keep blocking pilots unseen.
@@ -577,13 +672,24 @@ def build(args):
             clip_cells[x,y,z]=('_clip',)*6;continue
         if name in SKIP or (routes and name=='iron_bars'): continue
         shapes=models.shapes(json.dumps(state,sort_keys=True))
+        if (x,y,z) in moving:
+            mover_shapes[x,y,z]=[(tuple(v+a/16 for v,a in zip((x,y,z),lo)),tuple(v+b/16 for v,b in zip((x,y,z),hi)),mat) for lo,hi,mat in shapes]
+            for _,_,mat in shapes: names.update(mat)
+            continue
         for lo,hi,mat in shapes:
             names.update(mat)
             if lo==(0,0,0) and hi==(16,16,16) and len(shapes)==1: cubes[x,y,z]=mat
             else: small.append((tuple(v+a/16 for v,a in zip((x,y,z),lo)),tuple(v+b/16 for v,b in zip((x,y,z),hi)),mat))
+    water_slabs,water_kills=water_bodies(blocks) if args.material_templates else ([],[])
+    if water_slabs:
+        names.update((WATER,HIDDEN))
+        print(f'water: {len(water_slabs)} surface brushes, {len(water_kills)} kill volumes',flush=True)
+    kinds=texture_kinds(models,names,args)
+    if kinds: print('see-through textures: '+', '.join(f'{n} ({k})' for n,k in sorted(kinds.items())),flush=True)
     if args.terrain:
         see_through={(x,y,z) for x,y,z,s in blocks if any(t in s['Name'] for t in SEE_THROUGH)}
-        filled=bury_terrain(cubes,see_through,args.bounds)
+        clear={p for p,m in cubes.items() if any(f in kinds for f in m)}
+        filled=bury_terrain(cubes,see_through,args.bounds,clear)
         print(f'terrain: filled {len(filled)} sealed cave cells',flush=True)
         names.add(HIDDEN)
     # Find spawn sites with two blocks of air and a full solid floor. Keep
@@ -626,14 +732,31 @@ def build(args):
     stage_brushes,stage_materials=menu_stage(prefix,MENU_Z)
     names.update(stage_materials)
     # In terrain mode, cubes with every face hidden have nothing to draw; collision covers them.
-    boxes=merge_cubes({p:m for p,m in cubes.items() if not args.terrain or any(f!=HIDDEN for f in m)})+small
-    pak=materials(models,names,out,args,prefix)
+    boxes=merge_cubes({p:m for p,m in cubes.items() if not args.terrain or any(f!=HIDDEN for f in m)})+small+water_slabs
+    pak=materials(models,names,out,args,prefix,kinds)
     brushes=[]; geometry=[]
-    for lo,hi,mat in boxes:
+    def textured(lo,hi,mat):
         a=transform(lo);b=transform(hi);low=tuple(min(v,w) for v,w in zip(a,b));high=tuple(max(v,w) for v,w in zip(a,b))
         lines=box_brush(low,high,'TEMP').splitlines()
         for i,m in enumerate(mat): lines[i+1]=lines[i+1].replace('TEMP',prefix+m).replace(' 0 0 0 1 1 0 0 0',' 0 0 0 0.1875 0.1875 0 0 0')
-        brushes.append('\n'.join(lines));geometry.append([low,high,mat])
+        return '\n'.join(lines),low,high
+    for lo,hi,mat in boxes:
+        brush,low,high=textured(lo,hi,mat)
+        brushes.append(brush);geometry.append([low,high,mat])
+    # Each moving group is one func_brush with no origin key: remap writes brush
+    # models in world coordinates, and the engine would add an origin again.
+    movers=''
+    for i,c in enumerate(mechs):
+        groups=[(f'm{j}',m['cells']) for j,m in enumerate(c['moves'])]+[(f'd{j}',d['cells']) for j,d in enumerate(c['doors'])]+[(f't{j}',[t]) for j,t in enumerate(c['tnt'])]
+        for tag,cells in groups:
+            parts=[]
+            for cell in cells:
+                for lo,hi,mat in mover_shapes.get(cell,[]):
+                    parts.append(textured(lo,hi,mat)[0])
+                    # Textured faces may be render-only (terrain mode), so the group collides through nodraw.
+                    parts.append(textured(lo,hi,('_nodraw',)*6)[0])
+            if parts:movers+='{\n"classname" "func_brush"\n'+f'"script_name" "mrvn_rs_{i}_{tag}"\n"solidity" "2"\n'+'\n'.join(parts)+'\n}\n'
+    if mechs:print(f'redstone: {len(mechs)} circuits, {len(moving)} moving blocks',flush=True)
     if args.terrain:
         # Collision brushes are indexed with 16 bits. Textured brushes only render here;
         # what collides is the same space merged by occupancy alone, which takes far fewer.
@@ -678,6 +801,11 @@ def build(args):
             for cls in ('info_spawnpoint_human','info_spawnpoint_human_start'):
                 text+=entity(classname=cls,origin=' '.join(f'{v:g}' for v in p),angles=f'0 {round(yaw)} 0',teamnum=str(team))
     text+=entity(classname='info_player_start',origin=' '.join(str(v) for v in spawninfo[0]['origin']))
+    text+=movers
+    kill_world=[]
+    for a,b in water_kills:
+        a,b=transform(a),transform(b)
+        kill_world.append((tuple(min(v,w) for v,w in zip(a,b)),tuple(max(v,w) for v,w in zip(a,b))))
     level='mp_minecraft_'+args.name;path=out/(level+'.map')
     (out/'geometry.json').write_text(json.dumps(geometry))
     (out/'spawns.json').write_text(json.dumps(spawninfo,indent=2))
@@ -696,7 +824,7 @@ def build(args):
     if report['issues']: raise ValueError(report['issues'])
     coverage=visibility_coverage(load_records(path.with_suffix('.bsp'),inspect(path.with_suffix('.bsp'))))
     (out/'visibility-coverage.json').write_text(json.dumps(coverage,indent=2))
-    stbsp.write(out/(level+'.stbsp'),[(n,a['guid']) for a,n in pak.materials() if not n.endswith('_colpass')],lo[:2],hi[:2])
+    stbsp.write(out/(level+'.stbsp'),[(n,a['guid']) for a,n in pak.materials() if not n.endswith('_colpass') and not n.startswith('depth/')],lo[:2],hi[:2])
     modname='MRVN.Minecraft'+args.name.title().replace('_','');mod=out/modname;maps=mod/'mod/maps';maps.mkdir(parents=True)
     members={}
     for part in ('env','fx','script','snd','spawn'):
@@ -707,28 +835,49 @@ def build(args):
             shutil.copyfile(p,maps/p.name);members['maps/'+p.name]=p.read_bytes()
     pack_files(members,mod/'vpk','client_'+level+'.bsp.pak000')
     scripts=mod/'mod/scripts/vscripts/mp/levels';scripts.mkdir(parents=True)
-    (scripts/(level+'.nut')).write_text('''global function CodeCallback_MapInit
+    (scripts/(level+'.nut')).write_text((minecraft_redstone.HEADER if mechs else '')+'''global function CodeCallback_MapInit
 void function CodeCallback_MapInit()
 {
  ClassicMP_SetLevelIntro( ClassicMP_DefaultNoIntro_Setup, ClassicMP_DefaultNoIntro_GetLength() )
  ClassicMP_ForceDisableEpilogue( true )
  Riff_ForceTitanAvailability( eTitanAvailability.Never )
- thread KillFallenPilots()
+ thread KillFallenPilots()REDSTONE_THREAD
 }
 void function KillFallenPilots()
 {
+ // Deep water: Titanfall 2 has no swimming, so pilots who go under die.
+ array<vector> waterMins = [ WATER_MINS ]
+ array<vector> waterMaxs = [ WATER_MAXS ]
+ vector waterLo = WATER_LO
+ vector waterHi = WATER_HI
  while ( true )
  {
   foreach ( entity player in GetPlayerArray() )
   {
-   if ( IsAlive( player ) && player.GetOrigin().z < KILL_Z )
+   if ( !IsAlive( player ) )
+    continue
+   vector p = player.GetOrigin()
+   bool dead = p.z < KILL_Z
+   bool nearWater = p.x >= waterLo.x && p.x <= waterHi.x && p.y >= waterLo.y && p.y <= waterHi.y && p.z >= waterLo.z && p.z <= waterHi.z
+   for ( int i = 0; nearWater && i < waterMins.len() && !dead; i++ )
+   {
+    vector a = waterMins[i]
+    vector b = waterMaxs[i]
+    dead = p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y && p.z >= a.z && p.z <= b.z
+   }
+   if ( dead )
     player.TakeDamage( 10000, null, null, { damageSourceId = eDamageSourceId.fall } )
   }
   wait 0.1
  }
 }
-'''.replace('KILL_Z',f'{kill_z}.0'))
+'''.replace('KILL_Z',f'{kill_z}.0').replace('WATER_LO',vectors([tuple(min(k[0][i] for k in kill_world) for i in range(3)) if kill_world else (0,0,0)]))
+      .replace('WATER_HI',vectors([tuple(max(k[1][i] for k in kill_world) for i in range(3)) if kill_world else (-1,-1,-1)]))
+      .replace('WATER_MINS',vectors(k[0] for k in kill_world)).replace('WATER_MAXS',vectors(k[1] for k in kill_world))
+      .replace('REDSTONE_THREAD','\n thread RS_Init()' if mechs else '')
+      +(minecraft_redstone.level_script(mechs,transform,SCALE) if mechs else ''))
     paks=mod/'paks';paks.mkdir();pakname='minecraft_'+args.name+'.rpak'
+    (out/'water-kill-volumes.json').write_text(json.dumps(kill_world))
     shutil.copyfile(out/'pak-build'/pakname,paks/pakname)
     aliases={level+'.rpak':'mp_coliseum.rpak'}
     # Northstar loads a mod pak named after the level's own loadscreen pak on request.
@@ -806,6 +955,9 @@ if __name__=='__main__':
     p.add_argument('--fill-floor-notches',action='store_true',help='Complete the main floor where its rectangle is missing edge pieces')
     p.add_argument('--mesh-cluster',type=int,help='World units per render mesh cluster')
     p.add_argument('--luxel-size',type=int,help='World units per lightmap texel; raise it on large maps to stay within the mesh budget')
+    p.add_argument('--material-templates',type=Path,help='Directory from extract_material_templates.py: glass draws translucent, textures with holes alpha-tested')
+    p.add_argument('--cutout-leaves',action='store_true',help='With --material-templates, draw leaves alpha-tested instead of on a solid backing')
+    p.add_argument('--redstone',action='store_true',help='Turn redstone pistons, doors and TNT into scripted movers (see minecraft_redstone.py)')
     p.add_argument('--terrain',action='store_true',help='Natural worlds: fill sealed caves and hide faces between blocks so buried ground merges')
     p.add_argument('--view-portals',action='store_true',help='Build visibility cells and portals (experimental culling)')
     p.add_argument('--loadscreen',type=Path,help='1920x1080 image; without it the map shows Coliseum\'s')

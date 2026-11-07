@@ -130,7 +130,7 @@ void Shared::MakeMeshes(const entity_t &e) {
     Shared::lightmapByMaterial = e.boolForKey("_remap_lightmap_by_material");
 
     // Solid, visible brushes hide faces buried in or flush against them (see
-    // respawn/csg.h). Clip, trigger and translucent brushes hide nothing.
+    // respawn/csg.h). Clip, trigger, translucent and alpha-tested brushes hide nothing.
     std::vector<Respawn::Csg::Solid>  solids;
     int brush_order = 0;
     for (const brush_t &brush : e.brushes) {
@@ -140,7 +140,7 @@ void Shared::MakeMeshes(const entity_t &e) {
             if (side.bevel || !side.shaderInfo)
                 continue;
             visible |= !(side.shaderInfo->compileFlags & C_NODRAW);
-            translucent |= (side.shaderInfo->compileFlags & C_TRANSLUCENT) != 0;
+            translucent |= (side.shaderInfo->compileFlags & (C_TRANSLUCENT | C_ALPHASHADOW)) != 0;
             contents |= side.shaderInfo->contentFlags;
         }
         // Render-only brushes ("$contentflag nonsolid", e.g. Source func_illusionary)

@@ -63,6 +63,9 @@ Unset options are worked out from the world, and printed:
 | `--terrain` | Off | The world is natural terrain (see below) |
 | `--luxel-size N` | 16 | The compile exceeds the 1,000-mesh budget at the largest cluster |
 | `--loadscreen IMAGE --loadscreen-template BASE` | Coliseum's image | You have a 1920x1080 capture |
+| `--material-templates DIR` | Off: glass and holes drawn opaque | Always, once you have run `extract_material_templates.py`: glass blends, bars and levers are cut out, water shows |
+| `--cutout-leaves` | Off | Leaves should show holes (more faces to draw) |
+| `--redstone` | Off (`survival_games` preset: on) | The world has piston doors, iron doors or TNT traps worth working |
 
 Check each new map in-game. A good loading screen needs a capture from a built map, so build
 twice: once to take the shot (`impulse 200` hides the weapon, `cl_drawhud 0` the HUD), then
@@ -97,6 +100,74 @@ the `survival_games` preset converts the 321-block square around the cornucopia
 The BSP is 385 MB (lightmaps 134 MB, realtime-light lightmaps 151 MB), the player
 ZIP 90 MB. It loads in Northstar with no script errors. 16 lightmap pages is more
 than any earlier converted map used.
+
+With water, glass and cutouts (7 November) the same build had 1,062 meshes even at
+the largest cluster; the mesh count tracks remap's lightmap charts (one per mesh),
+and a 40-unit luxel, which does not divide the 48-unit block, gave more charts
+(1,366), not fewer. The preset now uses 48 units: 12 pages and 871 meshes
+(64 units: 867).
+
+## Glass, water and redstone (7 November 2026)
+
+**Glass and cutouts.** With `--material-templates` (see
+[RESPAWN_MATERIAL_TEMPLATES.md](RESPAWN_MATERIAL_TEMPLATES.md)) glass, stained
+glass, panes and ice use the translucent template; textures with holes (more than
+2% of texels below alpha 128) use the alpha-tested one. Their textures keep alpha,
+uncompressed. In terrain mode a face against a see-through block of another
+material is no longer hidden, so stone behind glass shows; faces between two
+identical glass blocks still hide. UMA rebuilt this way: 15 stained-glass
+textures blend and 9 textures (iron bars, levers, torches) are cut out; in
+Northstar the yellow panes show the floor and walls behind them and levers draw
+as thin handles with no backing.
+
+**Water.** Titanfall 2 has no swimming. As in its single-player levels (BT-7274's
+crash site), water is a see-through surface over a kill volume. Each top water
+cell becomes a 1/16-block slab at 14/16 of the block (still water's surface) with
+the tinted `water_still` texture, render-only. Columns deep enough to go under get
+a kill volume from their bed to 64 units below the surface: pilots wade through
+water up to about 1.3 blocks deep and die where they would be fully under.
+Columns merge into rectangles by surface height, each reaching down to its deepest
+bed. The level script tests players against them (with an overall box first) in
+its fall-death loop, every 0.1 s. Survival Games: 133,204 water blocks, 585
+surface brushes, 560 kill volumes; the boxes are also written to
+`water-kill-volumes.json`.
+
+**Redstone** (`minecraft_redstone.py`, `--redstone`). Redstone parts within two
+blocks of each other form a circuit (which covers power passing through one
+block). Circuits with an input and a moving output become script movers:
+
+| Minecraft | Titanfall 2 |
+| --- | --- |
+| Button | Use key while looking at it within 2.5 blocks; springs back after 1.5 s |
+| Lever | Use key; toggles |
+| Pressure plate | On while a pilot stands on it |
+| Piston, retracted | The block in front moves one block out |
+| Sticky piston, extended | Head and the block it holds move one block back |
+| Door | Swings 90 degrees about its hinge edge |
+| TNT | Explodes 2 s later (radius damage over 4 blocks), once |
+
+Every output of a circuit switches together: repeater delays, torch inversion and
+clocks are not simulated, so puzzle or sequenced circuits only approximate the
+original. Dispensers, lamps, note blocks and wire stay static. Moving blocks are
+left out of the world; each group is a `func_brush` (`mrvn_rs_<circuit>_<m|d|t><n>`)
+with its textured boxes plus `_nodraw` collision boxes, and **no origin key**:
+remap writes brush models in world coordinates and the engine adds the entity
+origin again, which put a test brush 2,150 units away. `RS_Init` parents each brush
+to a `CreateScriptMover` (at the hinge for doors) and drives it with
+`NonPhysicsMoveTo` / `NonPhysicsRotateTo`; use is read with
+`AddButtonPressedPlayerInputCallback( player, IN_USE, ... )`. A test `func_brush`
+in UMA rendered and moved this way in Northstar. Survival Games has 10 working
+circuits (120 moving blocks): two piston doors, a lever-raised field of 24 iron
+blocks, three pressure-plate TNT traps, two door circuits and smaller piston
+mechanisms. In Northstar all 16 movers were found; circuits switched from the console
+(`script RS_SetCircuit( 1, true )`; the function is declared global at the top of
+the level script, as Squirrel requires) and a TNT trap exploded without script
+errors. Most of these mechanisms are buried in hillsides or under the cornucopia,
+so their movement was checked in the log, not on screen.
+
+Squirrel pitfalls met here: a `?:` next to a vector literal (`a ? b : < 0, 0, 0 >`)
+does not compile, and `global function` declarations must come before every
+function in the file.
 
 Coordinates transform to `(X,-Z,Y)` around the anchor at 48 Source units per block, allowing
 a 72-unit pilot under two-block doors.
@@ -212,9 +283,10 @@ machine's. Camera sweeps sample views, so culling elsewhere is not ruled out.
 
 These are pilot-only local test ports. Auto-detection was tried on these two worlds only. No navmesh, Titans, AI, hardpoints,
 CTF positions, audio layout, minimap artwork or multiplayer balancing pass.
-Minecraft commands/redstone and moving mechanisms are not translated.
-Glass and leaves have opaque alpha backing; textures use their first animation
-frame. Per-face model UV rotations/subrectangles use approximate world tiling.
+Minecraft commands are not translated; redstone is approximated (above) only with
+`--redstone`. Without `--material-templates`, glass and leaves have opaque alpha
+backing and water is left out. Leaves keep their backing unless `--cutout-leaves`.
+Textures use their first animation frame. Per-face model UV rotations/subrectangles use approximate world tiling.
 Model-element rotations use unrotated bounds. Plants, signs/banners and
 zero-thickness elements are omitted; state types are recorded in each report.
 UMA's white-glass upper containment shell is invisible, so its roof looks open to the sky.

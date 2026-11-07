@@ -749,6 +749,7 @@ struct
  array<int> planeEnds
  table<entity, float> rampTimes
  table<entity, vector> rampVelocities
+ table<entity, float> traceUntil
 } file
 void function CodeCallback_MapInit()
 {
@@ -869,8 +870,8 @@ void function KillFallenPilots()
   wait 0.05
  }
 }
-'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', ' thread SurfRamps()' if surf else '')
-      + (SURF_SCRIPT if surf else ''))
+'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', (' thread SurfRamps()' if surf else '')+(' thread SurfTrace()' if surf and getattr(args, 'surf_trace', False) else ''))
+      + (SURF_SCRIPT if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
     # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
     shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
@@ -948,6 +949,7 @@ void function SurfRamps()
     }
     file.rampTimes[player] <- Time()
     file.rampVelocities[player] <- player.GetVelocity()
+    file.traceUntil[player] <- Time() + 3.0
    }
    else if ( surfing && Time() - file.rampTimes[player] > 0.25 )
     StopSurfing( player )
@@ -961,6 +963,31 @@ void function StopSurfing( entity player )
  delete file.rampVelocities[player]
  player.UnforceCrouch()
  player.SetGroundFrictionScale( 1.0 )
+}
+'''
+
+# --surf-trace: while a pilot is on a ramp or left one in the last 3 s, log their state ten
+# times a second as "[surftrace] time origin velocity ground crouched sliding mantling normal".
+# Demos crash Northstar 1.31 on stop, so this is how play-tested surf problems get diagnosed.
+SURF_TRACE_SCRIPT = '''
+void function SurfTrace()
+{
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   if ( !IsAlive( player ) || !( player in file.traceUntil ) || Time() > file.traceUntil[player] )
+    continue
+   vector o = player.GetOrigin()
+   TraceResults r = TraceLine( o + <0, 0, 4>, o - <0, 0, 40>, player, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
+   string n = "-"
+   if ( r.fraction < 1.0 )
+    n = string( r.surfaceNormal )
+   printl( "[surftrace] " + Time() + " o=" + o + " v=" + player.GetVelocity() + " g=" + player.IsOnGround() + " c=" + player.IsCrouched()
+    + " s=" + player.IsSliding() + " m=" + player.IsMantling() + " n=" + n )
+  }
+  wait 0.1
+ }
 }
 '''
 
@@ -1037,5 +1064,6 @@ if __name__ == '__main__':
     p.add_argument('--luxel-size', type=float, default=LUXEL_SIZE, help='World units per lightmap texel to start from')
     p.add_argument('--surf', action=argparse.BooleanOptionalAction, default=None,
                    help='No ground friction on slopes steeper than Source allows standing on, so surf ramps work (default: on for surf_ maps)')
+    p.add_argument('--surf-trace', action='store_true', help='Log surfing pilot position, velocity and state to the console 10 times a second (play-test diagnosis)')
     p.add_argument('--no-props', dest='props', action='store_false', help='Leave static props out')
     print(json.dumps(build(p.parse_args()), indent=2))

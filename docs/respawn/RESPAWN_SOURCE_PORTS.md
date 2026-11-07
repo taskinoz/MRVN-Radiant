@@ -119,6 +119,14 @@ skips them.
   Source's ClipVelocity each frame within reach of the ramp (remove the velocity component into the
   surface). Replayed from the same state, vz on the rising ramp went from -450 to +140..+280. As in
   Source, holding a line now needs strafing into the ramp.
+- **Ramp bugs.** A per-frame `[surfevent]` log caught pilots losing forward speed in one tick at the
+  end of surf_utopia's curved ramp (2,686 to 459 units/s, vertical speed kept, so they shot straight
+  up) with nothing in the way. The ramp's last 32 units are a separate brush with the same top
+  surface; crossing that seam, the per-brush collision caught the strip's hidden back face. The
+  surf script now does what surf servers' rampbug fixes do: a speed loss over 400 units/s in a tick
+  while surfing is undone (previous velocity, gravity applied, clipped against any ramp swept into)
+  unless a hull sweep along the last tick hits a wall, floor or ceiling, or the pilot teleported.
+  Server script frames here are 0.1 s apart.
 - `--surf-trace` logs `[surftrace] time origin velocity ground crouched sliding mantling normal` ten
   times a second while a pilot is on a ramp or left one in the last 3 s. Demo recording crashed
   Northstar 1.31 on `stop` (access violation in ntdll; the .dem had a header and no ticks).

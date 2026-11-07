@@ -750,6 +750,9 @@ struct
  table<entity, float> rampTimes
  table<entity, vector> rampVelocities
  table<entity, float> traceUntil
+ table<entity, vector> lastVel
+ table<entity, vector> lastOrigin
+ table<entity, float> lastTime
 } file
 void function CodeCallback_MapInit()
 {
@@ -917,6 +920,11 @@ SURF_SCRIPT = '''
 // trace on surf_utopia: rising 1,370 units/s while reporting -377), so pilots left ramps with no
 // upward speed. Source's ClipVelocity is applied instead: within reach of the ramp, the part of
 // the velocity going into it is removed every frame.
+// Ramp bugs: crossing the seam between two brushes of one ramp, Titanfall's per-brush collision
+// can catch the next brush's hidden back face (surf_utopia's curved ramp end: 2,686 units/s
+// forward became 459 in one tick, with nothing in the way). As surf servers' rampbug fixes do,
+// a big speed loss while surfing is undone unless a hull sweep along the last tick's motion
+// hits a real wall, floor or ceiling; it is logged as [surf].
 void function SurfRamps()
 {
  while ( true )
@@ -931,6 +939,8 @@ void function SurfRamps()
     continue
    }
    vector o = player.GetOrigin()
+   if ( surfing && player in file.lastVel )
+    FixRampBug( player, o )
    // A line from the feet: on a 52 degree ramp the surface under the centre is up to 21 units below them.
    TraceResults r = TraceLine( o + <0, 0, 4>, o - <0, 0, 40>, player, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
    if ( r.fraction < 1.0 && r.surfaceNormal.z > 0.05 && r.surfaceNormal.z < 0.7 )
@@ -966,14 +976,51 @@ void function SurfRamps()
    }
    else if ( surfing && Time() - file.rampTimes[player] > 0.25 )
     StopSurfing( player )
+   if ( player in file.rampTimes )
+   {
+    file.lastVel[player] <- player.GetVelocity()
+    file.lastOrigin[player] <- o
+    file.lastTime[player] <- Time()
+   }
   }
   WaitFrame()
  }
+}
+void function FixRampBug( entity player, vector o )
+{
+ vector prev = file.lastVel[player]
+ vector cur = player.GetVelocity()
+ if ( Length( prev ) - Length( cur ) < 400.0 )
+  return
+ float dt = Time() - file.lastTime[player]
+ vector from = file.lastOrigin[player]
+ // A teleport (the jail, a stage reset) also zeroes velocity: leave those alone.
+ if ( Distance( o, from ) > Length( prev ) * dt + 200.0 )
+  return
+ TraceResults h = TraceHull( from, from + prev * dt, < -16, -16, 0 >, < 16, 16, 48 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+ if ( h.fraction < 1.0 && ( h.surfaceNormal.z <= 0.05 || h.surfaceNormal.z >= 0.7 ) )
+  return
+ // Pilot gravity: free flight in the traces loses about 600 units/s of vertical speed a second.
+ vector fixed = prev - < 0, 0, 600.0 * dt >
+ if ( h.fraction < 1.0 )
+ {
+  float into = DotProduct( fixed, h.surfaceNormal )
+  if ( into < 0.0 )
+   fixed = fixed - h.surfaceNormal * into
+ }
+ printl( "[surf] fixed a ramp bug at " + o + ": " + cur + " -> " + fixed )
+ player.SetVelocity( fixed )
 }
 void function StopSurfing( entity player )
 {
  delete file.rampTimes[player]
  delete file.rampVelocities[player]
+ if ( player in file.lastVel )
+ {
+  delete file.lastVel[player]
+  delete file.lastOrigin[player]
+  delete file.lastTime[player]
+ }
  player.UnforceCrouch()
  player.SetGroundFrictionScale( 1.0 )
 }

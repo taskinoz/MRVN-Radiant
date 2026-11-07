@@ -47,6 +47,9 @@ For Team Fortress 2, pass both `--game-dir ...\Team Fortress 2\tf` and `--game-d
   their whole subtree, and reading those filled Jump Academy's spawn cave with solid.
   Without templates, cutout and translucent prop parts (foliage cards, wires, glass) are skipped, as are props
   inside the 3D skybox room. `--no-props` leaves props out.
+- Loading screen and map text: `--loadscreen IMAGE --loadscreen-template BASE` builds the map's own
+  `<level>_loadscreen.rpak` (as the Minecraft converter does; without it the level aliases Coliseum's),
+  and `--description` sets the lobby and loading-screen description (default "Port of <bsp>").
 - Spawns: TF2 team spawns or Counter-Strike `info_player_terrorist` / `info_player_counterterrorist`,
   otherwise HL2 ground `info_node`s at the two ends of the map's main axis.
   `--spawns X1 Y1 X2 Y2` overrides this.

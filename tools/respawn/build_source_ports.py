@@ -20,7 +20,7 @@ import zipfile
 import numpy as np
 from PIL import Image
 
-from build_minecraft_ports import MESH_BUDGET, visibility_coverage, write_dds_bc1
+from build_minecraft_ports import MESH_BUDGET, build_loadscreen, visibility_coverage, write_dds_bc1
 from build_quake_materials import solid, write_dds
 from compiler_regression import entity
 from inspect_bsp import inspect
@@ -890,11 +890,19 @@ SURF_TELEPORT    break
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
     # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
     shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
-    (paks/'rpak.json').write_text(json.dumps({'Aliases': {level+'.rpak': 'mp_coliseum.rpak', level+'_loadscreen.rpak': 'mp_coliseum_loadscreen.rpak'}}, indent=2))
+    aliases = {level+'.rpak': 'mp_coliseum.rpak'}
+    # The level asks for <level>_loadscreen.rpak; without a capture of its own it gets Coliseum's.
+    if getattr(args, 'loadscreen', None):
+        if not args.loadscreen_template: raise SystemExit('--loadscreen needs --loadscreen-template')
+        shutil.copyfile(build_loadscreen(out, args, level), paks/(level+'_loadscreen.rpak'))
+    else:
+        aliases[level+'_loadscreen.rpak'] = 'mp_coliseum_loadscreen.rpak'
+    (paks/'rpak.json').write_text(json.dumps({'Aliases': aliases}, indent=2))
     display = args.display_name or args.name
     resource = mod/'mod/resource'; resource.mkdir(parents=True)
+    description = getattr(args, 'description', None) or 'Port of '+source.stem
     tokens = {level: display, level+'_ALLCAPS': display.upper(), level+'_CLASSIC': display,
-              level+'_CLASSIC_DESC': 'Port of '+source.stem, level+'_DESC': 'Port of '+source.stem}
+              level+'_CLASSIC_DESC': description, level+'_DESC': description}
     body = ''.join(f'\t\t"{k}" "{v}"\n' for k, v in tokens.items())
     (resource/(level+'_english.txt')).write_bytes(b'\xff\xfe'+('"lang"\n{\n\t"Language" "english"\n\t"Tokens"\n\t{\n'+body+'\t}\n}\n').encode('utf-16-le'))
     (mod/'mod.json').write_text(json.dumps({'Name': modname, 'Version': VERSION, 'LoadPriority': 200, 'RequiredOnClient': True,
@@ -1176,6 +1184,9 @@ if __name__ == '__main__':
     for name in ('output', 'remap', 'repak', 'material-template'): p.add_argument('--'+name, type=Path, required=True)
     p.add_argument('--material-templates', type=Path, help='Directory from extract_material_templates.py: translucent and alpha-tested materials draw as such')
     p.add_argument('--display-name')
+    p.add_argument('--description', help='Map description shown in the lobby and loading screen (default: "Port of <bsp>")')
+    p.add_argument('--loadscreen', type=Path, help='1920x1080 image for the loading screen; without it the map shows the Coliseum one')
+    p.add_argument('--loadscreen-template', type=Path, help='Base path of a retail loadscreen _gen material .json/.uber pair')
     p.add_argument('--spawns', type=float, nargs=4, metavar=('X1', 'Y1', 'X2', 'Y2'), help='Centre of each team\'s spawn area, Source units')
     p.add_argument('--kill-z', type=float)
     p.add_argument('--mesh-cluster', type=int, default=MESH_CLUSTER)

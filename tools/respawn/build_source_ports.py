@@ -56,6 +56,7 @@ STATIC_BRUSH_ENTITIES = {'func_brush', 'func_wall', 'func_lod', 'func_detail', '
 TOOL_MATERIALS = {'tools/toolsclip': '_clip', 'tools/toolsplayerclip': '_clip', 'tools/toolsblack': '_black'}
 # Ground NPC nodes are on walkable floor; HL2 has no multiplayer spawns to use.
 NODE_CLASSES = {'info_node', 'info_node_hint'}
+CS_SPAWNS = {'info_player_terrorist': 2, 'info_player_counterterrorist': 3}
 
 
 def sanitize(name):
@@ -149,6 +150,9 @@ def choose_spawns(bsp, middle):
     for e in bsp.entities:
         if e.get('classname') == 'info_player_teamspawn' and e.get('TeamNum') in ('2', '3'):
             teams[int(e['TeamNum'])].append(tuple(map(float, e['origin'].split())))
+        # Counter-Strike: Source and CS:GO spawns.
+        elif e.get('classname') in CS_SPAWNS:
+            teams[CS_SPAWNS[e['classname']]].append(tuple(map(float, e['origin'].split())))
     if all(teams.values()):
         return {t: spread(p, p[0]) for t, p in teams.items()}
     nodes = np.array([tuple(map(float, e['origin'].split())) for e in bsp.entities if e.get('classname') in NODE_CLASSES])
@@ -611,10 +615,12 @@ doors, breakables, decals, overlays and normal maps are not.
                 'skipped': dict(skipped), 'invisible_glass': sorted(materials.invisible), 'missing_materials': dict(materials.missing),
                 'static_props': len(bsp.static_props()), 'prop_charts': len(charts), 'prop_collision_brushes': len(prop_brushes)}
     return assemble(args, out, materials, dict(brushes=brushes, patches=patches, keys=contents_keys, charts=charts),
-                    lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp))
+                    lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp), pushes(bsp))
 
 
-def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights, source, converted, metadata, teleports=()):
+def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights, source, converted, metadata, teleports=(), pushes=()):
+    surf = getattr(args, 'surf', None)
+    if surf is None: surf = Path(source).stem.lower().startswith('surf_')
     """Sky dome, menu stage, spawns and lights around converted world geometry; compile, validate and package the mod."""
     prefix = materials.prefix; brushes = world['brushes']
     centre = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
@@ -679,8 +685,10 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     scripts = mod/'mod/scripts/vscripts/mp/levels'; scripts.mkdir(parents=True)
     # Teleport triggers (jump maps' resets and course doors) are checked by script: no trigger brushes are compiled.
     # "<-" is Squirrel's slot operator, so vector literals open with a space.
-    adds = ''.join(f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g} )\n'
-                   for lo, hi, d, yaw in teleports)
+    adds = ''.join(f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n} )\n'
+                   for lo, hi, d, yaw, n in teleports)
+    adds += ''.join(f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} > )\n'
+                    for lo, hi, v in pushes)
     (scripts/(level+'.nut')).write_text('''global function CodeCallback_MapInit
 struct
 {
@@ -688,6 +696,11 @@ struct
  array<vector> maxs
  array<vector> destinations
  array<float> yaws
+ array<int> choices
+ array<vector> pushMins
+ array<vector> pushMaxs
+ array<vector> pushVelocities
+ table<entity, float> rampTimes
 } file
 void function CodeCallback_MapInit()
 {
@@ -695,14 +708,41 @@ void function CodeCallback_MapInit()
  ClassicMP_ForceDisableEpilogue( true )
  Riff_ForceTitanAvailability( eTitanAvailability.Never )
 TELEPORTS thread KillFallenPilots()
+SURF
 }
-void function AddTeleport( vector mins, vector maxs, vector destination, float yaw )
+void function AddTeleport( vector mins, vector maxs, vector destination, float yaw, int choices )
 {
  // Players touch a trigger when their hull overlaps it; origins are at the feet.
  file.mins.append( mins - <16, 16, 72> )
  file.maxs.append( maxs + <16, 16, 0> )
  file.destinations.append( destination )
  file.yaws.append( yaw )
+ // The first of `choices` consecutive entries with this box; one is picked at random.
+ file.choices.append( choices )
+}
+void function AddPush( vector mins, vector maxs, vector velocity )
+{
+ file.pushMins.append( mins - <16, 16, 72> )
+ file.pushMaxs.append( maxs + <16, 16, 0> )
+ file.pushVelocities.append( velocity )
+}
+// trigger_push: while inside, the player moves at least the push speed along its direction.
+void function ApplyPushes( entity player, vector o )
+{
+ for ( int i = 0; i < file.pushMins.len(); i++ )
+ {
+  vector lo = file.pushMins[i]
+  vector hi = file.pushMaxs[i]
+  if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
+   continue
+  vector push = file.pushVelocities[i]
+  float speed = Length( push )
+  vector dir = push / speed
+  vector v = player.GetVelocity()
+  float along = DotProduct( v, dir )
+  if ( along < speed )
+   player.SetVelocity( v + dir * ( speed - along ) )
+ }
 }
 void function KillFallenPilots()
 {
@@ -718,14 +758,16 @@ void function KillFallenPilots()
     player.TakeDamage( 10000, null, null, { damageSourceId = eDamageSourceId.fall } )
     continue
    }
+   ApplyPushes( player, o )
    for ( int i = 0; i < file.mins.len(); i++ )
    {
     vector lo = file.mins[i]
     vector hi = file.maxs[i]
     if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
      continue
-    player.SetOrigin( file.destinations[i] )
-    player.SetAngles( <0, file.yaws[i], 0> )
+    int k = i + RandomInt( file.choices[i] )
+    player.SetOrigin( file.destinations[k] )
+    player.SetAngles( <0, file.yaws[k], 0> )
     player.SetVelocity( <0, 0, 0> )
     break
    }
@@ -733,7 +775,8 @@ void function KillFallenPilots()
   wait 0.05
  }
 }
-'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds))
+'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', ' thread SurfRamps()' if surf else '')
+      + (SURF_SCRIPT if surf else ''))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
     # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
     shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
@@ -757,7 +800,7 @@ Extract {modname} into R2Northstar/mods and run `map {level} tdm`.
 {converted}'''
     (mod/'README.md').write_text(readme); (out/'README.md').write_text(readme)
     metadata = {'level': level, 'source': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), **metadata,
-                'world_meshes': meshes, 'mesh_cluster': cluster, 'luxel_size': luxel, 'lightmap_pages': pages, 'teleports': len(teleports), 'kill_z': kill_z, 'engine_verified': False}
+                'world_meshes': meshes, 'mesh_cluster': cluster, 'luxel_size': luxel, 'lightmap_pages': pages, 'teleports': len(teleports), 'pushes': len(pushes), 'surf': surf, 'kill_z': kill_z, 'engine_verified': False}
     (out/'conversion.json').write_text(json.dumps(metadata, indent=2))
     with zipfile.ZipFile(out/(modname+'-'+VERSION+'.zip'), 'x', zipfile.ZIP_DEFLATED) as z:
         for p in sorted(mod.rglob('*')):
@@ -765,17 +808,88 @@ Extract {modname} into R2Northstar/mods and run `map {level} tdm`.
     return metadata
 
 
+SURF_SCRIPT = '''
+// Surf ramps. Standing, Titanfall counts a slope as ground well past Source's 45.6 degree
+// walkable limit: ground movement stops a pilot sliding along a 52 degree ramp within half a
+// second. Crouched, the same ramp is not ground (tested in Northstar): the pilot keeps their
+// speed along it and slides down it as in Source. So on anything steeper than Source's limit
+// pilots are crouched, with no ground friction, until a quarter second after leaving it.
+void function SurfRamps()
+{
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   bool surfing = player in file.rampTimes
+   if ( !IsAlive( player ) )
+   {
+    if ( surfing )
+     StopSurfing( player )
+    continue
+   }
+   vector o = player.GetOrigin()
+   // A line from the feet: on a 52 degree ramp the surface under the centre is up to 21 units below them.
+   TraceResults r = TraceLine( o + <0, 0, 4>, o - <0, 0, 40>, player, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
+   if ( r.fraction < 1.0 && r.surfaceNormal.z > 0.05 && r.surfaceNormal.z < 0.7 )
+   {
+    if ( !surfing )
+    {
+     player.ForceCrouch()
+     player.SetGroundFrictionScale( 0.0 )
+    }
+    file.rampTimes[player] <- Time()
+   }
+   else if ( surfing && Time() - file.rampTimes[player] > 0.25 )
+    StopSurfing( player )
+  }
+  WaitFrame()
+ }
+}
+void function StopSurfing( entity player )
+{
+ delete file.rampTimes[player]
+ player.UnforceCrouch()
+ player.SetGroundFrictionScale( 1.0 )
+}
+'''
+
+
 def teleports(bsp):
     """(mins, maxs, destination, yaw) for each trigger_teleport with a destination; rotated or filtered ones too."""
     targets = {e.get('targetname'): e for e in bsp.entities if e.get('targetname')}
+    # Destinations a logic_case sets with "<trigger>,AddOutput,target <name>" (surf_utopia's jail
+    # picks a random cell this way); the trigger's own target is then a placeholder.
+    chosen = {}
+    for e in bsp.entities:
+        for key, value in e.items():
+            if not key.startswith('OnCase'): continue
+            m = re.match(r'([^,\x1b]+)[,\x1b]AddOutput[,\x1b]target (\S+?)[,\x1b]', value)
+            if m and m[2] in targets: chosen.setdefault(m[1], []).append(targets[m[2]])
     out = []
     for e in bsp.entities:
         if e.get('classname') != 'trigger_teleport' or not e.get('model', '').startswith('*'): continue
-        dest = targets.get(e.get('target'))
-        if dest is None: continue
+        dests = chosen.get(e.get('targetname'), [])
+        if not dests and e.get('target') in targets: dests = [targets[e['target']]]
         model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e))
-        yaw = float((dest.get('angles', '0 0 0').split()+['0', '0'])[1])
-        out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, origin(dest), yaw))
+        # Consecutive entries with the same box are alternatives; the level script picks one at random.
+        for dest in dests:
+            yaw = float((dest.get('angles', '0 0 0').split()+['0', '0'])[1])
+            out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, origin(dest), yaw, len(dests)))
+    return out
+
+
+def pushes(bsp):
+    """(mins, maxs, velocity) for each player trigger_push (spawnflags 1) that starts enabled."""
+    out = []
+    for e in bsp.entities:
+        if e.get('classname') != 'trigger_push' or not e.get('model', '').startswith('*'): continue
+        if not int(e.get('spawnflags', '0')) & 1 or e.get('StartDisabled') == '1' or float(e.get('speed', '0')) <= 0: continue
+        model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e))
+        pitch, yaw = (float(v) for v in (e.get('pushdir', '0 0 0').split()+['0', '0'])[:2])
+        p, y = math.radians(pitch), math.radians(yaw)
+        # Source angles: positive pitch looks down.
+        direction = np.array((math.cos(p)*math.cos(y), math.cos(p)*math.sin(y), -math.sin(p)))
+        out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, direction*float(e['speed'])))
     return out
 
 
@@ -797,5 +911,7 @@ if __name__ == '__main__':
     p.add_argument('--kill-z', type=float)
     p.add_argument('--mesh-cluster', type=int, default=MESH_CLUSTER)
     p.add_argument('--luxel-size', type=float, default=LUXEL_SIZE, help='World units per lightmap texel to start from')
+    p.add_argument('--surf', action=argparse.BooleanOptionalAction, default=None,
+                   help='No ground friction on slopes steeper than Source allows standing on, so surf ramps work (default: on for surf_ maps)')
     p.add_argument('--no-props', dest='props', action='store_false', help='Leave static props out')
     print(json.dumps(build(p.parse_args()), indent=2))

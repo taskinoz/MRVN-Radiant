@@ -132,6 +132,26 @@ its fall-death loop, every 0.1 s. Survival Games: 133,204 water blocks, 585
 surface brushes, 560 kill volumes; the boxes are also written to
 `water-kill-volumes.json`.
 
+A one-block-wide vertical run of water (no water beside it, water above or
+below) never kills: a waterfall, or a shaft such as a fountain. Titanfall pilots
+can always jump out of one, and pilots died partway down Glitch's two
+single-column waterfalls. Such a run is drawn as a see-through column, with side
+faces only where no block is beside it (a face against a wall would z-fight), down
+to the surface of any pool it pours into; that pool keeps its own kill volume.
+Rebuilt: Glitch's two 12-block falls are columns and its kill volumes went from
+5 to 3; in Northstar a pilot dropped down each fall landed at the bottom alive.
+Survival Games: 44 fall cells, 529 kill volumes.
+
+**Glass panes.** A pane is a post plus side arms (multipart `side`/`noside`
+models). The `noside` faces share the post's box, and the converter's check that
+drops duplicate boxes (meant for grass's tinted overlay) dropped them, so every
+pane had a see-through gap at its post and walls of panes read as separate
+strips. Same-box elements now merge their faces. Pane and iron-bar parts are then
+joined (`join_panes`): coincident opposite faces (pane to pane, stacked panes)
+become nodraw, as Minecraft culls them, so do edges against a full block, and
+parts sharing a whole face merge. UMA: 1,801 parts became 713 boxes; in Northstar
+its yellow pane railing is one continuous sheet.
+
 **Redstone** (`minecraft_redstone.py`, `--redstone`). Redstone parts within two
 blocks of each other form a circuit (which covers power passing through one
 block). Circuits with an input and a moving output become script movers:

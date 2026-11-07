@@ -254,7 +254,7 @@ class Models:
             if self.matches(condition, props): applies.append(spec); break
         for part in definition.get('multipart', []):
             if self.matches(part.get('when', {}), props): applies.append(part['apply'])
-        result = []; seen = set()
+        result = []; seen = {}
         for spec in applies:
             if isinstance(spec, list): spec = spec[0]
             model = self.model(spec['model']); tex = model.get('textures', {})
@@ -268,8 +268,7 @@ class Models:
                           for p in itertools.product(*zip(lo,hi))]
                 a = tuple(min(p[j] for p in points) for j in range(3))
                 b = tuple(max(p[j] for p in points) for j in range(3))
-                if (a,b) in seen: continue  # overlay faces, e.g. grass
-                seen.add((a,b)); mats = {}
+                mats = {}
                 for face, data in el['faces'].items():
                     t = data['texture']; visited = set()
                     while t.startswith('#'):
@@ -280,8 +279,14 @@ class Models:
                     dest = next(k for k,v in NORMALS.items() if v==normal)
                     mats[dest] = t
                 material = tuple(mats.get(f,'_nodraw') for f in FACES)
+                if (a,b) in seen:
+                    # A second element on the same box only adds faces the first lacks:
+                    # a pane's no-side faces on its post, not grass's tinted overlay.
+                    i = seen[a,b]; old = result[i][2]
+                    result[i] = (a,b,tuple(o if o!='_nodraw' else n for o,n in zip(old,material)))
+                    continue
                 if not any(t!='_nodraw' for t in material): continue
-                result.append((a,b,material))
+                seen[a,b] = len(result); result.append((a,b,material))
         return tuple(result)
 
 
@@ -302,6 +307,63 @@ def merge_cubes(cubes):
                 for c in range(z,Z): del remaining[a,b,c]
         boxes.append(((x,y,z),(X,Y,Z),mat))
     return boxes
+
+
+def join_panes(parts, cubes=()):
+    """Join glass-pane and iron-bar parts (block units) into continuous sheets.
+
+    Minecraft hides a pane's faces against a neighbouring pane, and its edge against a
+    full block. Each part was cut at the block grid, so drawn as is, a pane wall shows an
+    edge strip at every block. Coincident opposite faces become nodraw, as do faces on
+    a block boundary against a full block in ``cubes``, and parts that share a whole face
+    and agree on their other faces merge into one box."""
+    parts=[(tuple(lo),tuple(hi),list(mat)) for lo,hi,mat in parts]
+    # FACES order: down, up, south(+z), east(+x), north(-z), west(-x); per axis (low, high).
+    SIDES=((5,3),(0,1),(4,2))
+    faces={}
+    for i,(lo,hi,mat) in enumerate(parts):
+        for k in range(3):
+            rest=tuple((lo[j],hi[j]) for j in range(3) if j!=k)
+            for end,(plane,face) in enumerate(((lo[k],SIDES[k][0]),(hi[k],SIDES[k][1]))):
+                faces.setdefault((k,plane,rest),[]).append((i,face,end))
+    for (k,plane,rest),owners in faces.items():
+        if {e for _,_,e in owners}=={0,1}:
+            for i,face,_ in owners: parts[i][2][face]='_nodraw'
+    for lo,hi,mat in parts:
+        for k in range(3):
+            for end,plane in enumerate((lo[k],hi[k])):
+                if plane!=int(plane): continue
+                cell=[int(math.floor(v)) for v in lo]
+                cell[k]=int(plane) if end else int(plane)-1
+                if tuple(cell) in cubes: mat[SIDES[k][end]]='_nodraw'
+    merged=True
+    while merged:
+        merged=False
+        for k in range(3):
+            starts={}
+            for i,(lo,hi,mat) in enumerate(parts):
+                key=(lo[k],tuple((lo[j],hi[j]) for j in range(3) if j!=k))
+                starts.setdefault(key,[]).append(i)
+            gone=set()
+            for i,(lo,hi,mat) in enumerate(parts):
+                if i in gone: continue
+                while True:
+                    lo,hi,mat=parts[i]
+                    rest=tuple((lo[j],hi[j]) for j in range(3) if j!=k)
+                    keep=[f for f in range(6) if f not in SIDES[k]]
+                    match=next((n for n in starts.get((hi[k],rest),()) if n not in gone and n!=i
+                                and all(parts[n][2][f]==mat[f] for f in keep)),None)
+                    if match is None: break
+                    other=parts[match]; gone.add(match); merged=True
+                    new=list(mat); new[SIDES[k][1]]=other[2][SIDES[k][1]]
+                    parts[i]=(lo,tuple(other[1][j] if j==k else hi[j] for j in range(3)),new)
+            parts=[p for i,p in enumerate(parts) if i not in gone]
+    # Fully hidden parts stay: their brushes still collide.
+    return [(lo,hi,tuple(mat)) for lo,hi,mat in parts]
+
+
+def is_pane(name):
+    return name.endswith('_pane') or name=='iron_bars'
 
 
 HIDDEN = '_nodraw_ns'  # a face nothing can see, on a render-only brush: draws and blocks nothing
@@ -374,14 +436,25 @@ def water_bodies(blocks):
     volume: returns (surface cells merged into boxes, kill boxes in block units).
     A kill box covers columns deep enough to go under, from their deepest bed up to
     SUBMERGED units below the surface: pilots wade through shallow water and die
-    where they would go under."""
+    where they would go under.
+
+    A one-block-wide vertical run of water (no water beside it, water above or below:
+    a waterfall, or a shaft such as a fountain) is not a pool: pilots can always jump
+    out of it, so it never kills, and they fall through it as through shallow water. It
+    is drawn as a see-through column, with sides only where it is open to the air; a
+    pool it pours into keeps its own surface and kill box."""
     water={(x,y,z) for x,y,z,s in blocks if s['Name'].split(':')[-1] in ('water','bubble_column')
            or s.get('Properties',{}).get('waterlogged')=='true'}
-    surface={p:((WATER,)*2+(HIDDEN,)*4) for p in water if (p[0],p[1]+1,p[2]) not in water}
+    # Anything built hides a column's side; air-like blocks (structure voids, light) don't.
+    walls={(x,y,z) for x,y,z,s in blocks if s['Name'].split(':')[-1] not in SKIP}-water
+    falls={(x,y,z) for x,y,z in water if not any((x+dx,y,z+dz) in water for dx,dz in ((1,0),(-1,0),(0,1),(0,-1)))
+           and ((x,y+1,z) in water or (x,y-1,z) in water)}
+    pool=water-falls
+    surface={p:((WATER,)*2+(HIDDEN,)*4) for p in pool if (p[0],p[1]+1,p[2]) not in pool}
     columns={}
     for x,y,z in surface:
         depth=1
-        while (x,y-depth,z) in water: depth+=1
+        while (x,y-depth,z) in pool: depth+=1
         top=y+WATER_TOP-SUBMERGED/SCALE
         if top>y-depth+1: columns[x,y,z]=depth
     # One box per rectangle of equal surface height, down to its deepest bed.
@@ -390,6 +463,18 @@ def water_bodies(blocks):
         bed=min(a[1]-columns[x,a[1],z]+1 for x in range(a[0],b[0]) for z in range(a[2],b[2]))
         kills.append(((a[0],bed,a[2]),(b[0],a[1]+WATER_TOP-SUBMERGED/SCALE,b[2])))
     slabs=[((a[0],a[1]+WATER_TOP-1/16,a[2]),(b[0],a[1]+WATER_TOP,b[2]),m) for a,b,m in merge_cubes(surface)]
+    # Columns, split where their open sides change: the top drawn where a column starts,
+    # the bottom reaching down to a pool's surface.
+    def sides(x,y,z):
+        return tuple(HIDDEN if (x+dx,y,z+dz) in walls else WATER for dx,dz in ((0,1),(1,0),(0,-1),(-1,0)))
+    for x,y,z in sorted(falls):
+        if (x,y+1,z) in falls and sides(x,y+1,z)==sides(x,y,z): continue
+        bottom=y
+        while (x,bottom-1,z) in falls and sides(x,bottom-1,z)==sides(x,y,z): bottom-=1
+        top=y+(1 if (x,y+1,z) in water else WATER_TOP)
+        low=bottom-(1-WATER_TOP) if (x,bottom-1,z) in pool else bottom
+        up=WATER if (x,y+1,z) not in water else HIDDEN
+        slabs.append(((x,low,z),(x+1,top,z+1),(HIDDEN,up)+sides(x,y,z)))
     return slabs,kills
 
 
@@ -656,7 +741,7 @@ def build(args):
     (out/'selected-blocks.json').write_text(json.dumps(blocks))
     models=Models(args.jar)
     prefix=ASSET_ROOT+args.name+'/'
-    cubes={}; small=[]; counts=Counter(); names={'_sky','_sky_void','_nodraw'}
+    cubes={}; small=[]; panes=[]; counts=Counter(); names={'_sky','_sky_void','_nodraw'}
     anchor=tuple(args.anchor)
     invisible=[tuple(rule.split(':')) for rule in ['barrier',*(args.invisible_block or [])]]
     clip_cells={}
@@ -679,7 +764,10 @@ def build(args):
         for lo,hi,mat in shapes:
             names.update(mat)
             if lo==(0,0,0) and hi==(16,16,16) and len(shapes)==1: cubes[x,y,z]=mat
-            else: small.append((tuple(v+a/16 for v,a in zip((x,y,z),lo)),tuple(v+b/16 for v,b in zip((x,y,z),hi)),mat))
+            else: (panes if is_pane(name) else small).append((tuple(v+a/16 for v,a in zip((x,y,z),lo)),tuple(v+b/16 for v,b in zip((x,y,z),hi)),mat))
+    if panes:
+        joined=join_panes(panes,cubes);small+=joined
+        print(f'panes: {len(panes)} parts joined into {len(joined)}',flush=True)
     water_slabs,water_kills=water_bodies(blocks) if args.material_templates else ([],[])
     if water_slabs:
         names.update((WATER,HIDDEN))

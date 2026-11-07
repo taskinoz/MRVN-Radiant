@@ -47,7 +47,8 @@ For Team Fortress 2, pass both `--game-dir ...\Team Fortress 2\tf` and `--game-d
   their whole subtree, and reading those filled Jump Academy's spawn cave with solid.
   Without templates, cutout and translucent prop parts (foliage cards, wires, glass) are skipped, as are props
   inside the 3D skybox room. `--no-props` leaves props out.
-- Spawns: TF2 team spawns, otherwise HL2 ground `info_node`s at the two ends of the map's main axis.
+- Spawns: TF2 team spawns or Counter-Strike `info_player_terrorist` / `info_player_counterterrorist`,
+  otherwise HL2 ground `info_node`s at the two ends of the map's main axis.
   `--spawns X1 Y1 X2 Y2` overrides this.
 
 Not converted: dynamic and physics props (`prop_dynamic`, `prop_physics`), the 3D skybox's
@@ -82,6 +83,34 @@ and the teleport destination stand on floor, 13 of 13 sampled terrain displaceme
 surface height, the course doors show their labels, and there is no magenta. Earlier builds showed
 magenta z-fighting on the terrain because remap drew the nodraw displacement collision patches; it now
 skips them.
+
+## Teleports, pushes and surf ramps
+
+- `trigger_teleport`s are checked by the level script against their boxes. A trigger whose
+  destination a `logic_case` sets with `<trigger>,AddOutput,target <name>` (surf_utopia's jail picks
+  a random cell of eight this way; the trigger's own `target` is a placeholder) gets every such
+  destination, and the script picks one at random.
+- Player `trigger_push`es (spawnflags 1, enabled) are checked the same way: inside one, a pilot's
+  speed along the push direction is raised to the push speed. Source `pushdir` angles: pitch -90 is up.
+- **Surf ramps** (`--surf`, on by default for `surf_` maps). In Source a slope steeper than 45.6°
+  (normal z below 0.7) is not ground, so players slide along it without friction and steer by air
+  strafing. Titanfall 2 treats a standing pilot on a 52° ramp as on the ground: ground movement
+  took a pilot pushed along a surf_utopia ramp from 900 to almost 0 units/s in half a second, and
+  slid them down it at a capped ~200 units/s. `SetGroundFrictionScale( 0 )` alone did not help.
+  Crouched, the same pilot is not on the ground: they kept 900 units/s along the ramp and slid down
+  it accelerating, as in Source. The level script traces under each pilot every frame; on a
+  surface with normal z between 0.05 and 0.7 it calls `ForceCrouch()` and sets ground friction 0,
+  and undoes both (`UnforceCrouch()`) a quarter second after the pilot leaves it. No player setting
+  or convar sets Titanfall's ground-slope limit (the player settings have `stepHeight`,
+  `stepTestDist`, `airSpeed` and `airAcceleration`, nothing for slopes).
+
+`surf_utopia_v3` (the TF2 build from the fastdl.me mirror, 0.1.0): 5,130 brushes, 6 static props
+(its ramp sections and credits are models with collision), every material packed in the map but
+one HL2 water texture. It spans the whole ±16k Source world: at 16 units per luxel remap ran out
+of memory baking light; 40 units fits four 2048-pixel pages, 519 meshes. 648 teleport entries
+(74 jail triggers × 8 cells, plus the rest), 6 pushes. Tested in Northstar: surfing on two ramps,
+falling into the jail at random cells. The jail's doors, buttons, crate traps and explosions are
+not converted, so its cells are open.
 
 ## Large maps
 

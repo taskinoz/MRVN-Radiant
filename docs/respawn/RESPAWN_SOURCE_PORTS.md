@@ -112,6 +112,16 @@ skips them.
   each as `[surf]`: a rising ramp ahead can read as a wall with a ledge, and a crouch on a frame
   counted as ground starts a slide. (Reported in play as being pushed forward with no lift on
   surf_utopia's curved second ramp; not reproduced with scripted input, so unconfirmed.)
+- **Ramp velocity clip.** A `--surf-trace` play log on surf_utopia's curved ramp showed Titanfall
+  moving a crouched airborne pilot up a rising ramp without changing their velocity: rising 1,370
+  units/s while reporting vz = -377, and keeping a push into the ramp too. Pilots left the top with
+  no upward speed and fell onto the jail slope instead of clearing the gap. The script now applies
+  Source's ClipVelocity each frame within reach of the ramp (remove the velocity component into the
+  surface). Replayed from the same state, vz on the rising ramp went from -450 to +140..+280. As in
+  Source, holding a line now needs strafing into the ramp.
+- `--surf-trace` logs `[surftrace] time origin velocity ground crouched sliding mantling normal` ten
+  times a second while a pilot is on a ramp or left one in the last 3 s. Demo recording crashed
+  Northstar 1.31 on `stop` (access violation in ntdll; the .dem had a header and no ticks).
 - **Sky dome fitted to the geometry.** The dome was a hemisphere sized by the map's width; surf_utopia
   fills the world's corners and is as tall as it is wide, so the sky cut through ramps near the
   corners. `fit_dome` now makes it a half-ellipsoid that clears every brush box by 1,000 units, kept

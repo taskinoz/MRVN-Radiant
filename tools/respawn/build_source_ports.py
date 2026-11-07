@@ -913,6 +913,10 @@ SURF_SCRIPT = '''
 // with a ledge, and the pilot is vaulted forward) and slides (crouching at speed on a frame
 // counted as ground starts one, with its forward boost). Both are cancelled on a ramp and the
 // previous frame's velocity restored; each cancel is logged as [surf].
+// Titanfall also moves a pilot up a rising ramp without turning the climb into velocity (play
+// trace on surf_utopia: rising 1,370 units/s while reporting -377), so pilots left ramps with no
+// upward speed. Source's ClipVelocity is applied instead: within reach of the ramp, the part of
+// the velocity going into it is removed every frame.
 void function SurfRamps()
 {
  while ( true )
@@ -946,6 +950,15 @@ void function SurfRamps()
     {
      printl( "[surf] cancelled a slide boost at " + o )
      player.SetVelocity( file.rampVelocities[player] )
+    }
+    // The line starts 4 units above the feet and is 44 long; on the ramp the surface under the
+    // centre is at most 21 units below the feet.
+    if ( r.fraction * 44.0 - 4.0 < 24.0 )
+    {
+     vector v = player.GetVelocity()
+     float into = DotProduct( v, r.surfaceNormal )
+     if ( into < 0.0 )
+      player.SetVelocity( v - r.surfaceNormal * into )
     }
     file.rampTimes[player] <- Time()
     file.rampVelocities[player] <- player.GetVelocity()

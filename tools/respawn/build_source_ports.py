@@ -685,10 +685,27 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     scripts = mod/'mod/scripts/vscripts/mp/levels'; scripts.mkdir(parents=True)
     # Teleport triggers (jump maps' resets and course doors) are checked by script: no trigger brushes are compiled.
     # "<-" is Squirrel's slot operator, so vector literals open with a space.
-    adds = ''.join(f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n} )\n'
-                   for lo, hi, d, yaw, n in teleports)
-    adds += ''.join(f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} > )\n'
-                    for lo, hi, v in pushes)
+    # Each trigger's brushes are listed once (AddBrush), then referenced by index range.
+    adds = ''; brush_ids = {}
+    def brush_range(brushes):
+        nonlocal adds
+        key = repr(brushes)
+        if key not in brush_ids:
+            first = sum(len(v) for v in brush_ids.values())
+            for planes in brushes:
+                normals = ', '.join(f'< {n[0]:.6g}, {n[1]:.6g}, {n[2]:.6g} >' for n, _ in planes)
+                dists = ', '.join(f'{d:.1f}' for _, d in planes)  # floats: Squirrel won't pass array<int>
+                adds += f' AddBrush( [ {normals} ], [ {dists} ] )\n'
+            brush_ids[key] = list(range(first, first+len(brushes)))
+        ids = brush_ids[key]
+        return (ids[0], ids[-1]+1) if ids else (0, 0)
+    for lo, hi, d, yaw, n, brushes in teleports:
+        a, b = brush_range(brushes)
+        adds += (f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, '
+                 f'< {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n}, {a}, {b} )\n')
+    for lo, hi, v, brushes in pushes:
+        a, b = brush_range(brushes)
+        adds += f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} >, {a}, {b} )\n'
     (scripts/(level+'.nut')).write_text('''global function CodeCallback_MapInit
 struct
 {
@@ -697,9 +714,16 @@ struct
  array<vector> destinations
  array<float> yaws
  array<int> choices
+ array<int> brushFirst
+ array<int> brushEnd
  array<vector> pushMins
  array<vector> pushMaxs
  array<vector> pushVelocities
+ array<int> pushBrushFirst
+ array<int> pushBrushEnd
+ array<vector> planeNormals
+ array<float> planeDists
+ array<int> planeEnds
  table<entity, float> rampTimes
 } file
 void function CodeCallback_MapInit()
@@ -710,7 +734,45 @@ void function CodeCallback_MapInit()
 TELEPORTS thread KillFallenPilots()
 SURF
 }
-void function AddTeleport( vector mins, vector maxs, vector destination, float yaw, int choices )
+// A convex trigger brush: its planes, outward normals, in world space.
+void function AddBrush( array<vector> normals, array<float> dists )
+{
+ for ( int i = 0; i < normals.len(); i++ )
+ {
+  file.planeNormals.append( normals[i] )
+  file.planeDists.append( dists[i] )
+ }
+ file.planeEnds.append( file.planeNormals.len() )
+}
+// Whether a standing pilot's hull (32x32x72, origin at the feet) overlaps any of brushes
+// [first, end); with none listed, the bounding box test alone decides.
+bool function TouchesBrushes( vector o, int first, int end )
+{
+ if ( first == end )
+  return true
+ vector c = o + <0, 0, 36>
+ for ( int b = first; b < end; b++ )
+ {
+  int p = 0
+  if ( b > 0 )
+   p = file.planeEnds[b - 1]
+  bool inside = true
+  for ( ; p < file.planeEnds[b]; p++ )
+  {
+   vector n = file.planeNormals[p]
+   float reach = fabs( n.x ) * 16.0 + fabs( n.y ) * 16.0 + fabs( n.z ) * 36.0
+   if ( DotProduct( n, c ) - file.planeDists[p] > reach )
+   {
+    inside = false
+    break
+   }
+  }
+  if ( inside )
+   return true
+ }
+ return false
+}
+void function AddTeleport( vector mins, vector maxs, vector destination, float yaw, int choices, int brushFirst, int brushEnd )
 {
  // Players touch a trigger when their hull overlaps it; origins are at the feet.
  file.mins.append( mins - <16, 16, 72> )
@@ -719,12 +781,16 @@ void function AddTeleport( vector mins, vector maxs, vector destination, float y
  file.yaws.append( yaw )
  // The first of `choices` consecutive entries with this box; one is picked at random.
  file.choices.append( choices )
+ file.brushFirst.append( brushFirst )
+ file.brushEnd.append( brushEnd )
 }
-void function AddPush( vector mins, vector maxs, vector velocity )
+void function AddPush( vector mins, vector maxs, vector velocity, int brushFirst, int brushEnd )
 {
  file.pushMins.append( mins - <16, 16, 72> )
  file.pushMaxs.append( maxs + <16, 16, 0> )
  file.pushVelocities.append( velocity )
+ file.pushBrushFirst.append( brushFirst )
+ file.pushBrushEnd.append( brushEnd )
 }
 // trigger_push: while inside, the player moves at least the push speed along its direction.
 void function ApplyPushes( entity player, vector o )
@@ -734,6 +800,8 @@ void function ApplyPushes( entity player, vector o )
   vector lo = file.pushMins[i]
   vector hi = file.pushMaxs[i]
   if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
+   continue
+  if ( !TouchesBrushes( o, file.pushBrushFirst[i], file.pushBrushEnd[i] ) )
    continue
   vector push = file.pushVelocities[i]
   float speed = Length( push )
@@ -764,6 +832,8 @@ void function KillFallenPilots()
     vector lo = file.mins[i]
     vector hi = file.maxs[i]
     if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
+     continue
+    if ( !TouchesBrushes( o, file.brushFirst[i], file.brushEnd[i] ) )
      continue
     int k = i + RandomInt( file.choices[i] )
     player.SetOrigin( file.destinations[k] )
@@ -854,8 +924,21 @@ void function StopSurfing( entity player )
 '''
 
 
+def trigger_brushes(bsp, e):
+    """A brush entity's convex brushes as lists of world (normal, dist) planes.
+
+    Triggers are often not boxes: surf_utopia's are thin slabs along its slopes, whose
+    bounding boxes take in the air above the next ramp."""
+    if not hasattr(bsp, 'brushes'): return []
+    offset = np.array(origin(e)); out = []
+    for k in bsp.model_brushes(int(e['model'][1:])):
+        out.append([(tuple(float(v) for v in side.normal), float(side.dist + np.dot(side.normal, offset)))
+                    for side in bsp.brushes[k].sides if not side.bevel])
+    return out
+
+
 def teleports(bsp):
-    """(mins, maxs, destination, yaw) for each trigger_teleport with a destination; rotated or filtered ones too."""
+    """(mins, maxs, destination, yaw, choices, brushes) for each trigger_teleport with a destination."""
     targets = {e.get('targetname'): e for e in bsp.entities if e.get('targetname')}
     # Destinations a logic_case sets with "<trigger>,AddOutput,target <name>" (surf_utopia's jail
     # picks a random cell this way); the trigger's own target is then a placeholder.
@@ -870,16 +953,16 @@ def teleports(bsp):
         if e.get('classname') != 'trigger_teleport' or not e.get('model', '').startswith('*'): continue
         dests = chosen.get(e.get('targetname'), [])
         if not dests and e.get('target') in targets: dests = [targets[e['target']]]
-        model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e))
+        model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e)); brushes = trigger_brushes(bsp, e)
         # Consecutive entries with the same box are alternatives; the level script picks one at random.
         for dest in dests:
             yaw = float((dest.get('angles', '0 0 0').split()+['0', '0'])[1])
-            out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, origin(dest), yaw, len(dests)))
+            out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, origin(dest), yaw, len(dests), brushes))
     return out
 
 
 def pushes(bsp):
-    """(mins, maxs, velocity) for each player trigger_push (spawnflags 1) that starts enabled."""
+    """(mins, maxs, velocity, brushes) for each player trigger_push (spawnflags 1) that starts enabled."""
     out = []
     for e in bsp.entities:
         if e.get('classname') != 'trigger_push' or not e.get('model', '').startswith('*'): continue
@@ -889,7 +972,7 @@ def pushes(bsp):
         p, y = math.radians(pitch), math.radians(yaw)
         # Source angles: positive pitch looks down.
         direction = np.array((math.cos(p)*math.cos(y), math.cos(p)*math.sin(y), -math.sin(p)))
-        out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, direction*float(e['speed'])))
+        out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, direction*float(e['speed']), trigger_brushes(bsp, e)))
     return out
 
 

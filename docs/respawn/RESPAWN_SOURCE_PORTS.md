@@ -90,6 +90,10 @@ skips them.
   destination a `logic_case` sets with `<trigger>,AddOutput,target <name>` (surf_utopia's jail picks
   a random cell of eight this way; the trigger's own `target` is a placeholder) gets every such
   destination, and the script picks one at random.
+- Triggers are tested against their real brushes, not their bounding boxes: the script gets each
+  brush's planes and checks a 32x32x72 hull against them (box first, then the planes). Many of
+  surf_utopia's fail triggers are thin slabs lying on its 41° slopes, 1,824 units tall as boxes;
+  box tests sent pilots to jail while they rode the neighbouring surf ramps.
 - Player `trigger_push`es (spawnflags 1, enabled) are checked the same way: inside one, a pilot's
   speed along the push direction is raised to the push speed. Source `pushdir` angles: pitch -90 is up.
 - **Surf ramps** (`--surf`, on by default for `surf_` maps). In Source a slope steeper than 45.6°

@@ -27,7 +27,7 @@ class SourcePortTests(unittest.TestCase):
             {'classname': 'info_teleport_destination', 'targetname': 'start', 'origin': '0 0 5'},
         ]
         out = teleports(bsp(ents, [(0,)*6, (-8, -8, -8, 8, 8, 8)]))
-        self.assertEqual([(tuple(d), yaw, n) for _, _, d, yaw, n in out],
+        self.assertEqual([(tuple(d), yaw, n) for _, _, d, yaw, n, _ in out],
                          [((10, 0, 0), 90, 2), ((20, 0, 0), 180, 2), ((0, 0, 5), 0, 1)])
         # Alternatives share their trigger box, consecutively.
         self.assertTrue(np.array_equal(out[0][0], out[1][0]))
@@ -41,10 +41,25 @@ class SourcePortTests(unittest.TestCase):
         ]
         out = pushes(bsp(ents, [(0,)*6, (-4, -4, -4, 4, 4, 4)]))
         self.assertEqual(len(out), 2)
-        (lo, hi, up), (_, _, side) = out
+        (lo, hi, up, _), (_, _, side, _) = out
         self.assertEqual(tuple(lo), (-4, -4, 96))
         np.testing.assert_allclose(up, (0, 0, 1000), atol=1e-9)   # pitch -90 is straight up
         np.testing.assert_allclose(side, (0, 500, 0), atol=1e-9)
+
+    def test_trigger_brushes_are_world_planes(self):
+        # A slab along a 45 degree slope, stored relative to its entity origin as compiled.
+        n = (math.sqrt(.5), 0.0, math.sqrt(.5))
+        sides = [SimpleNamespace(normal=n, dist=8.0, bevel=False), SimpleNamespace(normal=tuple(-v for v in n), dist=8.0, bevel=False),
+                 SimpleNamespace(normal=(0.0, 0.0, 1.0), dist=100.0, bevel=True)]
+        fake = bsp([{'classname': 'trigger_teleport', 'model': '*1', 'origin': '0 0 100', 'target': 'd'},
+                    {'classname': 'info_teleport_destination', 'targetname': 'd', 'origin': '0 0 0'}],
+                   [(0,)*6, (-8, -8, -8, 8, 8, 8)])
+        fake.brushes = [SimpleNamespace(sides=sides)]
+        fake.model_brushes = lambda model: [0]
+        (*_, brushes), = teleports(fake)
+        (planes,) = brushes
+        self.assertEqual(len(planes), 2)   # bevels are left out
+        self.assertAlmostEqual(planes[0][1], 8 + 100*math.sqrt(.5))
 
     def test_counter_strike_spawns(self):
         ents = [{'classname': 'info_player_terrorist', 'origin': f'{x} 0 0'} for x in range(0, 2000, 400)]

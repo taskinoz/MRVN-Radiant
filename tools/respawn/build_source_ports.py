@@ -735,9 +735,9 @@ void function KillFallenPilots()
 }
 '''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
-    shutil.copyfile(out/'pak-build'/pakname, paks/pakname)
-    (paks/'rpak.json').write_text(json.dumps({'Aliases': {level+'.rpak': 'mp_coliseum.rpak', level+'_loadscreen.rpak': 'mp_coliseum_loadscreen.rpak'},
-                                              'Postload': {pakname: 'mp_coliseum.rpak'}}, indent=2))
+    # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
+    shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
+    (paks/'rpak.json').write_text(json.dumps({'Aliases': {level+'.rpak': 'mp_coliseum.rpak', level+'_loadscreen.rpak': 'mp_coliseum_loadscreen.rpak'}}, indent=2))
     display = args.display_name or args.name
     resource = mod/'mod/resource'; resource.mkdir(parents=True)
     tokens = {level: display, level+'_ALLCAPS': display.upper(), level+'_CLASSIC': display,

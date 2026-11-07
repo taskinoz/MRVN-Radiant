@@ -361,9 +361,8 @@ def main():
     files = {f"maps/{bsp.name}": bsp.read_bytes()}
     if materials:
         pak = Path(materials["pak"])
-        shutil.copyfile(pak, mod / "paks" / pak.name)
-        # Loaded after the aliased Coliseum pak, whose shaders and depth passes it uses.
-        pak_config["Postload"] = {pak.name: "mp_coliseum.rpak"}
+        # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
+        shutil.copyfile(pak, mod / "paks" / f"{LEVEL}_patch.rpak")
         catalogue = work / f"{LEVEL}.stbsp"
         names = bsp_material_names(bsp)
         guids = {name: int(guid, 16) for name, guid in materials["materials"].items()}

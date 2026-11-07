@@ -128,8 +128,8 @@ python tools/respawn/build_northstar_test_mod.py ... --materials .local/respawn/
   apex-to-titanfall-2 converter uses. The September 2022 `RePak.exe` release
   does not support this material JSON. The template pak is a copy of the game's
   `mp_coliseum.rpak`, decompressed with `rpak_ddecomp`.
-- **Packaging:** the RPak is loaded through `Postload` after the aliased
-  Coliseum pak. A v8.0 STBSP lists every drawn material.
+- **Packaging:** the RPak is installed as `mp_quake_e1m1_patch.rpak` (see
+  [map pak lifetime](#map-pak-lifetime)). A v8.0 STBSP lists every drawn material.
 - **Tools and sky:** `CLIP` and `TRIGGER` become nodraw tool shaders. `SKY*` faces
   are drawn as ordinary world geometry with LibreQuake's sky texture and a
   constant self-lit lightmap. They keep the `sky` compile flag, so collision and
@@ -182,3 +182,27 @@ The output includes the mod, ZIP, adapted source, compiler log, BSP validation,
 member SHA-256 hashes and independent VPK CRC/readback verification. Dependencies
 and game assets stay outside the distributable mod. The included adapted MAP and
 the compiler/package scripts in the MRVN-Radiant repository provide its source.
+
+## Map pak lifetime
+
+7 November 2026. Every converted map (Quake, Minecraft, Source, CS2, box) aliases
+its level pak to `mp_coliseum.rpak` and uses Coliseum's shader sets and depth
+materials. Its own pak used to be loaded with `"Postload": {"<pak>": "mp_coliseum.rpak"}`.
+In Northstar 1.31 a Postload pak is loaded once and **never unloaded**, and is not
+loaded again while it is resident. Coliseum is unloaded and reloaded on every map
+change, so after the first switch the mod paks' materials pointed into freed memory,
+and the next map crashed on its first frames:
+`EXCEPTION_ACCESS_VIOLATION` at `materialsystem_dx11.dll + 0x1c658`, reading
+`0x7ff90000212f`. Every installed MRVN pak also loaded with every Coliseum-aliased map.
+
+**Fix:** the converters install the map's pak as `paks/<level>_patch.rpak` and write
+no Postload. The engine requests `<level>_patch.rpak` right after the level pak, and
+Northstar serves a matching file from the mod's `paks/` (as it does for
+`<level>_loadscreen.rpak`). It is unloaded with the level: the log shows `UnloadPak`
+for both Coliseum and the patch pak at each switch, and only the current map's pak is
+loaded. `ns_map_cycle.py` (local harness) loads UMA, Glitch and UMA again in one
+process: the old packaging crashed on Glitch, the new one completed with all three
+maps rendering.
+
+Postload is safe only for paks whose dependencies are never unloaded (as
+`Northstar.Custom` does with `common.rpak`).

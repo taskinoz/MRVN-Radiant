@@ -192,9 +192,11 @@ this was not identified. Every traversal reference was present throughout.
 - The builder compiles at 3,072-unit clusters and doubles the size until the map has at most 1,000
   meshes, failing if it cannot. That budget is measured, not an engine constant. Coarser clusters
   frustum cull less, but world indices stay near 11% of capacity.
-- Per-map asset names. Northstar loads every installed mod's Postload pak with
-  Coliseum, so both ports' paks are resident on either map. They shared 24 asset
-  names, including the sky, and one map could draw the other's copy.
+- Per-map asset names. Northstar loaded every installed mod's Postload pak with
+  Coliseum, so both ports' paks were resident on either map. They shared 24 asset
+  names, including the sky, and one map could draw the other's copy. (Since
+  7 November each map's pak is its `<level>_patch.rpak` instead; see
+  [RESPAWN_NORTHSTAR_TEST.md](RESPAWN_NORTHSTAR_TEST.md#map-pak-lifetime).)
 - BC1 textures (below).
 
 **Blurry textures.** 16x nearest upscaling alone was not enough. UMA's 49.5 MB

@@ -878,12 +878,13 @@ void function KillFallenPilots()
       +(minecraft_redstone.level_script(mechs,transform,SCALE) if mechs else ''))
     paks=mod/'paks';paks.mkdir();pakname='minecraft_'+args.name+'.rpak'
     (out/'water-kill-volumes.json').write_text(json.dumps(kill_world))
-    shutil.copyfile(out/'pak-build'/pakname,paks/pakname)
+    # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
+    shutil.copyfile(out/'pak-build'/pakname,paks/(level+'_patch.rpak'))
     aliases={level+'.rpak':'mp_coliseum.rpak'}
     # Northstar loads a mod pak named after the level's own loadscreen pak on request.
     if args.loadscreen:shutil.copyfile(build_loadscreen(out,args,level),paks/(level+'_loadscreen.rpak'))
     else:aliases[level+'_loadscreen.rpak']='mp_coliseum_loadscreen.rpak'
-    (paks/'rpak.json').write_text(json.dumps({'Aliases':aliases,'Postload':{pakname:'mp_coliseum.rpak'}},indent=2))
+    (paks/'rpak.json').write_text(json.dumps({'Aliases':aliases},indent=2))
     author=args.author;source=args.source_url
     # The loading screen and menus look up "#<level>"; without these the raw token shows.
     resource=mod/'mod/resource';resource.mkdir(parents=True)

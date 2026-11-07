@@ -323,9 +323,10 @@ def build(args):
     pack_files(members,mod/'vpk','client_'+LEVEL+'.bsp.pak000')
     scripts=mod/'mod/scripts/vscripts/mp/levels';scripts.mkdir(parents=True)
     (scripts/(LEVEL+'.nut')).write_text(SCRIPT)
-    (mod/'paks').mkdir();shutil.copyfile(out/'pak-build/box_genesis.rpak',mod/'paks/box_genesis.rpak')
+    # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
+    (mod/'paks').mkdir();shutil.copyfile(out/'pak-build/box_genesis.rpak',mod/'paks'/(LEVEL+'_patch.rpak'))
     (mod/'paks/rpak.json').write_text(json.dumps({'Aliases':{LEVEL+'.rpak':BASE_PAK+'.rpak',
-        LEVEL+'_loadscreen.rpak':BASE_PAK+'_loadscreen.rpak'},'Postload':{'box_genesis.rpak':BASE_PAK+'.rpak'}},indent=2))
+        LEVEL+'_loadscreen.rpak':BASE_PAK+'_loadscreen.rpak'}},indent=2))
     (mod/'mod.json').write_text(json.dumps({'Name':MOD,'Version':VERSION,'LoadPriority':200,
         'RequiredOnClient':True,'Description':'Approximate Genesis dev-stream mp_box reconstruction. Load '+LEVEL+'.',
         'Scripts':[{'Path':'mp/levels/'+LEVEL+'.nut','RunOn':'SERVER && MP && MAP_'+LEVEL}]},indent=2))

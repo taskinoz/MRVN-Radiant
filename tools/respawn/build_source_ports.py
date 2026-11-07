@@ -870,7 +870,7 @@ void function KillFallenPilots()
   wait 0.05
  }
 }
-'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', (' thread SurfRamps()' if surf else '')+(' thread SurfTrace()' if surf and getattr(args, 'surf_trace', False) else ''))
+'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF', (' thread SurfRamps()' if surf else '')+(' thread SurfTrace()\n thread SurfEvents()' if surf and getattr(args, 'surf_trace', False) else ''))
       + (SURF_SCRIPT if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
     # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
@@ -1000,6 +1000,48 @@ void function SurfTrace()
     + " s=" + player.IsSliding() + " m=" + player.IsMantling() + " n=" + n )
   }
   wait 0.1
+ }
+}
+// Every frame near a ramp: a velocity change over 400 units/s in one frame is logged with what a
+// pilot-sized sweep along the previous frame's motion hits.
+void function SurfEvents()
+{
+ table<entity, vector> lastV
+ table<entity, vector> lastO
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   if ( !IsAlive( player ) || !( player in file.traceUntil ) || Time() > file.traceUntil[player] )
+   {
+    if ( player in lastV )
+    {
+     delete lastV[player]
+     delete lastO[player]
+    }
+    continue
+   }
+   vector o = player.GetOrigin()
+   vector v = player.GetVelocity()
+   if ( player in lastV && Length( v - lastV[player] ) > 400.0 )
+   {
+    vector from = lastO[player]
+    vector to = from + lastV[player] * 0.05
+    TraceResults h = TraceHull( from, to, < -16, -16, 0 >, < 16, 16, 48 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+    string what = "nothing"
+    if ( h.fraction < 1.0 )
+    {
+     what = "hit n=" + h.surfaceNormal + " at=" + h.endPos + " frac=" + h.fraction
+     if ( IsValid( h.hitEnt ) )
+      what += " ent=" + h.hitEnt.GetClassName()
+    }
+    printl( "[surfevent] " + Time() + " o=" + o + " v " + lastV[player] + " -> " + v + " g=" + player.IsOnGround() + " c=" + player.IsCrouched()
+     + " s=" + player.IsSliding() + " m=" + player.IsMantling() + " w=" + player.IsWallRunning() + " sweep: " + what )
+   }
+   lastV[player] <- v
+   lastO[player] <- o
+  }
+  WaitFrame()
  }
 }
 '''

@@ -526,6 +526,13 @@ def light_entities(bsp):
             fifty = float(e.get('_fifty_percent_distance') or 0) or zero*.3
             keys = dict(classname=cls, origin=e['origin'], _light=e.get('_light', '255 255 255 200'), realtime='0',
                         _zero_percent_distance=f'{zero:g}', _fifty_percent_distance=f'{fifty:g}')
+            # Source's quadratic/linear coefficients are inverse attenuation, not a broad
+            # polynomial fade. Preserve them for the static baker (normalized at 100 units).
+            if not float(e.get('_zero_percent_distance') or 0) and not float(e.get('_fifty_percent_distance') or 0):
+                coefficients = [max(0.0, float(e.get(key, default))) for key, default in
+                                (('_constant_attn', '0'), ('_linear_attn', '0'), ('_quadratic_attn', '1'))]
+                if sum(coefficients) > 0:
+                    keys['_source_attenuation'] = ' '.join(f'{v:g}' for v in coefficients)
             if cls == 'light_spot':
                 keys.update(angles=e.get('angles', '0 0 0'), pitch=e.get('pitch', '-90'), _cone=e.get('_cone', '45'),
                             _inner_cone=e.get('_inner_cone', '30'), _exponent=e.get('_exponent', '1'))
@@ -543,7 +550,103 @@ def menu_stage(prefix, z, floor):
     return brushes
 
 
+def load_surf_config(path):
+    """Validate map-authored timing bounds and spawn points before compiling anything."""
+    if path is None:
+        return None
+    config = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    def vector(value):
+        if not isinstance(value, list) or len(value) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) for v in value):
+            raise ValueError('surf config vectors must contain three finite numbers')
+        return value
+    def box(zone):
+        lo, hi = vector(zone['mins']), vector(zone['maxs'])
+        if any(a >= b for a, b in zip(lo, hi)):
+            raise ValueError('surf config bounds must have mins < maxs')
+    box({'mins': config['startMins'], 'maxs': config['startMaxs']})
+    point = vector(config['startOrigin'])
+    if not all(a <= v <= b for a, v, b in zip(config['startMins'], point, config['startMaxs'])):
+        raise ValueError('surf reset origin must be inside the start zone')
+    yaw = config['startYaw']
+    if type(yaw) not in (int, float) or not math.isfinite(yaw):
+        raise ValueError('surf startYaw must be finite')
+    for zone in config.get('finishZones', []):
+        box(zone)
+    checkpoints = config.get('checkpointOrigins', [])
+    for i, point in enumerate(checkpoints):
+        vector(point)
+        if any(math.dist(point, other) <= 16 for other in checkpoints[:i]):
+            raise ValueError('surf checkpoint destinations must be distinct')
+    if checkpoints and not config.get('finishZones'):
+        raise ValueError('staged surf maps require an explicit finish zone')
+    overrides = config.get('teleportTargetOverrides', {})
+    if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not k or not v for k, v in overrides.items()):
+        raise ValueError('surf teleport target overrides must map nonempty target names')
+    for team, points in config.get('spawns', {}).items():
+        if team not in ('2', '3') or not points:
+            raise ValueError('surf spawns must specify nonempty teams 2 and 3')
+        for point in points:
+            vector(point)
+            # assemble() raises spawn origins by 16 units.
+            if not all(a <= v <= b for a, v, b in zip(config['startMins'], [*point[:2], point[2]+16], config['startMaxs'])):
+                raise ValueError('surf spawns must be inside the start zone')
+    if config.get('spawns') and set(config['spawns']) != {'2', '3'}:
+        raise ValueError('surf spawns must include both teams')
+    return config
+
+
+def surf_map_export(config):
+    """Emit only validated numeric fields; map metadata cannot inject Squirrel code."""
+    def vector(v):
+        return '< ' + ', '.join(f'{n:g}' for n in v) + ' >'
+    fields = [f'{key} = {vector(config[key])}' for key in ('startMins', 'startMaxs', 'startOrigin')]
+    fields.append(f'startYaw = {float(config["startYaw"]):.1f}')
+    if 'finishZones' in config:
+        zones = ', '.join('{ mins = '+vector(z['mins'])+', maxs = '+vector(z['maxs'])+' }' for z in config['finishZones'])
+        fields.append('finishZones = [ '+zones+' ]')
+    if 'checkpointOrigins' in config:
+        fields.append('checkpointOrigins = [ '+', '.join(vector(v) for v in config['checkpointOrigins'])+' ]')
+    return ' getroottable().MRVN_SurfMap <- { '+', '.join(fields)+' }\n'
+
+
+def utopia_jail_threshold_repairs(bsp):
+    """Cap the nodraw support exposed by omitting Utopia's rotating exit door.
+
+    Continue each original floor band across its 64-unit threshold, preserving
+    the source side materials and UV vectors rather than inventing a texture.
+    """
+    if bsp.path.stem.lower() != 'surf_utopia_v3':
+        return []
+    if not any(e.get('classname') == 'func_door_rotating' and e.get('targetname') == 'jail_exit_door'
+               and origin(e) == (0.0, 1184.0, -10240.0) for e in bsp.entities):
+        return []
+    world = bsp.model_brushes(0)
+    support = any(bsp.brush_bounds(bsp.brushes[i]) == ([0.0, 1152.0, -10272.0], [192.0, 1216.0, -10256.0]) for i in world)
+    if not support:
+        return []
+    repairs = []
+    for x0, x1 in [(0, 16), (16, 32), (32, 64), (64, 80), (80, 192)]:
+        candidate = next((bsp.brushes[i] for i in world
+                          if (lambda bounds: bounds[0][0] <= x0 and bounds[1][0] >= x1 and
+                              bounds[0][1] < 1120 < bounds[1][1] and bounds[1][1] == 1152 and
+                              bounds[0][2] == -10256 and bounds[1][2] == -10240)(bsp.brush_bounds(bsp.brushes[i]))), None)
+        if candidate is None:
+            raise ValueError('Utopia jail threshold floor layout changed; repair needs review')
+        lo, hi = (x0, 1152, -10256), (x1, 1216, -10240)
+        sides = []
+        for side in candidate.sides:
+            axis = next((a for a in range(3) if abs(side.normal[a]) == 1 and sum(abs(v) for v in side.normal) == 1), None)
+            if axis is None:
+                raise ValueError('Utopia threshold floor must be axial')
+            sides.append(side._replace(dist=hi[axis] if side.normal[axis] > 0 else -lo[axis]))
+        repairs.append(candidate._replace(sides=sides))
+    return repairs
+
+
 def build(args):
+    args.surf_config_data = load_surf_config(getattr(args, 'surf_config', None))
+    if args.surf_config_data and args.surf is False:
+        raise ValueError('--surf-config requires surf support')
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
     bsp = BSP(args.bsp)
     content = Content(args.game_dir, bsp.pakfile)
@@ -581,6 +684,11 @@ def build(args):
         elif e.get('classname') in RENDER_ONLY_ENTITIES and e.get('angles', '0 0 0') in ('0 0 0', ''):
             render_only_charts.extend(face_charts(bsp, int(model[1:]), np.array(origin(e)), materials))
         else: skipped[e.get('classname')] += 1
+    threshold_repairs = utopia_jail_threshold_repairs(bsp)
+    for brush in threshold_repairs:
+        brushes.append(brush_text(bsp, brush, materials))
+        bounds = bsp.brush_bounds(brush)
+        boxes.append(bounds[0]+bounds[1])
     charts, prop_brushes, prop_skipped = convert_props(bsp, materials, skybox_box) if args.props else ([], [], Counter())
     skipped.update(prop_skipped); brushes += prop_brushes; charts += render_only_charts
     patches = []; collision = []; contents_keys = []
@@ -601,7 +709,9 @@ def build(args):
     else:
         sky_image = Image.new('RGBA', (64, 64), (150, 175, 205, 255)); void = (150, 175, 205, 255)
     middle = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
-    if args.spawns:
+    if args.surf_config_data and args.surf_config_data.get('spawns'):
+        teams = {int(t): [tuple(p) for p in points] for t, points in args.surf_config_data['spawns'].items()}
+    elif args.spawns:
         teams = {2: spread(nodes_or_all(bsp), args.spawns[:2]), 3: spread(nodes_or_all(bsp), args.spawns[2:])}
     else:
         teams = choose_spawns(bsp, middle)
@@ -613,9 +723,9 @@ doors, breakables, decals, overlays and normal maps are not.
 ''')
     metadata = {'brushes': len(brushes), 'displacements': displacement_count, 'textures': len(materials.textures),
                 'skipped': dict(skipped), 'invisible_glass': sorted(materials.invisible), 'missing_materials': dict(materials.missing),
-                'static_props': len(bsp.static_props()), 'prop_charts': len(charts), 'prop_collision_brushes': len(prop_brushes)}
+                'geometry_repairs': len(threshold_repairs), 'static_props': len(bsp.static_props()), 'prop_charts': len(charts), 'prop_collision_brushes': len(prop_brushes)}
     return assemble(args, out, materials, dict(brushes=brushes, patches=patches, keys=contents_keys, charts=charts, boxes=boxes),
-                    lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp), pushes(bsp))
+                    lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp, (args.surf_config_data or {}).get('teleportTargetOverrides')), pushes(bsp))
 
 
 def fit_dome(boxes, centre, base, lo, hi, margin=1000):
@@ -641,9 +751,33 @@ def fit_dome(boxes, centre, base, lo, hi, margin=1000):
     return best
 
 
+def trigger_script_data(teleports, pushes):
+    adds = ''; brush_ids = {}
+    def brush_range(brushes):
+        nonlocal adds
+        key = repr(brushes)
+        if key not in brush_ids:
+            first = sum(len(v) for v in brush_ids.values())
+            for planes in brushes:
+                normals = ', '.join(f'< {n[0]:.6g}, {n[1]:.6g}, {n[2]:.6g} >' for n, _ in planes)
+                dists = ', '.join(f'{d:.1f}' for _, d in planes)  # floats: Squirrel won't pass array<int>
+                adds += f' AddBrush( [ {normals} ], [ {dists} ] )\n'
+            brush_ids[key] = list(range(first, first+len(brushes)))
+        ids = brush_ids[key]
+        return (ids[0], ids[-1]+1) if ids else (0, 0)
+    for lo, hi, d, yaw, n, brushes in teleports:
+        a, b = brush_range(brushes)
+        adds += (f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, '
+                 f'< {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n}, {a}, {b} )\n')
+    for lo, hi, v, brushes in pushes:
+        a, b = brush_range(brushes)
+        adds += f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} >, {a}, {b} )\n'
+    return adds
+
+
 def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights, source, converted, metadata, teleports=(), pushes=()):
     surf = getattr(args, 'surf', None)
-    if surf is None: surf = Path(source).stem.lower().startswith('surf_')
+    if surf is None: surf = bool(getattr(args, 'surf_config_data', None)) or Path(source).stem.lower().startswith('surf_')
     """Sky dome, menu stage, spawns and lights around converted world geometry; compile, validate and package the mod."""
     prefix = materials.prefix; brushes = world['brushes']
     centre = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
@@ -664,7 +798,8 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     for team, sites in teams.items():
         for p in sites:
             p = (p[0], p[1], p[2]+16)
-            yaw = round(math.degrees(math.atan2(middle[1]-p[1], middle[0]-p[0])))
+            yaw = (args.surf_config_data['startYaw'] if getattr(args, 'surf_config_data', None) else
+                   round(math.degrees(math.atan2(middle[1]-p[1], middle[0]-p[0]))))
             spawninfo.append({'team': team, 'origin': p, 'yaw': yaw})
             for cls in ('info_spawnpoint_human', 'info_spawnpoint_human_start'):
                 text += entity(classname=cls, origin=' '.join(f'{v:g}' for v in p), angles=f'0 {yaw} 0', teamnum=str(team))
@@ -673,8 +808,8 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     (out/'spawns.json').write_text(json.dumps(spawninfo, indent=2))
     def world_entity(cluster, luxel):
         return '\n'.join(['{', '"classname" "worldspawn"', '"_lightmapscale" "16"', f'"_remap_luxelsize" "{luxel:g}"',
-                          '"_remap_lightmap_by_material" "1"', f'"_remap_lightmap_pagesize" "{LIGHTMAP_PAGE}"', '"_bouncescale" "0"',
-                          '"_skyocclusion" "1"', '"_skysamples" "128"', '"_skyfixedpattern" "1"', f'"_meshcluster" "{cluster}"',
+                          '"_remap_lightmap_by_material" "1"', f'"_remap_lightmap_pagesize" "{LIGHTMAP_PAGE}"', '"_bouncescale" "1"',
+                          '"_skyocclusion" "1"', '"_skyminvisibility" "0.2"', '"_skysamples" "256"', '"_skyfixedpattern" "1"', f'"_meshcluster" "{cluster}"',
                           *(['"_remap_props" "models/source_props.rsm"'] if world['charts'] else []), *world['keys'], *brushes,
                           *world['patches'], *sky, *stage, '}'])+'\n'
     cluster = args.mesh_cluster; luxel = args.luxel_size
@@ -709,26 +844,7 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
     # Teleport triggers (jump maps' resets and course doors) are checked by script: no trigger brushes are compiled.
     # "<-" is Squirrel's slot operator, so vector literals open with a space.
     # Each trigger's brushes are listed once (AddBrush), then referenced by index range.
-    adds = ''; brush_ids = {}
-    def brush_range(brushes):
-        nonlocal adds
-        key = repr(brushes)
-        if key not in brush_ids:
-            first = sum(len(v) for v in brush_ids.values())
-            for planes in brushes:
-                normals = ', '.join(f'< {n[0]:.6g}, {n[1]:.6g}, {n[2]:.6g} >' for n, _ in planes)
-                dists = ', '.join(f'{d:.1f}' for _, d in planes)  # floats: Squirrel won't pass array<int>
-                adds += f' AddBrush( [ {normals} ], [ {dists} ] )\n'
-            brush_ids[key] = list(range(first, first+len(brushes)))
-        ids = brush_ids[key]
-        return (ids[0], ids[-1]+1) if ids else (0, 0)
-    for lo, hi, d, yaw, n, brushes in teleports:
-        a, b = brush_range(brushes)
-        adds += (f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, '
-                 f'< {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n}, {a}, {b} )\n')
-    for lo, hi, v, brushes in pushes:
-        a, b = brush_range(brushes)
-        adds += f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} >, {a}, {b} )\n'
+    adds = trigger_script_data(teleports, pushes)
     # For the Surf game mode (MRVN.Surf): the start room, as a box around the spawns, and a hook
     # called on every teleport. Shared through the root table so the map works without the mode.
     surf_export = surf_teleport = ''
@@ -736,16 +852,16 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
         pts = np.array([s['origin'] for s in spawninfo])
         smin = pts.min(0)-(384, 384, 64); smax = pts.max(0)+(384, 384, 512)
         o = spawninfo[0]['origin']
-        # Utopia's three end platforms, including the upper END portal recess.
-        # Bounds come from the original BSP; grounded feet are checked by Surf.
-        finish_export = ''
-        if level == 'mp_source_surf_utopia':
-            finish_export = ', finishZones = [ { mins = < -14352, -1024, -7700 >, maxs = < -13824, 1024, -6088 > }, { mins = < -14352, -2048, -4484 >, maxs = < -13952, 2048, -4100 > } ]'
-        surf_export = (f' getroottable().MRVN_SurfMap <- {{ startMins = < {smin[0]:g}, {smin[1]:g}, {smin[2]:g} >, '
-                       f'startMaxs = < {smax[0]:g}, {smax[1]:g}, {smax[2]:g} >, startOrigin = < {o[0]:g}, {o[1]:g}, {o[2]:g} >, '
-                       f'startYaw = {float(spawninfo[0]["yaw"]):.1f}{finish_export} }}\n')
+        config = getattr(args, 'surf_config_data', None)
+        if config is None:
+            config = dict(startMins=smin.tolist(), startMaxs=smax.tolist(), startOrigin=list(o), startYaw=spawninfo[0]['yaw'])
+            # Preserve Utopia's three tested end platforms and upper portal recess.
+            if level == 'mp_source_surf_utopia':
+                config['finishZones'] = [dict(mins=[-14352, -1024, -7700], maxs=[-13824, 1024, -6088]),
+                                         dict(mins=[-14352, -2048, -4484], maxs=[-13952, 2048, -4100])]
+        surf_export = surf_map_export(config)
         surf_teleport = ('    if ( "MRVN_SurfTeleported" in getroottable() )\n'
-                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k], o )\n')
+                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k], touchOrigin )\n')
     (scripts/(level+'.nut')).write_text(('untyped\n' if surf else '')+'''global function CodeCallback_MapInit
 struct
 {
@@ -768,6 +884,7 @@ struct
  table<entity, vector> rampVelocities
  table<entity, float> traceUntil
  table<entity, vector> lastVel
+ table<entity, vector> teleportOrigins
  table<entity, vector> lastOrigin
  table<entity, float> lastTime
 } file
@@ -817,11 +934,63 @@ bool function TouchesBrushes( vector o, int first, int end )
  }
  return false
 }
+// Clip the pilot's swept hull against the original convex trigger planes.
+// A two-unit reset floor can be crossed entirely between the 50 ms checks.
+float function BrushSweepFraction( vector from, vector to, int first, int end )
+{
+ float best = 2.0
+ for ( int b = first; b < end; b++ )
+ {
+  int p = b > 0 ? file.planeEnds[b - 1] : 0
+  float enter = 0.0
+  float leave = 1.0
+  bool miss = false
+  for ( ; p < file.planeEnds[b]; p++ )
+  {
+   vector n = file.planeNormals[p]
+   float reach = fabs( n.x ) * 16.0 + fabs( n.y ) * 16.0 + fabs( n.z ) * 36.0 + 0.25
+   float a = DotProduct( n, from + < 0, 0, 36 > ) - file.planeDists[p] - reach
+   float z = DotProduct( n, to + < 0, 0, 36 > ) - file.planeDists[p] - reach
+   if ( a > 0.0 && z > 0.0 ) { miss = true; break }
+   if ( a <= 0.0 && z <= 0.0 ) continue
+   float t = a / ( a - z )
+   if ( a > z ) enter = max( enter, t )
+   else leave = min( leave, t )
+   if ( enter > leave ) { miss = true; break }
+  }
+  if ( !miss ) best = min( best, enter )
+ }
+ return best <= 1.0 ? best : -1.0
+}
+float function BoxSweepFraction( vector from, vector to, vector lo, vector hi )
+{
+ array<float> a = [ from.x, from.y, from.z ]
+ array<float> z = [ to.x, to.y, to.z ]
+ array<float> mins = [ lo.x, lo.y, lo.z ]
+ array<float> maxs = [ hi.x, hi.y, hi.z ]
+ float enter = 0.0
+ float leave = 1.0
+ for ( int axis = 0; axis < 3; axis++ )
+ {
+  float delta = z[axis] - a[axis]
+  if ( fabs( delta ) < 0.00001 )
+  {
+   if ( a[axis] < mins[axis] || a[axis] > maxs[axis] ) return -1.0
+   continue
+  }
+  float t0 = ( mins[axis] - a[axis] ) / delta
+  float t1 = ( maxs[axis] - a[axis] ) / delta
+  enter = max( enter, min( t0, t1 ) )
+  leave = min( leave, max( t0, t1 ) )
+  if ( enter > leave ) return -1.0
+ }
+ return enter
+}
 void function AddTeleport( vector mins, vector maxs, vector destination, float yaw, int choices, int brushFirst, int brushEnd )
 {
  // Players touch a trigger when their hull overlaps it; origins are at the feet.
- file.mins.append( mins - <16, 16, 72> )
- file.maxs.append( maxs + <16, 16, 0> )
+ file.mins.append( mins - <16.25, 16.25, 72.25> )
+ file.maxs.append( maxs + <16.25, 16.25, 0.25> )
  file.destinations.append( destination )
  file.yaws.append( yaw )
  // The first of `choices` consecutive entries with this box; one is picked at random.
@@ -864,32 +1033,50 @@ void function KillFallenPilots()
   foreach ( entity player in GetPlayerArray() )
   {
    if ( !IsAlive( player ) )
-    continue
-   vector o = player.GetOrigin()
-   if ( o.z < KILL_Z )
    {
-    player.TakeDamage( 10000, null, null, { damageSourceId = eDamageSourceId.fall } )
+    if ( player in file.teleportOrigins ) delete file.teleportOrigins[player]
     continue
    }
+   vector o = player.GetOrigin()
+   vector previous = player in file.teleportOrigins ? file.teleportOrigins[player] : o
+   // External resets/respawns are discontinuities, not movement through the map.
+   if ( Distance( previous, o ) > max( 1024.0, Length( player.GetVelocity() ) * 0.15 ) ) previous = o
+   file.teleportOrigins[player] <- o
    ApplyPushes( player, o )
+   int hit = -1
+   float nearest = 2.0
    for ( int i = 0; i < file.mins.len(); i++ )
    {
     vector lo = file.mins[i]
     vector hi = file.maxs[i]
-    if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
-     continue
-    if ( !TouchesBrushes( o, file.brushFirst[i], file.brushEnd[i] ) )
-     continue
-    int k = i + RandomInt( file.choices[i] )
+    // Cheap broad phase avoids temporary arrays for hundreds of distant triggers.
+    if ( ( previous.x < lo.x && o.x < lo.x ) || ( previous.x > hi.x && o.x > hi.x ) ||
+         ( previous.y < lo.y && o.y < lo.y ) || ( previous.y > hi.y && o.y > hi.y ) ||
+         ( previous.z < lo.z && o.z < lo.z ) || ( previous.z > hi.z && o.z > hi.z ) ) continue
+    float t = BoxSweepFraction( previous, o, lo, hi )
+    if ( t < 0.0 ) continue
+    if ( file.brushFirst[i] != file.brushEnd[i] )
+     t = BrushSweepFraction( previous, o, file.brushFirst[i], file.brushEnd[i] )
+    if ( t < 0.0 || t >= nearest ) continue
+    nearest = t
+    hit = i
+   }
+   if ( hit >= 0 )
+   {
+    int k = hit + RandomInt( file.choices[hit] )
+    vector touchOrigin = previous + ( o - previous ) * nearest
     player.SetOrigin( file.destinations[k] )
     player.SetAngles( <0, file.yaws[k], 0> )
     player.SetVelocity( <0, 0, 0> )
-SURF_TELEPORT    break
-   }
+    file.teleportOrigins[player] <- file.destinations[k]
+SURF_TELEPORT   }
+   else if ( o.z < KILL_Z )
+    player.TakeDamage( 10000, null, null, { damageSourceId = eDamageSourceId.fall } )
   }
   wait 0.05
  }
 }
+
 '''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF_TELEPORT', surf_teleport).replace('SURF', surf_export+(' thread SurfRamps()' if surf else '')+(' thread SurfTrace()\n thread SurfEvents()' if surf and getattr(args, 'surf_trace', False) else ''))
       + ((SURF_SCRIPT if getattr(args, 'rampbug_fix', False) else SURF_SCRIPT.replace(RAMPBUG_CALL, '')) if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
     paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
@@ -924,6 +1111,8 @@ Extract {modname} into R2Northstar/mods and run `map {level} tdm`.
     (mod/'README.md').write_text(readme); (out/'README.md').write_text(readme)
     metadata = {'level': level, 'source': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), **metadata,
                 'world_meshes': meshes, 'mesh_cluster': cluster, 'luxel_size': luxel, 'lightmap_pages': pages, 'teleports': len(teleports), 'pushes': len(pushes), 'surf': surf, 'kill_z': kill_z, 'engine_verified': False}
+    if getattr(args, 'surf_config_data', None):
+        metadata['surf_config'] = args.surf_config_data
     (out/'conversion.json').write_text(json.dumps(metadata, indent=2))
     with zipfile.ZipFile(out/(modname+'-'+VERSION+'.zip'), 'x', zipfile.ZIP_DEFLATED) as z:
         for p in sorted(mod.rglob('*')):
@@ -1123,6 +1312,15 @@ void function SurfEvents()
 '''
 
 
+def trigger_bounds(bsp, e):
+    """World AABB of a brush model after the entity's Source rotation/translation."""
+    model = bsp.models[int(e['model'][1:])]
+    rotation = angle_matrix(*map(float, e.get('angles', '0 0 0').split()))
+    corners = np.array([(x,y,z) for x in (model[0],model[3]) for y in (model[1],model[4]) for z in (model[2],model[5])])
+    points = corners @ rotation.T + np.array(origin(e))
+    return points.min(0), points.max(0)
+
+
 def trigger_brushes(bsp, e):
     """A brush entity's convex brushes as lists of world (normal, dist) planes.
 
@@ -1130,15 +1328,20 @@ def trigger_brushes(bsp, e):
     bounding boxes take in the air above the next ramp."""
     if not hasattr(bsp, 'brushes'): return []
     offset = np.array(origin(e)); out = []
+    rotation = angle_matrix(*map(float, e.get('angles', '0 0 0').split()))
     for k in bsp.model_brushes(int(e['model'][1:])):
-        out.append([(tuple(float(v) for v in side.normal), float(side.dist + np.dot(side.normal, offset)))
-                    for side in bsp.brushes[k].sides if not side.bevel])
+        out.append([(tuple(float(v) for v in rotation @ side.normal), float(side.dist + np.dot(rotation @ side.normal, offset)))
+                    for side in bsp.brushes[k].sides])
     return out
 
 
-def teleports(bsp):
+def teleports(bsp, target_overrides=None):
     """(mins, maxs, destination, yaw, choices, brushes) for each trigger_teleport with a destination."""
     targets = {e.get('targetname'): e for e in bsp.entities if e.get('targetname')}
+    target_overrides = target_overrides or {}
+    for replacement in target_overrides.values():
+        if replacement not in targets:
+            raise ValueError('teleport override destination not found: '+replacement)
     # Destinations a logic_case sets with "<trigger>,AddOutput,target <name>" (surf_utopia's jail
     # picks a random cell this way); the trigger's own target is then a placeholder.
     chosen = {}
@@ -1151,12 +1354,13 @@ def teleports(bsp):
     for e in bsp.entities:
         if e.get('classname') != 'trigger_teleport' or not e.get('model', '').startswith('*'): continue
         dests = chosen.get(e.get('targetname'), [])
-        if not dests and e.get('target') in targets: dests = [targets[e['target']]]
-        model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e)); brushes = trigger_brushes(bsp, e)
+        target = target_overrides.get(e.get('target'), e.get('target'))
+        if not dests and target in targets: dests = [targets[target]]
+        lo, hi = trigger_bounds(bsp, e); brushes = trigger_brushes(bsp, e)
         # Consecutive entries with the same box are alternatives; the level script picks one at random.
         for dest in dests:
             yaw = float((dest.get('angles', '0 0 0').split()+['0', '0'])[1])
-            out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, origin(dest), yaw, len(dests), brushes))
+            out.append((lo, hi, origin(dest), yaw, len(dests), brushes))
     return out
 
 
@@ -1166,12 +1370,12 @@ def pushes(bsp):
     for e in bsp.entities:
         if e.get('classname') != 'trigger_push' or not e.get('model', '').startswith('*'): continue
         if not int(e.get('spawnflags', '0')) & 1 or e.get('StartDisabled') == '1' or float(e.get('speed', '0')) <= 0: continue
-        model = bsp.models[int(e['model'][1:])]; offset = np.array(origin(e))
+        lo, hi = trigger_bounds(bsp, e)
         pitch, yaw = (float(v) for v in (e.get('pushdir', '0 0 0').split()+['0', '0'])[:2])
         p, y = math.radians(pitch), math.radians(yaw)
         # Source angles: positive pitch looks down.
         direction = np.array((math.cos(p)*math.cos(y), math.cos(p)*math.sin(y), -math.sin(p)))
-        out.append((np.array(model[0:3])+offset, np.array(model[3:6])+offset, direction*float(e['speed']), trigger_brushes(bsp, e)))
+        out.append((lo, hi, direction*float(e['speed']), trigger_brushes(bsp, e)))
     return out
 
 
@@ -1198,6 +1402,7 @@ if __name__ == '__main__':
     p.add_argument('--luxel-size', type=float, default=LUXEL_SIZE, help='World units per lightmap texel to start from')
     p.add_argument('--surf', action=argparse.BooleanOptionalAction, default=None,
                    help='No ground friction on slopes steeper than Source allows standing on, so surf ramps work (default: on for surf_ maps)')
+    p.add_argument('--surf-config', type=Path, help='JSON with explicit Surf start/finish zones, checkpoint destinations and optional spawns')
     p.add_argument('--surf-trace', action='store_true', help='Log surfing pilot position, velocity and state to the console 10 times a second (play-test diagnosis)')
     p.add_argument('--rampbug-fix', action='store_true', help='Undo ramp bugs (seam snags between ramp brushes), as surf servers\' rampbug plugins do; off by default, as in Source')
     p.add_argument('--no-props', dest='props', action='store_false', help='Leave static props out')

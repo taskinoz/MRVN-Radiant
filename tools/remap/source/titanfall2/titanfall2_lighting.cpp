@@ -538,6 +538,15 @@ void Titanfall2::CollectLight(const entity_t &e) {
         if (HasKey(e, "_pbr_falloff") && e.intForKey("_pbr_falloff") == 1)
             pending.record.intensity = pending.record.intensity * static_cast<float>(PbrIntensityScale);
         SetFalloff(e, light, pending.record, quakeBrightness);
+        if (HasKey(e, "_source_attenuation")) {
+            if (light.realtime) throw std::invalid_argument("Source attenuation requires a baked light");
+            double c = 0, l = 0, q = 0;
+            if (sscanf(e.valueForKey("_source_attenuation"), "%lf %lf %lf", &c, &l, &q) != 3 ||
+                !std::isfinite(c) || !std::isfinite(l) || !std::isfinite(q) || c < 0 || l < 0 || q < 0 || c + l + q <= 0)
+                throw std::invalid_argument("Invalid Source attenuation coefficients");
+            light.sourceAttenuation = true;
+            light.sourceCoefficients = {c, l, q};
+        }
         if (!light.realtime) {
             pending.record.flags = FlagStatic;
         } else if (HasKey(e, "shadow") && e.intForKey("shadow") == 0) {
@@ -706,6 +715,11 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     // retaining realtime light shadow masks. Keep the existing default bake.
     if (HasKey(world, "_skyocclusion"))
         options.ambientOcclusion = DoubleForKey(world, "_skyocclusion", 1) > 0;
+    if (HasKey(world, "_skyminvisibility")) {
+        const double minimum = DoubleForKey(world, "_skyminvisibility", 0);
+        if (!std::isfinite(minimum)) Error("Minimum sky visibility must be finite");
+        options.minimumSkyVisibility = std::clamp(minimum, 0.0, 1.0);
+    }
     if (HasKey(world, "_skyfixedpattern"))
         options.ambientFixedPattern = DoubleForKey(world, "_skyfixedpattern", 0) > 0;
     if (HasKey(world, "_skysamples")) {

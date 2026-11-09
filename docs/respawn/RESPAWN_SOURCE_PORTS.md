@@ -11,6 +11,45 @@ python tools/respawn/build_source_ports.py --bsp "...\Half-Life 2\hl2\maps\d1_tr
 For Team Fortress 2, pass both `--game-dir ...\Team Fortress 2\tf` and `--game-dir ...\Team Fortress 2\hl2`
 (TF2 also reads its bundled HL2 textures; untested). Its `info_player_teamspawn` RED/BLU spawns become teams 2 and 3.
 
+## Map-authored Surf timing
+
+`--surf-config PATH.json` overrides the automatic spawn-room bounds for a surf map.
+It accepts numeric `startMins`, `startMaxs`, `startOrigin`, `startYaw`, a `finishZones`
+array of `{mins,maxs}` boxes, optional ordered `checkpointOrigins`, and optional
+`spawns` keyed by team `"2"` and `"3"`. Spawn points use Source coordinates; the
+assembler raises them by 16 units. `teleportTargetOverrides` explicitly redirects
+named teleport targets to existing destination entities, for repairing broken inputs.
+Invalid bounds, nonfinite coordinates, ambiguous checkpoint destinations and missing
+replacement targets are rejected before a playable package can be produced.
+
+The generated map exports these timing fields as `MRVN_SurfMap`. Staged maps need
+the checkpoint-capable MRVN.Surf development build: the published 0.1.0 cancels
+runs on stage transitions. Surf Me's recipe/config live in the custom maps repo at
+`maps/source-surf-me/`. Maps without an override retain their existing generated
+start room and Utopia's tested finish platforms.
+
+## Source lighting and thin reset floors
+
+Imported point/spot lights without authored 50%/0% distances export
+`_source_attenuation "constant linear quadratic"`. Static baking uses the inverse
+polynomial normalized at 100 Source units, capped near the emitter and cut off
+at the finite light range. This avoids applying a broad, high-intensity fade to
+Source torch lights. Existing retail/native light behavior is unchanged unless
+this explicit key is present.
+
+Source ports now opt into one diffuse bounce, 256 sky samples and
+`_skyminvisibility 0.2`. The visibility floor affects diffuse ambient light;
+realtime/direct sun shadow masks remain intact. The default for other maps is
+still zero. These are preview bake settings, not a claim of exact VRAD parity.
+
+Teleport checks sweep a standing pilot hull between samples and clip it against
+the original convex planes. A 0.25-unit contact tolerance accounts for the native
+collision epsilon above floors. The earliest crossed trigger wins, external
+position resets discard the sweep, and a cheap bounding-box rejection avoids
+allocations for distant triggers. Surf Me's two-unit courtyard floors were checked
+with both VM fixtures and real player falls. Both rebuilt maps rendered in the
+client, and a Surf Me-to-Utopia transition passed without script errors.
+
 ## What converts
 
 - Brushes, from the BSP's brush list, which keeps every original brush. Each side's plane and

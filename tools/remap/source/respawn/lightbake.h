@@ -127,6 +127,8 @@ struct Light {
     V3 intensity;            // linear RGB
     double zeroDistance = 0;
     Attenuation attenuation;
+    bool sourceAttenuation = false; // baked Source lights: inverse polynomial, normalized at 100 units
+    Attenuation sourceCoefficients;
     double cosInner = 1, cosOuter = 0;  // spot cone
     bool realtime = true;   // rendered at runtime; otherwise baked into SKY A
     bool shadowMask = true; // realtime lights only: gets RTL slots with baked shadow masks
@@ -136,6 +138,12 @@ struct Light {
 inline double falloff(const Light& light, double distance) {
     if (light.type == LightType::Sun) return 1.0;
     if (distance >= light.zeroDistance) return 0.0;
+    if (light.sourceAttenuation) {
+        const auto& a = light.sourceCoefficients;
+        const double reference = a.constant + a.linear * 100.0 + a.quadratic * 10000.0;
+        const double denominator = a.constant + a.linear * distance + a.quadratic * distance * distance;
+        return reference / std::max(reference, denominator);
+    }
     const auto& a = light.attenuation;
     return std::clamp(a.constant + a.linear * distance + a.quadratic * distance * distance, 0.0, 1.0);
 }
@@ -362,6 +370,7 @@ struct Options {
     // ~0.03 for a typical 0.8 ambient, matching retail magnitudes and the
     // client-checked Phase Runner fill (0.025-0.032).
     double ambientScale = 0.04;
+    double minimumSkyVisibility = 0.0; // optional diffuse floor; direct sun shadows are unchanged
     double luxelSize = 16.0;       // world units per texel, for sub-texel shadow samples
     int bounceSamples = 16;        // cosine-weighted gather rays per texel for one diffuse bounce (0: off)
     // Multiplier on gathered indirect light. 3 brings Quake E1M1 (dark textures,
@@ -773,10 +782,10 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                                 }
                             }
                         }
-                        const double fraction = visible / ambientSamples;
+                        const double fraction = std::max(options.minimumSkyVisibility, visible / ambientSamples);
                         baked = baked + ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
                         directLight[p][i] = directLight[p][i] + ambient * fraction;
-                        sky = visible > 0 ? normalize(openDirection) * std::cbrt(fraction) : V3{};
+                        sky = (visible > 0 ? normalize(openDirection) : n) * std::cbrt(fraction);
                     }
 
                     // Static (non-realtime) local lights.
@@ -1021,7 +1030,7 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
         V3 bent{};
         for (const V3& d : sky)
             if (!occluders.blocked(p, p + d * far)) { visible += 1; bent = bent + d; }
-        const double fraction = visible / sky.size();
+        const double fraction = std::max(options.minimumSkyVisibility, visible / sky.size());
         const V3 direction = visible > 0 ? normalize(bent) : V3{};
         V3 fill = ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
         // Full-sphere gathers are noisy: 32 rays let neighbouring probes 64 units

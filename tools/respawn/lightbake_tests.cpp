@@ -112,6 +112,31 @@ int main() {
         require(skyVector(shaded).x > 0, "Roofed sky vector bends towards the open side");
         require(r.chartedTexels >= 64, "Floor covers its texels");
 
+        // Imported Source torch lights attenuate inversely, not with a broad fade.
+        {
+            Light torch;
+            torch.zeroDistance = 2048;
+            torch.sourceAttenuation = true;
+            torch.sourceCoefficients = {0, 0, 1};
+            require(near(falloff(torch, 100), 1.0, 1e-12), "Source reference distance");
+            require(near(falloff(torch, 200), 0.25, 1e-12), "Source inverse-square attenuation");
+            require(near(falloff(torch, 1000), 0.01, 1e-12), "Source distant torches do not flood rooms");
+            require(falloff(torch, 0) == 1.0 && falloff(torch, 2048) == 0.0, "Source near cap and finite range");
+            torch.sourceCoefficients = {0, 1, 0};
+            require(near(falloff(torch, 200), 0.5, 1e-12), "Source linear attenuation");
+        }
+        // A diffuse visibility floor brightens shade without erasing sun shadows.
+        {
+            Options fill = options;
+            fill.minimumSkyVisibility = 1.0;
+            const Result soft = bake({floorChart()}, pages, {sun, point}, {.8, .8, .8}, scene, fill);
+            const auto* directions = soft.sky.data() + 16 * 16 * 4;
+            const V3 v = decodeDirection({directions[shaded * 4], directions[shaded * 4 + 1],
+                                          directions[shaded * 4 + 2], directions[shaded * 4 + 3]});
+            require(length(v) > .98, "Ambient floor retains sky contribution beneath roof");
+            require(soft.rtl == r.rtl, "Ambient floor preserves direct sun shadow masks");
+        }
+
         // An unscaled static light lands in SKY A instead of RTL.
         Light lamp = point;
         lamp.origin = {0, 0, 50};

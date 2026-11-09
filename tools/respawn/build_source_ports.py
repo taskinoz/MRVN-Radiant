@@ -736,11 +736,16 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
         pts = np.array([s['origin'] for s in spawninfo])
         smin = pts.min(0)-(384, 384, 64); smax = pts.max(0)+(384, 384, 512)
         o = spawninfo[0]['origin']
+        # Utopia's three end platforms, including the upper END portal recess.
+        # Bounds come from the original BSP; grounded feet are checked by Surf.
+        finish_export = ''
+        if level == 'mp_source_surf_utopia':
+            finish_export = ', finishZones = [ { mins = < -14352, -1024, -7700 >, maxs = < -13824, 1024, -6088 > }, { mins = < -14352, -2048, -4484 >, maxs = < -13952, 2048, -4100 > } ]'
         surf_export = (f' getroottable().MRVN_SurfMap <- {{ startMins = < {smin[0]:g}, {smin[1]:g}, {smin[2]:g} >, '
                        f'startMaxs = < {smax[0]:g}, {smax[1]:g}, {smax[2]:g} >, startOrigin = < {o[0]:g}, {o[1]:g}, {o[2]:g} >, '
-                       f'startYaw = {float(spawninfo[0]["yaw"]):.1f} }}\n')
+                       f'startYaw = {float(spawninfo[0]["yaw"]):.1f}{finish_export} }}\n')
         surf_teleport = ('    if ( "MRVN_SurfTeleported" in getroottable() )\n'
-                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k] )\n')
+                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k], o )\n')
     (scripts/(level+'.nut')).write_text(('untyped\n' if surf else '')+'''global function CodeCallback_MapInit
 struct
 {

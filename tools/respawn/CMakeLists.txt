@@ -21,3 +21,7 @@ add_test(NAME respawn_csg COMMAND csg_tests)
 add_executable(relight_bridge relight_bridge.cpp)
 target_compile_features(relight_bridge PRIVATE cxx_std_17)
 target_link_libraries(relight_bridge PRIVATE Threads::Threads)
+
+add_executable(vector_index_tests vector_index_tests.cpp)
+target_compile_features(vector_index_tests PRIVATE cxx_std_17)
+add_test(NAME respawn_vector_index COMMAND vector_index_tests)

@@ -31,6 +31,7 @@
 /* dependencies */
 #include "remap.h"
 #include "bspfile_abstract.h"
+#include "respawn/stage_timer.h"
 
 
 
@@ -862,11 +863,14 @@ int BSPMain( Args& args ){
 	LoadShaderInfo();
 
 	/* load original file from temp spot in case it was renamed by the editor on the way in */
-	if ( !strEmpty( tempSource ) ) {
-		LoadMapFile( tempSource, false, g_autocaulk );
-	}
-	else{
-		LoadMapFile( mapFileName, false, g_autocaulk );
+	{
+		REMAP_STAGE( "LoadMapFile" );
+		if ( !strEmpty( tempSource ) ) {
+			LoadMapFile( tempSource, false, g_autocaulk );
+		}
+		else{
+			LoadMapFile( mapFileName, false, g_autocaulk );
+		}
 	}
 
 	/* div0: inject command line parameters */
@@ -891,7 +895,10 @@ int BSPMain( Args& args ){
 	//ProcessAdvertisements();
 
 	/* finish and write bsp */
-	EndBSPFile( true );
+	{
+		REMAP_STAGE( "EndBSPFile" );
+		EndBSPFile( true );
+	}
 
 	/* remove temp map source file if appropriate */
 	if ( !strEmpty( tempSource ) ) {

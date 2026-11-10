@@ -26,6 +26,7 @@
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
 #include "../respawn/encoding.h"
+#include "../respawn/vector_index.h"
 
 /*
     EmitTextureData()
@@ -71,16 +72,24 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
 }
 
 
+namespace {
+Respawn::VectorIndex vertexIndex(EQUAL_EPSILON), normalIndex(EQUAL_EPSILON);
+}
+
+void Titanfall::ClearVertexIndices() {
+    vertexIndex.clear();
+    normalIndex.clear();
+}
+
+
 /*
     EmitVertex
     Saves a vertex into Titanfall::vertices and returns its index
 */
 uint32_t Titanfall::EmitVertex(Vector3 &vertex) {
-    for (uint32_t i = 0; i < (uint32_t)Titanfall::Bsp::vertices.size(); i++) {
-        if (VectorCompare(vertex, Titanfall::Bsp::vertices.at(i))) {
-            return i;
-        }
-    }
+    const uint32_t found = vertexIndex.find(vertex, Titanfall::Bsp::vertices, VectorCompare);
+    if (found != UINT32_MAX)
+        return found;
 
     Titanfall::Bsp::vertices.emplace_back(vertex);
     return (uint32_t)Titanfall::Bsp::vertices.size() - 1;
@@ -92,10 +101,9 @@ uint32_t Titanfall::EmitVertex(Vector3 &vertex) {
     Saves a vertex normal into Titanfall::vertexNormals and returns its index
 */
 uint32_t Titanfall::EmitVertexNormal(Vector3 &normal) {
-    for (uint32_t i = 0; i < (uint32_t)Titanfall::Bsp::vertexNormals.size(); i++) {
-        if (VectorCompare(normal, Titanfall::Bsp::vertexNormals.at(i)))
-            return i;
-    }
+    const uint32_t found = normalIndex.find(normal, Titanfall::Bsp::vertexNormals, VectorCompare);
+    if (found != UINT32_MAX)
+        return found;
 
     Titanfall::Bsp::vertexNormals.emplace_back(normal);
     return (uint32_t)Titanfall::Bsp::vertexNormals.size() - 1;

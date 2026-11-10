@@ -27,6 +27,7 @@
     their compiled world lights; see docs/respawn/RESPAWN_LIGHTING.md.
 */
 
+#include "../respawn/stage_timer.h"
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include <chrono>
@@ -710,6 +711,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     }
 
     Respawn::Bake::Options options;
+    // Honour the compiler-wide CPU budget for both TF1 and TF2 baking.
+    options.threads = static_cast<unsigned>(std::max(1, numthreads));
     options.luxelSize = Shared::luxelSize;
     // Authored outdoor test yards can opt out of sampled sky occlusion while
     // retaining realtime light shadow masks. Keep the existing default bake.
@@ -735,6 +738,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     }
     Respawn::Bake::Result result;
     try {
+        REMAP_STAGE("  lightmap bake");
         result = Respawn::Bake::bake(Titanfall::Bsp::lightmapCharts, pages, Titanfall2::Bsp::bakeLights,
                                      Titanfall2::Bsp::ambient, occluders, options);
     } catch (const std::exception &error) {
@@ -754,11 +758,13 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         }
     std::vector<V3> probePoints;
     try {
-        probePoints = Respawn::Bake::probePositions(occluders, lo, hi);
+        { REMAP_STAGE("  probe grid positions"); probePoints = Respawn::Bake::probePositions(occluders, lo, hi); }
         // Dense probes where characters stand, as retail places them; the grid covers open air.
-        const auto walkable = Respawn::Bake::walkableProbePositions(Titanfall::Bsp::lightmapCharts, occluders);
+        std::vector<V3> walkable;
+        { REMAP_STAGE("  walkable probe positions"); walkable = Respawn::Bake::walkableProbePositions(Titanfall::Bsp::lightmapCharts, occluders); }
         probePoints.insert(probePoints.end(), walkable.begin(), walkable.end());
         Sys_Printf("%9zu walkable-surface light probes\n", walkable.size());
+        REMAP_STAGE("  probe bake");
         Titanfall2::Bsp::lightprobes = Respawn::Bake::bakeProbes(probePoints, Titanfall2::Bsp::bakeLights,
                                                                   Titanfall2::Bsp::ambient, occluders, options,
                                                                   &result.bounce);
@@ -818,6 +824,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         for (const Titanfall::GameLumpProp_t &prop : Titanfall::Bsp::gameLumpProps)
             propPoints.push_back({prop.origin.x(), prop.origin.y(), prop.origin.z() + 32.0});
     try {
+        REMAP_STAGE("  prop probe bake");
         auto propProbes = Respawn::Bake::bakeProbes(propPoints, Titanfall2::Bsp::bakeLights, Titanfall2::Bsp::ambient,
                                                     occluders, options, &result.bounce);
         Titanfall2::Bsp::lightprobes.insert(Titanfall2::Bsp::lightprobes.begin(), propProbes.begin(), propProbes.end());
@@ -830,7 +837,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     const uint32_t propProbeCount = static_cast<uint32_t>(propPoints.size());
     probePoints.insert(probePoints.begin(), propPoints.begin(), propPoints.end());
 
-    Respawn::Bake::ProbeTree tree = Respawn::Bake::buildProbeTree(probePoints);
+    Respawn::Bake::ProbeTree tree;
+    { REMAP_STAGE("  probe tree"); tree = Respawn::Bake::buildProbeTree(probePoints); }
     Titanfall2::Bsp::lightprobeTree = std::move(tree.nodes);
     Titanfall2::Bsp::lightprobeReferences = std::move(tree.references);
     EmitLightprobeBsp();
@@ -839,11 +847,14 @@ void Titanfall2::EmitLighting(const entity_t &world) {
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeReferences.size()),
                                                       0, static_cast<uint32_t>(Titanfall2::Bsp::lightprobeTree.size())});
 
-    EmitShadowEnvironments();
-    if (g_game->bspVersion == 29)
-        EmitCubemapsTF1(&occluders, &result.bounce);
-    else
-        EmitCubemaps(&occluders, &result.bounce);
+    { REMAP_STAGE("  shadow environments"); EmitShadowEnvironments(); }
+    {
+        REMAP_STAGE("  cubemaps");
+        if (g_game->bspVersion == 29)
+            EmitCubemapsTF1(&occluders, &result.bounce);
+        else
+            EmitCubemaps(&occluders, &result.bounce);
+    }
 
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     Sys_Printf("%9zu world lights (%d hardware)\n", Titanfall2::Bsp::worldLights.size(), hardware);

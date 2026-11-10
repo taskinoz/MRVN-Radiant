@@ -25,6 +25,7 @@
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include "../respawn/lump_versions.h"
+#include "../respawn/stage_timer.h"
 #include <ctime>
 #include "mp_menu.h"
 
@@ -77,14 +78,14 @@ void WriteR2BSPFile(const char *filename) {
         SafeWrite(file, &message, sizeof(message));
     }
     {
-        char message[64];
+        char message[64]{};
         strncpy(message, StringOutputStream(64)("Version:        ", Q3MAP_VERSION).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
     {
         time_t t;
         time(&t);
-        char message[64];
+        char message[64]{};
         strncpy(message, StringOutputStream(64)("Time:           ", asctime(localtime(&t))).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
@@ -231,6 +232,7 @@ void WriteR2BSPFile(const char *filename) {
    Compiles a Titanfall 2 bsp file and sorts entities into ent files
 */
 void CompileR2BSPFile() {
+    Titanfall::ClearVertexIndices();
     ExpandMPMenuPrefabs();
     Titanfall2::SetUpGameLump();
 
@@ -253,6 +255,7 @@ void CompileR2BSPFile() {
     Titanfall::Bsp::planes.emplace_back(Plane3f(0, 1, 0, 0));
     // TODO: set cmGrid.brushSidePlaneOffset here
 
+    REMAP_STAGE("CompileR2BSPFile (total)");
     for (entity_t &entity : entities) {
         const char *pszClassname = entity.classname();
 
@@ -271,14 +274,14 @@ void CompileR2BSPFile() {
             world = &entity;
             Titanfall::BeginModel(entity);
 
-            Shared::MakeMeshes(entity);
-            Shared::MakeVisReferences();
+            { REMAP_STAGE("MakeMeshes (world)"); Shared::MakeMeshes(entity); }
+            { REMAP_STAGE("MakeVisReferences"); Shared::MakeVisReferences(); }
 
             const std::size_t firstMesh = Titanfall::Bsp::meshes.size();
-            Titanfall::EmitMeshes(entity);
+            { REMAP_STAGE("EmitMeshes (world)"); Titanfall::EmitMeshes(entity); }
             Titanfall2::CheckWorldIndexBudget(firstMesh);
 
-            Titanfall::EmitCollisionGrid(entity);
+            { REMAP_STAGE("EmitCollisionGrid"); Titanfall::EmitCollisionGrid(entity); }
 
             Titanfall::EmitLevelInfoWorldspawn();
 
@@ -317,11 +320,13 @@ void CompileR2BSPFile() {
         #undef ENT_IS
     }
 
+    Titanfall::ClearVertexIndices(); // Geometry is complete; release lookup caches before lighting.
+
     // Write entity partitions we used
     Titanfall::EmitEntityPartitions();
 
     // Build the default visibility tree; selective cells distribute these same refs.
-    Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
+    { REMAP_STAGE("MakeVisTree"); Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f); }
     if (Shared::visRefs.empty()) {
         // A sky-only scene has no ordinary objects, but still needs finite
         // cell access bounds. Do not reinsert sky meshes as object references.
@@ -333,16 +338,19 @@ void CompileR2BSPFile() {
     // Emit level info
     Titanfall2::EmitLevelInfo();
 
-    if (Shared::lightmapsEnabled && world)
+    if (Shared::lightmapsEnabled && world) {
+        REMAP_STAGE("EmitLighting");
         Titanfall2::EmitLighting(*world);
-    if (!Titanfall2::Bsp::lightingBaked)
+    }
+    if (!Titanfall2::Bsp::lightingBaked) {
+        REMAP_STAGE("EmitCubemaps");
         Titanfall2::EmitCubemaps(nullptr, nullptr);
+    }
 
     // Emit lumps we dont generate yet, but need for the map to load
-    Titanfall2::EmitStubs();
-    Titanfall::EmitStubs();
+    { REMAP_STAGE("EmitStubs"); Titanfall2::EmitStubs(); Titanfall::EmitStubs(); }
     // Replace shared legacy portal placeholders only after EmitStubs initializes them.
-    Titanfall2::EmitVisibility(*world);
+    { REMAP_STAGE("EmitVisibility"); Titanfall2::EmitVisibility(*world); }
 }
 
 

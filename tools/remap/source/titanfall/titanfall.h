@@ -52,6 +52,7 @@ namespace Titanfall {
     void         EmitPlane(const Plane3 &plane);
     void         EmitEntityPartitions();
     uint32_t     EmitTextureData(shaderInfo_t shader);
+    void         ClearVertexIndices();
     uint32_t     EmitVertex(Vector3 &vertex);
     uint32_t     EmitVertexNormal(Vector3 &normal);
     void         EmitVertexUnlit(Shared::Vertex_t &vertex);

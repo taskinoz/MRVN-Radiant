@@ -83,6 +83,23 @@ int main() {
         const std::vector<PageSize> pages{{16, 16}};
         const Result r = bake({floorChart()}, pages, {sun, point}, {0.8, 0.8, 0.8}, scene, options);
 
+        // Reducing the worker budget changes scheduling, not baked bytes.
+        const std::vector<V3> budgetProbePoints{{-48, 0, 32}, {48, 0, 32}, {0, 0, 150}};
+        const auto referenceProbes = bakeProbes(budgetProbePoints, {sun, point}, {.8,.8,.8}, scene, options, &r.bounce);
+        for (unsigned workers : {1u, 4u}) {
+            Options budget = options;
+            budget.threads = workers;
+            const Result same = bake({floorChart()}, pages, {sun, point}, {.8,.8,.8}, scene, budget);
+            require(same.sky == r.sky && same.rtl == r.rtl && same.rtlPages == r.rtlPages &&
+                    same.chartedTexels == r.chartedTexels && same.realtimeTexels == r.realtimeTexels,
+                    "Worker count must preserve lightmap bytes and references");
+            const auto probes = bakeProbes(budgetProbePoints, {sun, point}, {.8,.8,.8}, scene, budget, &same.bounce);
+            for (std::size_t i = 0; i < probes.size(); ++i)
+                require(probes[i].values == referenceProbes[i].values && probes[i].weights == referenceProbes[i].weights &&
+                        probes[i].lights == referenceProbes[i].lights && probes[i].unused == referenceProbes[i].unused,
+                        "Worker count must preserve character probe records");
+        }
+
         require(r.sky.size() == 16 * 16 * 8 && r.rtl.size() == 16 * 16 * 9, "Plane sizes match retail layout");
         require(r.rtlPages.size() == 1 && r.rtlPages[0][0] == 0, "Sun occupies the first RTL page entry");
         // Floor texels 2..9 cover world -64..64; texel 3 is under the roof, texel 8 is not.

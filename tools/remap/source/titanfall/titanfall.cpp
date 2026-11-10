@@ -75,14 +75,14 @@ void WriteR1BSPFile(const char *filename) {
         SafeWrite(file, &message, sizeof(message));
     }
     {
-        char message[64];
+        char message[64]{};
         strncpy(message,StringOutputStream(64)("Version:        ", Q3MAP_VERSION).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
     {
         time_t t;
         time(&t);
-        char message[64];
+        char message[64]{};
         strncpy(message,StringOutputStream(64)("Time:           ", asctime(localtime(&t))).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
@@ -236,6 +236,7 @@ void WriteR1BSPFile(const char *filename) {
     Compiles a Titanfall 1 bsp file and sorts entition into ent files
 */
 void CompileR1BSPFile() {
+    Titanfall::ClearVertexIndices();
     Titanfall::SetupGameLump();
 
     // Titanfall 1 bakes with the Titanfall 2 lighting pipeline; the writer
@@ -298,6 +299,8 @@ void CompileR1BSPFile() {
 
         #undef ENT_IS
     }
+
+    Titanfall::ClearVertexIndices(); // Geometry is complete; release lookup caches before lighting.
 
     // Write entity partitions we used
     Titanfall::EmitEntityPartitions();

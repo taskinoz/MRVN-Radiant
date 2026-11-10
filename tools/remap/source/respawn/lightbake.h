@@ -21,6 +21,8 @@
  * apex-to-titanfall-2's engine analysis, value ranges checked against retail.
  */
 #pragma once
+#include <cstdio>
+#include <chrono>
 
 #include <algorithm>
 #include <array>
@@ -325,23 +327,71 @@ public:
         return true;
     }
 
+    // A segment's slab test with its reciprocal direction worked out once. It only prunes
+    // candidates using their bounds. A conservative fraction pad absorbs round-off;
+    // the unchanged plane test still decides whether a candidate blocks the ray.
+    struct Ray {
+        V3 a, d, inv;
+        bool flat[3];
+        explicit Ray(V3 from, V3 to) : a(from), d(to - from) {
+            const double dir[3] = {d.x, d.y, d.z};
+            double r[3];
+            for (int i = 0; i < 3; ++i) {
+                flat[i] = std::abs(dir[i]) < 1e-12;
+                r[i] = flat[i] ? 0.0 : 1.0 / dir[i];
+            }
+            inv = {r[0], r[1], r[2]};
+        }
+        // Entry fraction along the segment, or a negative value when the box is missed.
+        double enter(V3 mins, V3 maxs) const {
+            constexpr double pad = 1e-9;
+            double t0 = 0, t1 = 1;
+            const double o[3] = {a.x, a.y, a.z}, r[3] = {inv.x, inv.y, inv.z};
+            const double lo[3] = {mins.x, mins.y, mins.z}, hi[3] = {maxs.x, maxs.y, maxs.z};
+            for (int i = 0; i < 3; ++i) {
+                if (flat[i]) {
+                    if (o[i] < lo[i] || o[i] > hi[i]) return -1;
+                    continue;
+                }
+                double ta = (lo[i] - o[i]) * r[i], tb = (hi[i] - o[i]) * r[i];
+                if (ta > tb) std::swap(ta, tb);
+                t0 = std::max(t0, ta - pad);
+                t1 = std::min(t1, tb + pad);
+                if (t0 > t1) return -1;
+            }
+            return t0;
+        }
+    };
+
+    // Any brush blocking a -> b. Nearer children are searched first, which finds a blocker
+    // sooner; the answer is the same in any order.
     bool blocked(V3 a, V3 b) const {
         if (m_nodes.empty()) return false;
-        const V3 d = b - a;
+        const Ray ray(a, b);
+        if (ray.enter(m_nodes[0].mins, m_nodes[0].maxs) < 0) return false;
         int stack[128];
         int top = 0;
         stack[top++] = 0;
         while (top) {
             const Node& node = m_nodes[stack[--top]];
-            if (!segmentHitsBox(a, d, node.mins, node.maxs)) continue;
             if (node.left < 0) {
-                for (int i = node.first; i < node.first + node.count; ++i)
-                    if (segmentHitsBrush(a, b, m_brushes[m_order[i]])) return true;
-            } else if (top + 2 <= 128) {
+                for (int i = node.first; i < node.first + node.count; ++i) {
+                    const Brush& brush = m_brushes[m_order[i]];
+                    if (ray.enter(brush.mins, brush.maxs) >= 0 && segmentHitsBrush(a, b, brush)) return true;
+                }
+                continue;
+            }
+            const double tl = ray.enter(m_nodes[node.left].mins, m_nodes[node.left].maxs);
+            const double tr = ray.enter(m_nodes[node.right].mins, m_nodes[node.right].maxs);
+            if (top + 2 > 128) throw std::runtime_error("Occluder hierarchy is too deep");
+            if (tl >= 0 && tr >= 0) {
+                // Push the farther child first so the nearer one is searched next.
+                stack[top++] = tl <= tr ? node.right : node.left;
+                stack[top++] = tl <= tr ? node.left : node.right;
+            } else if (tl >= 0) {
                 stack[top++] = node.left;
+            } else if (tr >= 0) {
                 stack[top++] = node.right;
-            } else {
-                throw std::runtime_error("Occluder hierarchy is too deep");
             }
         }
         return false;
@@ -584,7 +634,15 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     for (const auto& light : lights)
         if (light.realtime && light.type != LightType::Ambient && light.hardwareIndex < 0)
             throw std::invalid_argument("Realtime light without a hardware index");
+    auto stageStarted = std::chrono::steady_clock::now();
+    auto lap = [&](const char *stage) {
+        const auto now = std::chrono::steady_clock::now();
+        std::fprintf(stderr, "[bakepass] %s %.1f\n", stage,
+                     std::chrono::duration<double>(now - stageStarted).count());
+        stageStarted = now;
+    };
     const auto samples = rasterize(charts, pages);
+    lap("rasterize");
 
     // Scene extent for sky and sun rays.
     V3 lo = occluders.empty() ? V3{1e300, 1e300, 1e300} : occluders.mins();
@@ -609,6 +667,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
         return static_cast<std::uint8_t>(open * 255 / 4);
     };
 
+    lap("setup");
     // Pass 1: choose up to four realtime lights per texel by unshadowed
     // contribution times visibility, so lights behind walls don't take slots.
     struct Slots {
@@ -669,6 +728,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
         });
     }
 
+    lap("pass1 slots");
     // Assign one RTL page per chart; pages hold at most 63 hardware lights.
     std::vector<std::unordered_map<int, double>> chartLights(charts.size());
     for (std::size_t p = 0; p < pages.size(); ++p)
@@ -726,15 +786,17 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     result.sky.assign(skyBytes, 0);
     result.rtl.assign(rtlBytes, 0);
 
+    lap("rtl pages");
     // Pass 2: rays and encoding. SKY A is finalised in pass 3 once bounce is known.
     const int ambientSamples = std::max(1, options.ambientSamples);
-    std::vector<std::vector<V3>> bakedSky(pages.size()), directLight(pages.size());
-    for (std::size_t p = 0; p < pages.size(); ++p) {
-        bakedSky[p].resize(samples[p].size());
-        directLight[p].resize(samples[p].size());
-    }
+    std::vector<std::vector<V3>> bakedSky(pages.size());
+    RadianceGrid grid(options.bounceCell);
     std::atomic<std::size_t> charted{0}, realtime{0};
     for (std::size_t p = 0; p < pages.size(); ++p) {
+        bakedSky[p].resize(samples[p].size());
+        // Direct irradiance is consumed in page/texel order after this page's
+        // workers join. Keep only one page of scratch, preserving grid sums.
+        std::vector<V3> directLight(samples[p].size());
         const std::size_t texels = std::size_t(pages[p].width) * pages[p].height;
         std::uint8_t* skyA = result.sky.data() + skyOffset[p];
         std::uint8_t* skyB = skyA + texels * 4;
@@ -784,7 +846,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         }
                         const double fraction = std::max(options.minimumSkyVisibility, visible / ambientSamples);
                         baked = baked + ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
-                        directLight[p][i] = directLight[p][i] + ambient * fraction;
+                        directLight[i] = directLight[i] + ambient * fraction;
                         sky = (visible > 0 ? normalize(openDirection) : n) * std::cbrt(fraction);
                     }
 
@@ -800,7 +862,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         const double scale = falloff(light, d) * lambert * spotFactor(light, -l3);
                         if (!(scale > 0) || occluders.blocked(start, light.origin)) continue;
                         baked = baked + light.intensity * scale;
-                        directLight[p][i] = directLight[p][i] + light.intensity * scale;
+                        directLight[i] = directLight[i] + light.intensity * scale;
                     }
 
                     bakedSky[p][i] = baked;
@@ -831,7 +893,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                                 const V3 l3 = toLight * (1.0 / std::max(d, 1e-6));
                                 reach = falloff(light, d) * std::max(0.0, dot(n, l3)) * spotFactor(light, -l3);
                             }
-                            directLight[p][i] = directLight[p][i] + light.intensity * (reach * masks[used - 1] / 255.0);
+                            directLight[i] = directLight[i] + light.intensity * (reach * masks[used - 1] / 255.0);
                         }
                         if (used) {
                             word = packRtlWord(slotIds, static_cast<std::uint8_t>(page));
@@ -843,19 +905,21 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 std::memcpy(rtlB + i * 4, masks.data(), 4);
             }
         });
-    }
-
-    // Radiance grid of directly lit surfaces, then pass 3: one diffuse bounce into SKY A.
-    // The grid is kept even without bounce: cubemaps and probes read it.
-    RadianceGrid grid(options.bounceCell);
-    for (std::size_t p = 0; p < pages.size(); ++p)
         for (std::size_t i = 0; i < samples[p].size(); ++i) {
             const auto& s = samples[p][i];
             if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0) continue;
             const V3 a = charts[s.chart].albedo;
-            const V3 e = directLight[p][i];
+            const V3 e = directLight[i];
             grid.add({s.px, s.py, s.pz}, {s.nx, s.ny, s.nz}, {a.x * e.x, a.y * e.y, a.z * e.z});
         }
+        // All slot references were encoded above; release them before the next
+        // page's baked colour and direct-light arrays are allocated.
+        std::vector<Slots>().swap(slots[p]);
+    }
+
+    // The complete radiance grid is kept even without bounce: cubemaps and
+    // probes read it. Pass 3 adds one diffuse bounce to SKY A.
+    lap("pass2 direct");
     for (std::size_t p = 0; p < pages.size(); ++p) {
         std::uint8_t* skyA = result.sky.data() + skyOffset[p];
         detail::parallelFor(pages[p].height, options.threads, [&](std::size_t y) {
@@ -875,6 +939,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     result.bounce = std::move(grid);
     result.chartedTexels = charted;
     result.realtimeTexels = realtime;
+    lap("pass3 bounce");
     return result;
 }
 

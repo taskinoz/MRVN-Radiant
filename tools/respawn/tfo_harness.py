@@ -33,6 +33,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -86,10 +87,16 @@ def expectation_errors(events, expect):
     return errors
 
 
+def executable_path_key(path):
+    # Compare canonical long paths: CI temp folders use 8.3 names (RUNNER~1),
+    # and QueryFullProcessImageNameW may echo whichever form launched the process.
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
 class CrashHandlers:
     def __init__(self, parent_pid, game):
         self.parent_pid = parent_pid
-        self.executables = {name: str((game / 'Bin' / name).resolve()).casefold()
+        self.executables = {name: executable_path_key(game / 'Bin' / name)
                             for name in ('crashpad_handler.exe', 'messagebox-win.exe')}
         self.handles = {}
 
@@ -136,7 +143,7 @@ class CrashHandlers:
                         path = ctypes.create_unicode_buffer(32768)
                         length = ctypes.wintypes.DWORD(len(path))
                         if (kernel.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(length)) and
-                                path.value.casefold() == self.executables[name]):
+                                executable_path_key(path.value) == self.executables[name]):
                             self.handles[pid] = handle
                             pending = True
                         else:

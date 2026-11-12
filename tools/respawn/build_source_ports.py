@@ -1065,6 +1065,7 @@ void function KillFallenPilots()
    {
     int k = hit + RandomInt( file.choices[hit] )
     vector touchOrigin = previous + ( o - previous ) * nearest
+    printl( "[surf] teleport " + player.GetPlayerName() + " " + previous + " -> " + file.destinations[k] + " trigger " + hit + " brush " + file.brushFirst[hit] + " touch " + touchOrigin + " v " + player.GetVelocity() )
     player.SetOrigin( file.destinations[k] )
     player.SetAngles( <0, file.yaws[k], 0> )
     player.SetVelocity( <0, 0, 0> )

@@ -189,8 +189,14 @@ void WriteR1BSPFile(const char *filename) {
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESH_ALPHA_VERTICES],  Titanfall2::Bsp::shadowMeshAlphaVertices);
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESH_INDICES],     Titanfall2::Bsp::shadowMeshIndices);
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESHES],           Titanfall2::Bsp::shadowMeshes);
-    } else
+    } else {
         AddLump(file, header.lumps[R1_LUMP_LIGHTMAP_DATA_SKY],       Titanfall::Bsp::lightMapDataSky_stub);  // stub
+        // Even the fallback atlas has a v29 RTL plane: four unshadowed bytes
+        // per texel. Omitting it leaves the declared page without its mask.
+        // SKY stores two four-byte planes; RTL stores one of the same size.
+        realtime.assign(Titanfall::Bsp::lightMapDataSky_stub.size() / 2, 255);
+        AddLump(file, header.lumps[R1_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS], realtime);
+    }
     if (baked) {
         AddLump(file, header.lumps[R1_LUMP_CSM_AABB_NODES],          Titanfall2::Bsp::csmAABBNodes);
         AddLump(file, header.lumps[R1_LUMP_CSM_OBJ_REFERENCES],      Titanfall2::Bsp::csmObjReferences);

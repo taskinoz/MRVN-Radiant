@@ -46,6 +46,12 @@ These produce a Northstar mod folder and ZIP, an editable `.map`, and JSON repor
 
 ## Inspection and recovery
 
+`audit_tf1_lumps.py` compares v29 writer coverage, directory versions and selected
+record validation across local BSPs; `--markdown` emits a per-lump checklist.
+`prepare_tf1_baseline.py` builds original brush/patch geometry and shared native
+checks. See the [Phase 2 notes](../../docs/respawn/RESPAWN_TF1_PHASE2.md) for the
+commands, environment and limits of the resulting evidence.
+
 | Tool | Does |
 | --- | --- |
 | `inspect_bsp.py` | Lists an rBSP's lumps and counts (read only) |

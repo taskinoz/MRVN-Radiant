@@ -121,7 +121,11 @@ A third requirement surfaced on the way: R1Delta's gametype script puts each
 connecting player at an `info_intermission`; with none, the connect callback
 errors (`viewPoint` is null in `SetPlayerToDefaultViewPoint`) and the match
 never starts. Retail maps place them in the BSP entity lump, as remap does;
-remap now warns when a TF1 map has none. TFO tolerates their absence.
+remap now synthesizes a missing camera from an existing pilot spawn (15 November
+2026), preferring a human start spawn and preserving its position and angles.
+Authored cameras are preserved. A map without either a camera or a located
+pilot spawn still receives a warning; no arbitrary camera location is guessed.
+TFO tolerates their absence.
 
 With all three, 16 barrels on the compiled `vstats` map (8 over a patch, i.e.
 virtual-mesh collision, 8 over a brush) fell and came to rest at z 15.56..15.69,

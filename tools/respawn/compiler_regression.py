@@ -668,6 +668,40 @@ def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
         raise RuntimeError(f"expected {brushes} VPhysics ledges, got {ledges}")
 
 
+def intermission_fixtures(folder, command, reports, game):
+    world = '{\n"classname" "worldspawn"\n' + box((0, 0, 0), (256, 64, 128), 'bump') + '\n}\n'
+    native = {'classname': 'info_spawnpoint_human_start', 'origin': '32 32 160', 'angles': '5 45 0'}
+    regular = {'classname': 'info_spawnpoint_human', 'origin': '128 32 160', 'angles': '0 90 0'}
+    authored = {'classname': 'info_intermission', 'origin': '1 2 3', 'angles': '4 5 6', 'targetname': 'authored'}
+    legacy = {'classname': 'info_player_start', 'origin': '64 32 160', 'angle': '135'}
+    cases = [('spawn-camera-fallback', [regular, native], native),
+             ('spawn-camera-authored', [native, authored], authored),
+             ('spawn-camera-legacy-yaw', [legacy], dict(legacy, angles='0 135 0')),
+             ('spawn-camera-no-spawn', [], None)]
+    for name, entities, expected in cases:
+        path = folder / (name + '.map')
+        path.write_text(world + ''.join('{\n' + ''.join(f'"{k}" "{v}"\n' for k, v in e.items()) + '}\n'
+                                       for e in entities), encoding='utf-8')
+        with path.with_suffix('.log').open('wb') as log:
+            subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+        bsp = path.with_suffix('.bsp')
+        if validate(bsp)['issues']:
+            raise RuntimeError(f'{name}: invalid BSP')
+        entry = inspect(bsp)['lumps'][0]
+        with bsp.open('rb') as stream:
+            stream.seek(entry['offset'])
+            emitted = [dict(pairs) for pairs in parse_entities(stream.read(entry['length']).decode('utf-8'))]
+        cameras = [e for e in emitted if e.get('classname') == 'info_intermission']
+        if expected is None:
+            if cameras or 'No info_intermission or pilot spawn' not in path.with_suffix('.log').read_text():
+                raise RuntimeError('no-spawn map must retain the diagnostic without inventing a camera')
+        elif len(cameras) != 1 or any(cameras[0].get(k) != expected[k] for k in ('origin', 'angles')):
+            raise RuntimeError(f'{name}: wrong camera: {cameras}')
+        elif expected is authored and cameras[0].get('targetname') != 'authored':
+            raise RuntimeError('authored intermission camera changed')
+        reports.append({'game': game, 'fixture': name, 'issues': []})
+
+
 def physics_virtual_mesh_fixture(folder, command, reports, game):
     # World patches collide in VPhysics through the engine's TRICOLL virtual
     # meshes, not prisms. As in retail, only clip-only headers get keydata vtric
@@ -876,6 +910,7 @@ def main():
                 reports.append({'game': game, 'fixture': 'vmt-physics-materials', 'issues': []})
                 physics_material_limit_fixture(folder,command,reports,game)
                 physics_virtual_mesh_fixture(folder,command,reports,game)
+                intermission_fixtures(folder,command,reports,game)
                 fluid_path = folder / 'fluids.map'
                 fluid_path.write_text('{\n"classname" "worldspawn"\n' +
                                       box((0, 0, -64), (64, 64, -16), 'bump') + '\n' +

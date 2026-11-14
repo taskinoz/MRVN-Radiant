@@ -189,8 +189,14 @@ void WriteR1BSPFile(const char *filename) {
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESH_ALPHA_VERTICES],  Titanfall2::Bsp::shadowMeshAlphaVertices);
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESH_INDICES],     Titanfall2::Bsp::shadowMeshIndices);
         AddLump(file, header.lumps[R1_LUMP_SHADOW_MESHES],           Titanfall2::Bsp::shadowMeshes);
-    } else
+    } else {
         AddLump(file, header.lumps[R1_LUMP_LIGHTMAP_DATA_SKY],       Titanfall::Bsp::lightMapDataSky_stub);  // stub
+        // Even the fallback atlas has a v29 RTL plane: four unshadowed bytes
+        // per texel. Omitting it leaves the declared page without its mask.
+        // SKY stores two four-byte planes; RTL stores one of the same size.
+        realtime.assign(Titanfall::Bsp::lightMapDataSky_stub.size() / 2, 255);
+        AddLump(file, header.lumps[R1_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS], realtime);
+    }
     if (baked) {
         AddLump(file, header.lumps[R1_LUMP_CSM_AABB_NODES],          Titanfall2::Bsp::csmAABBNodes);
         AddLump(file, header.lumps[R1_LUMP_CSM_OBJ_REFERENCES],      Titanfall2::Bsp::csmObjReferences);
@@ -302,16 +308,39 @@ void CompileR1BSPFile() {
 
     Titanfall::ClearVertexIndices(); // Geometry is complete; release lookup caches before lighting.
 
-    // Write entity partitions we used
-    Titanfall::EmitEntityPartitions();
-
     // R1Delta's gametype script places connecting players at an info_intermission;
-    // without one, CodeCallback_OnClientConnectionStarted errors and the match never starts.
-    // Every retail map has them (in the BSP entity lump). TFO tolerates their absence.
+    // without one, CodeCallback_OnClientConnectionStarted errors. Reuse an authored
+    // pilot spawn for the missing camera; do not guess a location in maps with no spawn.
     if (std::none_of(entities.begin(), entities.end(),
                      [](const entity_t &e) { return striEqual(e.classname(), "info_intermission"); })) {
-        Sys_Warning("No info_intermission: R1Delta will not start a match on this map\n");
+        const entity_t *spawn = nullptr;
+        for (const char *classname : {"info_spawnpoint_human_start", "info_spawnpoint_human",
+                                      "info_player_start", "info_player_deathmatch"}) {
+            const auto candidate = std::find_if(entities.begin(), entities.end(), [&](const entity_t &e) {
+                return striEqual(e.classname(), classname) && *e.valueForKey("origin");
+            });
+            if (candidate != entities.end()) { spawn = &*candidate; break; }
+        }
+        if (spawn) {
+            entity_t camera;
+            camera.setKeyValue("classname", "info_intermission");
+            camera.setKeyValue("origin", spawn->valueForKey("origin"));
+            const char *angles = spawn->valueForKey("angles");
+            if (*angles)
+                camera.setKeyValue("angles", angles);
+            else if (*spawn->valueForKey("angle")) {
+                const std::string yaw = std::string("0 ") + spawn->valueForKey("angle") + " 0";
+                camera.setKeyValue("angles", yaw.c_str());
+            } else
+                camera.setKeyValue("angles", "0 0 0");
+            Titanfall::EmitEntity(camera);
+            Sys_Printf("Added info_intermission at pilot spawn %s\n", spawn->valueForKey("origin"));
+        } else
+            Sys_Warning("No info_intermission or pilot spawn: R1Delta will not start a match on this map\n");
     }
+
+    // Write entity partitions we used
+    Titanfall::EmitEntityPartitions();
 
     // Generate vis tree for worldspawn, we do this here as we'll need portals once we reverse further
     Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);

@@ -18,6 +18,7 @@ says what was tested in game and what wasn't. The tools are indexed in
 | --- | --- |
 | [RESPAWN_TF2_LUMPS.md](RESPAWN_TF2_LUMPS.md) | Cubemaps, probe BSP, CSM objects, collision primitives and noded triangle collision |
 | [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md) | Titanfall 1 lighting, tangents, cubemaps, VPhysics, portals and testing in Titanfall Online |
+| [RESPAWN_TF1_PHASE2.md](RESPAWN_TF1_PHASE2.md) | Phase 2 parity checklist, remaining tasks and reproducible TFO baseline |
 | [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md) | Lightmaps, sun, probes and the baker |
 | [RESPAWN_BUILD_PERFORMANCE.md](RESPAWN_BUILD_PERFORMANCE.md) | Compiler speed, memory, worker budgets and before/after output checks |
 | [RESPAWN_TRICOLL_PORTALS.md](RESPAWN_TRICOLL_PORTALS.md) | Triangle collision and view portals |

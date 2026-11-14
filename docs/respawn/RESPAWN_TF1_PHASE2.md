@@ -1,6 +1,6 @@
 # Phase 2: Titanfall 1 / Titanfall Online support
 
-Checkpoint: 14 November 2026. **Partially verified; full support is not complete.**
+Checkpoint: 15 November 2026. **Partially verified; full support is not complete.**
 Phase 1's surf release gates remain open; the user requested Phase 2 work in
 parallel with them. Initial runtime testing used TFORevive because another
 system was using EA/Origin. After the user confirmed EA was signed in,
@@ -229,3 +229,32 @@ character-lighting semantics, unresolved curved/transformed collision,
 complete asset packaging, gameplay/navigation, converter targets and paired
 release/human acceptance. ARES's `docs/tf1-tfo-compatibility.md` tracks the same
 scope for users of its standalone tools.
+
+## Startup and water-reference follow-up: 15 November
+
+The compiler now synthesizes a missing `info_intermission` at an existing pilot
+spawn. It prefers `info_spawnpoint_human_start`, then the ordinary human spawn,
+then legacy player starts; authored cameras are preserved. Position and angles
+are copied, with legacy yaw expanded to three angles. With no located spawn,
+the warning remains and no arbitrary location is generated. This fixes the
+camera requirement; it does not generate all gameplay spawns/objectives.
+
+Four compiler integration cases cover preferred-spawn selection, preservation
+of an authored camera, legacy yaw, and a map with no spawn. All **59** compiler
+regression cases pass. A fresh baseline compiled with `--omit-intermission`
+loads and starts in R1Delta 3.0.5 and passes its six collision expectations.
+Evidence: `.local/respawn/phase2-intermission/r1-autocamera/report.json`, its
+source `.map`, compile log and build manifest. The source deliberately lacks
+the camera; the emitted BSP contains it.
+
+The v29 validator also checks each cell's signed water-record index: `-1` is
+dry and nonnegative indices must name LEAF_WATER_DATA. The expanded corpus
+now has **37** compiled/reference maps, all passing. Unit suites pass **232**
+MRVN tests and **155** ARES format-tool tests; the ARES adapter suite remains
+65 passing tests. Updated logs are under `.local/respawn/phase2-intermission/`.
+
+Water-cell splitting already exists in the opt-in portal path:
+`CollapseVisibilityCells` prevents merging across wet/dry boundaries, and
+`AssignWaterCells` assigns the emitted cells. The existing convex/sloped-water
+compiler cases pass. This closes the status ambiguity about implementation;
+underwater rendering/fog and paired buoyancy acceptance remain open.

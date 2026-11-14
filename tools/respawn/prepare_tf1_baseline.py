@@ -12,7 +12,7 @@ import subprocess
 from compiler_regression import box
 
 
-def prepare(remap, output):
+def prepare(remap, output, omit_intermission=False):
     output.mkdir(parents=True, exist_ok=False)
     assets = output / 'assets/shaders'
     assets.mkdir(parents=True)
@@ -30,7 +30,7 @@ def prepare(remap, output):
                     ''.join('{\n"classname" "' + kind + '"\n"origin" "-200 0 64"\n' +
                             f'"teamnumber" "{team}"\n"ignoreGamemode" "1"\n"gamemode_tdm" "1"\n}}\n'
                             for team in (2, 3) for kind in ('info_spawnpoint_human', 'info_spawnpoint_human_start')) +
-                    '{\n"classname" "info_intermission"\n"origin" "-200 0 64"\n}\n', encoding='utf-8')
+                    ('' if omit_intermission else '{\n"classname" "info_intermission"\n"origin" "-200 0 64"\n}\n'), encoding='utf-8')
     command = [str(remap.resolve()), '-game', 'titanfallonline', '-fs_basepath', str(output.resolve()),
                '-bsp', str(path.resolve())]
     with (output / 'compile.log').open('wb') as log:
@@ -63,5 +63,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--remap', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--omit-intermission', action='store_true', help='Exercise the compiler camera fallback')
     args = parser.parse_args()
-    prepare(args.remap, args.output)
+    prepare(args.remap, args.output, args.omit_intermission)

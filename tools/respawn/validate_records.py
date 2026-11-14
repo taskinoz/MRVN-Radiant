@@ -244,6 +244,9 @@ def check_tf1_records(records, inventory):
             error(36, i, 'invalid water height range')
         if not 0 <= texture < len(records[2]):
             error(36, i, 'water texture outside TEXTURE_DATA')
+    for i, (_, _, _, water) in enumerate(records[107]):
+        if water < -1 or water >= len(records[36]):
+            error(107, i, 'cell water reference outside LEAF_WATER_DATA')
     for i, light in enumerate(records[54]):
         if not all(math.isfinite(v) for v in (*light[:12], *light[15:22])):
             error(54, i, 'nonfinite world light')

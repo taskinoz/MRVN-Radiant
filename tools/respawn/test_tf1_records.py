@@ -10,7 +10,7 @@ from validate_records import TF1_SCHEMAS, check_tf1_records, load_records
 
 def fixture():
     records = {index: [] for index in TF1_SCHEMAS}
-    records.update({2: [(0,) * 9], 82: [(0, 0, 0, 0, 0)]})
+    records.update({2: [(0,) * 9], 82: [(0, 0, 0, 0, 0)], 107: [(0, 0, 1, 0)]})
     records[36] = [(64., 0., 0)]
     records[83] = [(0, 2, 2)]
     records[101] = [(0,)]
@@ -42,6 +42,14 @@ class Tf1AuxiliaryTests(unittest.TestCase):
             records, inventory = fixture()
             records[lump] = [row]
             self.assertTrue(check_tf1_records(records, inventory))
+
+    def test_cell_water_indices_use_the_signed_dry_sentinel(self):
+        records, inventory = fixture()
+        records[107] = [(0, 0, 1, -1)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        for water in (-2, 1):
+            records[107] = [(0, 0, 1, water)]
+            self.assertIn('cell water reference', str(check_tf1_records(records, inventory)))
 
     def test_light_atlas_reference_and_dimensions_are_checked(self):
         records, inventory = fixture()

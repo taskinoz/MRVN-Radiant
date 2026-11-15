@@ -265,7 +265,7 @@ namespace Titanfall {
         int16_t  textureData;
         int16_t  lightmapHeader;
         int16_t  cubemap;
-        int16_t  unk;
+        uint16_t vertexSpan;  // v29: last minus first local vertex across this sort
         int32_t  vertexOffset;
     };
 

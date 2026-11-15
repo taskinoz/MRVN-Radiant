@@ -107,3 +107,11 @@ Keep the spawn sidecar with the BSP when staging or renaming the map. Retail
 materials are referenced but not included; R1Delta's `--material-files` accepts
 an explicit local VMT/VTF dependency tree. This fixture tests two floor rays and
 three views; it does not establish buoyancy or gameplay compatibility.
+
+To distinguish surface visibility/material staging from the runtime Water shader,
+add `--diagnostic-texture LOCAL.vtf`. The generator uses unique `ares_water/`
+names and emits magenta/cyan UnlitGeneric VMTs plus the supplied texture under
+`material-files/`; pass that directory to R1Delta's `--material-files`. Compiler
+water profiles and geometry remain intact. A visible diagnostic surface proves
+that control can draw; it does not verify refraction, fog or Water shader parity.
+The generated manifest identifies this diagnostic mode. No VTF is bundled here.

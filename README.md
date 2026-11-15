@@ -72,6 +72,13 @@ must be packaged with their dependencies for standalone maps.
 Validation at this checkpoint: 232 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
 counts and the writer coverage above are not a percentage of full compatibility.
+The v29 mesh vertex-type enum now matches surveyed retail TF1 maps (unlit 0,
+lit-flat 1, lit-bump 2), with pool selection/lightmap bookkeeping kept separate.
+Material sorts also store their referenced vertex span, matching the surveyed
+retail records. Regression cases check both metadata relationships.
+R1 diagnostic unlit surfaces render from staged materials; switching those same
+surfaces to native Water still fails. This narrows the water investigation but
+does not close it.
 The [Phase 2 log](docs/respawn/RESPAWN_TF1_PHASE2.md) retains native failures and
 is the detailed source for acceptance status.
 

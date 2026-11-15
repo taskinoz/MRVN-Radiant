@@ -115,3 +115,12 @@ names and emits magenta/cyan UnlitGeneric VMTs plus the supplied texture under
 water profiles and geometry remain intact. A visible diagnostic surface proves
 that control can draw; it does not verify refraction, fog or Water shader parity.
 The generated manifest identifies this diagnostic mode. No VTF is bundled here.
+
+The generator also emits `buoyancy-checks.json`: sequential wet/dry drops of
+`models/containers/box_large_cardboard.mdl`, sample recording and coarse endpoint
+height ranges. Pass this file to each adapter; R1 requires locally supplied
+`--model-files`. Use ARES `physics_observations.py` with the matching standalone
+PHY, `--floor 1 0 --motion 1`, to check the dry body's support and tail-window
+translation. Checking wet `--motion 0` currently fails because the floating box
+keeps bobbing. Zero entity-reported velocity alone does not establish rest.
+This is a controlled sample; it does not establish broad buoyancy compatibility.

@@ -258,3 +258,43 @@ Water-cell splitting already exists in the opt-in portal path:
 `AssignWaterCells` assigns the emitted cells. The existing convex/sloped-water
 compiler cases pass. This closes the status ambiguity about implementation;
 underwater rendering/fog and paired buoyancy acceptance remain open.
+
+## Underwater draw and camera follow-up: 15 November
+
+A freshly compiled room now renders submerged world geometry and water fog in
+TFO Core 135. Wet-cell world mesh references retain normal rendering and gain
+`0x200000` underwater participation; sky and prop references are excluded.
+The v29 material writer strips both mesh draw bits from TEXTURE_DATA. All
+1,485 surveyed material records across five retail TF1 maps omit these bits.
+TF1 shader profiles now emit Water (lit-flat, material flags 0x3008) and
+WaterBeneath (unlit, 0x3408, underwater-only and non-solid). Authors must supply
+reversed underside geometry explicitly; automatic underside generation is open.
+
+The native TFO probe has floor z=0, water z=128, and held eye heights 252
+(above), 76 (submerged), and 76 in an adjacent dry cell. All three captures
+were reviewed; geometry and fog render underwater, and dry/above views render.
+Two downward traces hit z=0.03125. Evidence and original source remain local:
+`.local/respawn/phase2-water/tfo-typed/` and `maps/mp_tf1_water_typed.map`.
+No hand edits to the BSP were needed. This is one rectangular-room sample,
+not general water acceptance or a buoyancy test.
+
+The same BSP in R1Delta 3.0.5 renders underwater floor/fog, but the upper view
+is black and the surface is absent above water. Material availability and
+renderer differences need isolation. Its above-water position drifted 2.606
+units and correctly failed the one-unit camera check. Keep this raw failure
+at `phase2-water/r1-typed/report.json`; paired visual acceptance stays open.
+The map also reports missing navigation paths.
+
+ARES now holds requested views against gravity, records origin/eye position,
+fails missing captures and excessive origin drift, and requires fresh TFO
+captures from the current launch. R1 view holds are token-owned and cancelled
+after capture, including errors. Camera checks do not establish pixel parity.
+
+Validation: 232 MRVN tool tests, 155 ARES format tests, 68 adapter tests and
+registry validation pass. One initial adapter-suite run hit a Northstar local
+connection abort; the full rerun passed. All 60 compiler regression reports
+pass, including dry/wet mesh draw checks and exact water shader profiles.
+Reproduce with `python tools/respawn/compiler_regression.py --remap
+install/Release/remap.exe --work-dir .local/respawn/water-regression`.
+Broader buoyancy, R1 water materials, underwater submodels/props, sloped and
+multiple-pool rendering, lighting, collision, packaging and release gates remain.

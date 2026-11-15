@@ -67,6 +67,10 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
     td.visibleX = shader.shaderImage->width;
     td.visibleY = shader.shaderImage->height;
     td.flags = shader.surfaceFlags;
+    // v29 keeps above/underwater draw participation on MESHES, not the material
+    // flags in TEXTURE_DATA. All 1,485 surveyed retail TF1 materials omit them.
+    if (g_game->bspVersion == 29)
+        td.flags &= ~(S_MESH_UNKNOWN | S_TF1_UNDERWATER_DRAW);
 
     return index;
 }

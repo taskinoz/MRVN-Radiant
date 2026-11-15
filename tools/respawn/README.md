@@ -85,3 +85,11 @@ cmake -S tools/respawn -B build/respawn-tests
 cmake --build build/respawn-tests --config Release
 ctest --test-dir build/respawn-tests -C Release
 ```
+
+TF1 water regression: the compiler suite includes separated/sloped water cells,
+wet-cell world draw participation and Water/WaterBeneath shader profiles. Define
+`$shadertype Water` on the volume material and `$shadertype WaterBeneath` on an
+explicit reverse-facing, render-only underside. Use `_viewportals 1` for split
+wet/dry cells. These profiles apply to v29; they do not generate underside
+geometry or package retail material dependencies. Native evidence and remaining
+R1Delta failures are in [Phase 2](../../docs/respawn/RESPAWN_TF1_PHASE2.md).

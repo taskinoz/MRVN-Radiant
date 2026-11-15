@@ -556,3 +556,12 @@ collision defect. The harness's `drop_samples` option logs drop positions every
   superset of Angel City's retail lists; exact retail selection remains open.
 - **LEAF_WATER_DATA:** records are generated for water, but the cell assignment
   heuristic remains unverified, particularly for single-cell maps.
+
+### Underwater draw follow-up (15 November 2026)
+
+Wet-cell world meshes now gain underwater participation (0x200000), while
+TEXTURE_DATA excludes mesh draw bits. Water/WaterBeneath profiles preserve the
+native 0x3008/0x3408 material masks. A freshly compiled rectangular room renders
+geometry and fog in TFO; R1Delta still has a surface/upper-view failure.
+Explicit reversed underside geometry is required. See RESPawn Phase 2's
+[water evidence and limitations](RESPAWN_TF1_PHASE2.md#underwater-draw-and-camera-follow-up-15-november).

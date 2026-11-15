@@ -86,12 +86,19 @@ def prepare(remap, output, diagnostic_texture=None):
               'expect': {'trace_z': [[0, 0, .1], [1, 0, .1]]},
               'views': [[-256, -320, 192, 20, 90], [-256, -320, 16, 0, 90], [256, -320, 16, 0, 90]]}
     (output / 'checks.json').write_text(json.dumps(checks, indent=2), encoding='utf-8')
+    buoyancy = {'traces': checks['traces'], 'drops': [[-256, 0, 192], [256, 0, 192]],
+                'drop_models': ['models/containers/box_large_cardboard.mdl'] * 2,
+                'drop_wait': 12, 'drop_samples': True, 'drop_sequential': True,
+                'expect': {'trace_z': checks['expect']['trace_z'],
+                           'drop_z': [[0, 64, 160], [1, 0, 32]]}}
+    (output / 'buoyancy-checks.json').write_text(json.dumps(buoyancy, indent=2), encoding='utf-8')
     manifest = {'command': command, 'cells': cells,
                 'runtime_surface_shader': 'UnlitGeneric diagnostic' if diagnostic_texture else 'retail Water',
                 'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),
                 'bsp_sha256': hashlib.sha256(bsp.read_bytes()).hexdigest(),
                 'scope': 'Rectangular water room, explicit reversed underside, three views and two floor rays. '
-                         'No buoyancy, navigation or gameplay acceptance. Materials must be supplied locally.'}
+                         'Separate buoyancy-checks.json probes one cardboard model wet/dry; no broad buoyancy, '
+                         'navigation or gameplay acceptance. Materials/models must be supplied locally.'}
     (output / 'build.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
 
 

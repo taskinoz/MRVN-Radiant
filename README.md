@@ -54,7 +54,7 @@ samples, map trials, crash investigations and the converter notes. See the
 > NOTE: These values are updated manually. Last counted 2026-11-06 from
 > `titanfall.cpp`, `titanfall2.cpp` and `apex_legends.cpp`.
 
-## TF1 / TFO compatibility (15 November 2026)
+## TF1 / TFO compatibility (16 November 2026)
 
 The shared compiler target does not imply identical runtime behavior. R1Delta
 needs an intermission camera and coordinates within +/-16384; the compiler now
@@ -65,7 +65,7 @@ must be packaged with their dependencies for standalone maps.
 | --- | --- | --- |
 | v29 structure/startup | 37 compiled/reference maps validate; fresh maps start in both runtimes | Remaining record semantics and broader maps |
 | Collision/physics | Paired ray/hull probes, barrel support, sequential R1 drops; actual-PHY support in one TFO crate stress scene | Curved/transformed/backface collision, masks, repeated stress and historical fall-through |
-| Water | Wet/dry cell regression; compiled underwater geometry and fog in TFO | R1 surface rendering, paired buoyancy, slopes/multiple pools and submerged props |
+| Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 surface rendering, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
 | Lighting | Fallback lightmap planes and structural probe checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
 
@@ -79,6 +79,11 @@ retail records. Regression cases check both metadata relationships.
 R1 diagnostic unlit surfaces render from staged materials; switching those same
 surfaces to native Water still fails. This narrows the water investigation but
 does not close it.
+Paired wet/dry cardboard probes now show flotation in both runtimes, with dry
+PHY support passing. The wet bodies continue bobbing; entity-reported velocity
+can be zero during motion. ARES now checks sampled translation separately and
+TFO sequential drops honor sample recording. This is one buoyancy sample, not
+broad physics parity or proof of rest.
 The [Phase 2 log](docs/respawn/RESPAWN_TF1_PHASE2.md) retains native failures and
 is the detailed source for acceptance status.
 

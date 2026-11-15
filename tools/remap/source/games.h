@@ -75,6 +75,9 @@ const int S_VERTEX_UNLIT_TS      = 0x00000600;
 // const int S_VERTEX_BLINN_PHONG   = ?
 
 const int S_MESH_UNKNOWN         = 0x00100000;
+// v29 world meshes need this draw bit when visible from a water cell. Native
+// TFO controls render an otherwise black submerged scene when it is present.
+const int S_TF1_UNDERWATER_DRAW  = 0x00200000;
 
 // Collision flags
 const int CONTENTS_SOLID                = 0x00000001;  // Everything collides with me

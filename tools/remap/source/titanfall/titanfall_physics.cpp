@@ -601,4 +601,29 @@ void Titanfall::AssignWaterCells() {
     }
     if (!Titanfall::Bsp::leafWaterData.empty())
         Sys_Printf("%9zu leaf water records, %zu water cells\n", Titanfall::Bsp::leafWaterData.size(), assigned);
+
+    // Visibility references are conservative: a mesh can cross several cells.
+    // Preserve its normal draw bit and also allow the underwater pass wherever
+    // a wet cell can see it. Sky has its own render pass; prop IDs follow world
+    // meshes in this namespace and must not be interpreted as brush-model IDs.
+    if (assigned && !Titanfall::Bsp::models.empty()) {
+        const auto &world = Titanfall::Bsp::models.front();
+        const auto &references = Titanfall::Bsp::objReferences;
+        std::size_t marked = 0;
+        for (std::size_t i = 0; i < cells.size() && i < nodes.size(); ++i) {
+            if (cells[i].leafWaterData < 0) continue;
+            const auto &root = nodes[i];
+            const std::size_t end = std::min(references.size(), std::size_t(root.objRef) + root.totalRefCount);
+            for (std::size_t j = root.objRef; j < end; ++j) {
+                const std::size_t index = references[j];
+                if (index < world.firstMesh || index >= std::size_t(world.firstMesh) + world.meshCount) continue;
+                auto &mesh = Titanfall::Bsp::meshes[index];
+                if (!(mesh.flags & S_SKY) && !(mesh.flags & S_TF1_UNDERWATER_DRAW)) {
+                    mesh.flags |= S_TF1_UNDERWATER_DRAW;
+                    ++marked;
+                }
+            }
+        }
+        Sys_Printf("%9zu world meshes enabled for underwater drawing\n", marked);
+    }
 }

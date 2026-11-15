@@ -77,3 +77,8 @@ Bytes below prefer the default external sidecar when present. Empty payloads can
 | 125 | SHADOW_MESH_ALPHA_VERTICES | yes | no | empty | 20780 B / v0 | 8300 B / v0 | 160 B / v0 |
 | 126 | SHADOW_MESH_INDICES | yes | no | empty | 1036470 B / v0 | 320982 B / v0 | 798 B / v0 |
 | 127 | SHADOW_MESHES | yes | no | empty | 300 B / v0 | 228 B / v0 | 48 B / v0 |
+
+Underwater follow-up: wet-cell OBJ_REFERENCES now enable the world MESHES
+underwater bit; TEXTURE_DATA omits mesh draw flags. TFO rectangular-room
+rendering/fog is sampled successfully; R1Delta surface rendering remains open.
+See [Phase 2](RESPAWN_TF1_PHASE2.md#underwater-draw-and-camera-follow-up-15-november).

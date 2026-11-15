@@ -668,6 +668,23 @@ def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
         raise RuntimeError(f"expected {brushes} VPhysics ledges, got {ledges}")
 
 
+def water_draw_checks(records):
+    first, count = records[14][0][6:8]
+    required = set()
+    for cell, row in enumerate(records[107]):
+        if row[3] < 0:
+            continue
+        root = records[119][cell]
+        for (index,) in records[120][root[10]:root[10]+root[5]]:
+            if first <= index < first+count and not records[80][index][-1] & 4:
+                required.add(index)
+                if not records[80][index][-1] & 0x200000:
+                    raise RuntimeError(f'wet cell {cell} references above-only world mesh {index}')
+    if not records[36] and any(mesh[-1] & 0x200000 for mesh in records[80][first:first+count]):
+        raise RuntimeError('dry fixture unexpectedly gained underwater draw flags')
+    return required
+
+
 def intermission_fixtures(folder, command, reports, game):
     world = '{\n"classname" "worldspawn"\n' + box((0, 0, 0), (256, 64, 128), 'bump') + '\n}\n'
     native = {'classname': 'info_spawnpoint_human_start', 'origin': '32 32 160', 'angles': '5 45 0'}
@@ -860,6 +877,10 @@ def main():
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":
+                initial_records = load_records(bsp, inventory)
+                water_draw_checks(initial_records)
+                if any(texture[-1] & 0x300000 for texture in initial_records[2]):
+                    raise RuntimeError('v29 material flags contain mesh water-draw bits')
                 physics_checks(bsp, inventory, 5)
                 vmt_path = folder / 'vmt-physics.map'
                 vmt_path.write_text('{\n"classname" "worldspawn"\n' + '\n'.join(
@@ -972,11 +993,40 @@ def main():
                     subprocess.run(command[:-1] + [str(water_cells)], stdout=log, stderr=subprocess.STDOUT, check=True)
                 cell_bsp = water_cells.with_suffix('.bsp')
                 cell_records = load_records(cell_bsp, inspect(cell_bsp))
+                if not water_draw_checks(cell_records):
+                    raise RuntimeError('water-cell fixture has no drawable wet world geometry')
                 for point in ((-128, 0, 64), (128, 0, 64)):
                     cell_index = locate_cell(cell_records, point)
                     if cell_records[107][cell_index][3] != -1:
                         raise RuntimeError('empty space between separated water brushes was assigned to water')
                 reports.append({'game': game, 'fixture': 'separated-water-cells', 'issues': []})
+                typed_assets = folder / 'assets/shaders'
+                typed_assets.mkdir(parents=True, exist_ok=True)
+                (typed_assets / 'tf1-water.shader').write_text(
+                    'textures/compat/typed_water\n{\n $shadertype Water\n}\n'
+                    'textures/compat/typed_beneath\n{\n $shadertype WaterBeneath\n}\n')
+                typed = folder / 'water-shader-profiles.map'
+                typed.write_text(water_cells.read_text()[:-2].replace('compat/water', 'compat/typed_water') +
+                                 PATCH.replace('compat/bump', 'compat/typed_beneath') + '\n}\n')
+                typed_command = command[:-2] + ['-fs_basepath', str(folder)] + command[-2:-1] + [str(typed)]
+                with typed.with_suffix('.log').open('wb') as log:
+                    subprocess.run(typed_command, stdout=log, stderr=subprocess.STDOUT, check=True)
+                typed_bsp = typed.with_suffix('.bsp')
+                typed_inventory = inspect(typed_bsp)
+                typed_records = load_records(typed_bsp, typed_inventory)
+                if validate(typed_bsp)['issues'] or typed_records[69]:
+                    raise RuntimeError('WaterBeneath must remain render-only and structurally valid')
+                raw = typed_bsp.read_bytes()
+                entry = typed_inventory['lumps'][43]
+                names = raw[entry['offset']:entry['offset']+entry['length']]
+                entry = typed_inventory['lumps'][44]
+                table = [value[0] for value in struct.iter_unpack('<I',raw[entry['offset']:entry['offset']+entry['length']])]
+                observed = {names[table[t[3]]:].split(b'\0',1)[0].decode(): t[-1] for t in typed_records[2]}
+                if observed.get('compat\\typed_water') != 0x3008 or observed.get('compat\\typed_beneath') != 0x3408:
+                    raise RuntimeError(f'v29 water material flags differ from the native layout: {observed}')
+                if not any(m[-1] & 0x200000 and m[-1] & 0x600 == 0x400 for m in typed_records[80]):
+                    raise RuntimeError('WaterBeneath did not emit an underwater unlit mesh')
+                reports.append({'game': game, 'fixture': 'tf1-water-shader-profiles', 'issues': []})
                 # Cells follow water surfaces: a sloped pool's water is its own
                 # cell, never merged with the air beside it within its bounding
                 # box (both pools cover over half of that box).

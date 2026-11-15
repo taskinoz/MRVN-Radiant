@@ -1026,6 +1026,17 @@ def main():
                     raise RuntimeError(f'v29 water material flags differ from the native layout: {observed}')
                 if not any(m[-1] & 0x200000 and m[-1] & 0x600 == 0x400 for m in typed_records[80]):
                     raise RuntimeError('WaterBeneath did not emit an underwater unlit mesh')
+                # Native TF1's enum is not the compiler's internal pool index.
+                for mesh in typed_records[80]:
+                    expected_type = {0: 1, 0x200: 2, 0x400: 0, 0x600: 3}[mesh[-1] & 0x600]
+                    if mesh[4] & 255 != expected_type:
+                        raise RuntimeError('v29 mesh vertex-type byte disagrees with the native enum')
+                for index, sort in enumerate(typed_records[82]):
+                    meshes = [mesh for mesh in typed_records[80] if mesh[-2] == index]
+                    if meshes:
+                        span = max(mesh[2] + mesh[3] for mesh in meshes) - min(mesh[2] for mesh in meshes)
+                        if sort[3] & 65535 != span:
+                            raise RuntimeError('v29 material-sort vertex span disagrees with its meshes')
                 reports.append({'game': game, 'fixture': 'tf1-water-shader-profiles', 'issues': []})
                 # Cells follow water surfaces: a sloped pool's water is its own
                 # cell, never merged with the air beside it within its bounding

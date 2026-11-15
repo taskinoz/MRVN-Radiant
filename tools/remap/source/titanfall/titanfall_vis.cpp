@@ -483,10 +483,18 @@ void Titanfall::EmitMeshes(const entity_t &e) {
             vertexOffset = Titanfall::Bsp::vertexLitFlatVertices.size();
         }
 
+        // Keep the pool selector separate from the serialized v29 enum:
+        // surveyed TF1 meshes use 0=unlit, 1=lit-flat, 2=lit-bump. Pool flags
+        // still select the same vertex streams; changing this byte must not
+        // alter lightmap eligibility or tangent generation.
+        const uint8_t vertexFormat = m.vertexType;
+        if (g_game->bspVersion == 29 && m.vertexType < 2)
+            m.vertexType ^= 1;
+
         // Emit texture related structs
         uint32_t  textureIndex = Titanfall::EmitTextureData(*mesh.shaderInfo);
         // Lit meshes sample the lightmap page their material sort points at.
-        const bool  baked = Shared::lightmapsEnabled && (m.vertexType == 0 || m.vertexType == 2)
+        const bool  baked = Shared::lightmapsEnabled && (vertexFormat == 0 || vertexFormat == 2)
                          && mesh.lightmapPage >= 0;
         m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size(),
                                                        baked ? mesh.lightmapPage : -1);
@@ -496,7 +504,7 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         MinMax  aabb;
 
         // Save vertices and vertexnormals
-        const std::vector<std::array<uint32_t, 2>>  tangents = (m.vertexType == 2 || m.vertexType == 3)
+        const std::vector<std::array<uint32_t, 2>>  tangents = (vertexFormat == 2 || vertexFormat == 3)
                                               ? MeshTangents(mesh) : std::vector<std::array<uint32_t, 2>>();
         for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
             Shared::Vertex_t  vertex = mesh.vertices.at(i);
@@ -559,7 +567,7 @@ void Titanfall::EmitMeshes(const entity_t &e) {
                 chart.luxels.push_back({vertex.lightmapUV.x(), vertex.lightmapUV.y()});
             }
             chart.triangles.assign(mesh.triangles.begin(), mesh.triangles.end());
-            Titanfall::Bsp::lightmapVertexRanges.push_back({m.vertexType == 2, static_cast<std::size_t>(vertexOffset),
+            Titanfall::Bsp::lightmapVertexRanges.push_back({vertexFormat == 2, static_cast<std::size_t>(vertexOffset),
                                                            mesh.vertices.size(), static_cast<std::uint32_t>(mesh.lightmapPage)});
         }
     }
@@ -578,6 +586,8 @@ uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int 
     for (Titanfall::MaterialSort_t &ms : Titanfall::Bsp::materialSorts) {
         if (ms.textureData == index && ms.lightmapHeader == lightmapHeader
          && offset >= ms.vertexOffset && offset - ms.vertexOffset + count <= 65536) {
+            if (g_game->bspVersion == 29)
+                ms.vertexSpan = std::max(ms.vertexSpan, static_cast<uint16_t>(offset - ms.vertexOffset + count - 1));
             return pos;
         }
 
@@ -592,6 +602,7 @@ uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int 
     // TF2 material sorts all store 0 and meshes carry the cubemap; TF1 sorts
     // without cubemap data store -1, as the TFO lobby does.
     ms.cubemap = g_game->bspVersion == 29 ? -1 : 0;
+    ms.vertexSpan = g_game->bspVersion == 29 ? count - 1 : 0;
     ms.vertexOffset = offset;
 
     return pos;

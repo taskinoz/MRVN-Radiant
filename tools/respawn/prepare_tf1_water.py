@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 
 from compiler_regression import box
@@ -16,13 +17,26 @@ from portals import locate_cell
 from validate_records import load_records, validate
 
 
-def prepare(remap, output):
+def prepare(remap, output, diagnostic_texture=None):
+    if diagnostic_texture is not None and diagnostic_texture.read_bytes()[:4] != b'VTF\0':
+        raise ValueError('diagnostic texture must be a locally supplied VTF')
     output.mkdir(parents=True, exist_ok=False)
     assets = output / 'assets/shaders'
     assets.mkdir(parents=True)
     floor = 'world/concrete/concrete_floor_01'
     water = 'world/water/water_mp_angelcity_cheap'
     beneath = 'world/water/water_floating_village_beneath'
+    if diagnostic_texture is not None:
+        # Keep the compiler water profiles and cell geometry; substitute only
+        # uniquely named runtime materials to prove staging/surface visibility.
+        water, beneath = 'ares_water/top', 'ares_water/bottom'
+        materials = output / 'material-files/materials/ares_water'
+        materials.mkdir(parents=True)
+        shutil.copyfile(diagnostic_texture, materials / 'noise.vtf')
+        for name, color in (('top', '1 0 1'), ('bottom', '0 1 1')):
+            (materials / (name + '.vmt')).write_text(
+                'UnlitGeneric\n{\n $basetexture "ares_water/noise"\n $color "[' + color + ']"\n}\n',
+                encoding='utf-8')
     (assets / 'water.shader').write_text(''.join(
         f'textures/{name}\n{{\n $shadertype {kind}\n}}\n'
         for name, kind in ((floor, 'LitBumpGeneric'), (water, 'Water'),
@@ -73,6 +87,7 @@ def prepare(remap, output):
               'views': [[-256, -320, 192, 20, 90], [-256, -320, 16, 0, 90], [256, -320, 16, 0, 90]]}
     (output / 'checks.json').write_text(json.dumps(checks, indent=2), encoding='utf-8')
     manifest = {'command': command, 'cells': cells,
+                'runtime_surface_shader': 'UnlitGeneric diagnostic' if diagnostic_texture else 'retail Water',
                 'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),
                 'bsp_sha256': hashlib.sha256(bsp.read_bytes()).hexdigest(),
                 'scope': 'Rectangular water room, explicit reversed underside, three views and two floor rays. '
@@ -84,5 +99,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--remap', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--diagnostic-texture', type=Path,
+                        help='Local VTF for magenta/cyan UnlitGeneric surface controls; not Water shader acceptance')
     args = parser.parse_args()
-    prepare(args.remap, args.output)
+    prepare(args.remap, args.output, args.diagnostic_texture)

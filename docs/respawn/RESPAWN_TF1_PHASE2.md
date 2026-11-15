@@ -199,7 +199,7 @@ indices preserved. ARES now logs final poses and local model bounds.
 **Crate stress result:** eight crates completed in TFO without a fall-through.
 Two coarse visual-box support checks failed; both bodies had rolled roughly
 90 degrees onto their sides. Using the user's extracted `crate.phy` and its
-16 collision vertices, all eight actual physics hull bottoms are 0.36ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“0.44
+16 collision vertices, all eight actual physics hull bottoms are 0.36ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ0.44
 units above the correct brush/patch surfaces, with zero final linear velocity.
 The PHY is narrower than the visual bounds, explaining this run's 1.2-unit box
 overlap. Original failures are retained; no raw bounds tolerance was loosened.
@@ -338,3 +338,76 @@ The normal ARES CLI also passes on the fresh generated BSP (no wrapper or BSP
 patches): `.local/respawn/phase2-water-repro/r1-native/report.json` records both
 rays at z=0.03125 and all three exact camera origins with no errors. All three
 screenshots were reviewed; the water surface/upper-view failure persists.
+
+## Water shader isolation and vertex enum (15 November)
+
+The diagnostic room now supports uniquely named runtime materials. R1Delta
+3.0.5 renders a magenta top and cyan underside using supplied UnlitGeneric VMTs
+and a local VTF. Both rays hit z=0.03125 and all three camera origins match
+exactly. This establishes that this owned-addon material tree and these water
+surfaces can load and draw; it is not a Water shader acceptance result.
+
+On the same BSP, changing the unique materials to native Water VMTs (including
+the unique bottom-material reference and full supplied dependencies) restores
+the missing surface/black upper underwater failure. Forcing cheap water and
+removing refraction from those VMTs also did not repair it. All three captures
+in each run were reviewed. Evidence remains local under
+`.local/respawn/phase2-water-shader/{r1-unlit,r1-native-water,r1-cheap-water}`.
+
+A separate structural mismatch was identified in MESHES: all surveyed retail
+TF1 lit-flat meshes use vertex-type 1, unlit meshes use 0 and lit-bump meshes
+use 2, across Angel City, Colony, Fracture, Lagoon and Relic. The compiler had
+lit-flat and unlit reversed. It now serializes the native v29 values while
+keeping internal pool/lightmap/tangent selection separate. The water shader
+regression checks the bytes. A native R1 control changing only these two bytes
+still has the water failure; this correction is not presented as its solution.
+The control report is `.local/respawn/phase2-water-vertextype/r1-native`.
+
+`prepare_tf1_water.py --diagnostic-texture LOCAL.vtf` reproduces the diagnostic
+with unique names and an explicit material-files tree; no retail VTF is bundled.
+Its manifest distinguishes UnlitGeneric diagnostic from retail Water mode.
+The generator compiles and validates in either mode. All 232 MRVN unit tests
+and all 60 compiler regression reports pass after the enum fix.
+
+The material-sort fourth 16-bit word also matches `max(firstVertex +
+lastVertexOffset) - min(firstVertex)` for every referenced sort across those
+five retail maps (1,439 sorts). The compiler now writes that unsigned vertex
+span and expands it when a sort is reused, within the existing 65,536-vertex
+limit. Other BSP versions retain their existing zero word. The integration
+fixture checks this relationship. The isolated R1 span control still shows
+the water failure, so this is another structural correction, not a water fix.
+Evidence: `.local/respawn/phase2-material-span/r1-native/`.
+
+After the enum correction, TFO Core 135 loads the freshly generated room and
+passes both rays and all three exact camera positions. Above/dry geometry and
+underwater room/fog render in reviewed captures. It needed two pre-load startup
+retries. Evidence: `.local/respawn/phase2-vertex-enum-native/tfo/`.
+
+Final rebuilt compiler evidence is under `.local/respawn/phase2-metadata-final/`:
+normal and diagnostic generator modes compile and pass static checks; TFO and
+R1Delta both pass the two floor rays and all three exact camera positions on
+the normal BSP. All captures were reviewed: TFO renders surface and submerged
+room/fog; R1 still has the surface/upper-view defect. These are sampled visual
+results, not whole-map or whole-runtime acceptance. All 60 final compiler
+regression reports pass (`phase2-metadata-final-regression/results.json`).
+
+A retail R1Delta Angel City control at (-8000, 8000), above the water at eye
+z=188, renders the native water surface. Thus the R1 installation can draw that
+shader. The attempted submerged control is invalid: the pilot died, eye height
+changed to 14 and the screenshot shows a death camera despite its logged server
+origin matching. Do not count that screenshot as underwater evidence. The raw
+report is retained at `.local/respawn/phase2-water-retail/r1/report.json`; the
+separate `capture-audit.json` rejects the old markers without alive state.
+
+ARES now records `alive` in both runtime view markers and requires exactly one
+`alive=true` pose plus finite origin/eye coordinates. Correct server origin alone
+no longer satisfies a view after death. The 70-test adapter suite covers dead,
+missing-state and nonfinite-eye rejection and passes. This does not prove frame
+synchronization or spectator-camera parity; visual review remains mandatory.
+
+Final alive-state harness runs pass on this same rebuilt BSP in both runtimes:
+`.local/respawn/phase2-metadata-final/{r1-alive,tfo-alive}/report.json`. Each has
+two floor rays at z=0.03125, three exact camera origins and alive=true at every
+pose. All six screenshots were reviewed: the TFO sample renders correctly,
+while the R1 water defect persists. No render acceptance is inferred from the
+zero-error harness status alone.

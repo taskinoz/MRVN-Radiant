@@ -93,3 +93,17 @@ explicit reverse-facing, render-only underside. Use `_viewportals 1` for split
 wet/dry cells. These profiles apply to v29; they do not generate underside
 geometry or package retail material dependencies. Native evidence and remaining
 R1Delta failures are in [Phase 2](../../docs/respawn/RESPAWN_TF1_PHASE2.md).
+
+Reproduce the original rectangular water room without editing a BSP:
+
+```powershell
+python tools/respawn/prepare_tf1_water.py --remap install/Release/remap.exe --output .local/respawn/water-room
+```
+
+The new output directory contains source, BSP and spawn sidecar, material shader
+profiles, shared `checks.json`, wet/dry cell checks and compiler/BSP hashes.
+Pass its `maps/` directory and `mp_tf1_water` to either ARES native adapter.
+Keep the spawn sidecar with the BSP when staging or renaming the map. Retail
+materials are referenced but not included; R1Delta's `--material-files` accepts
+an explicit local VMT/VTF dependency tree. This fixture tests two floor rays and
+three views; it does not establish buoyancy or gameplay compatibility.

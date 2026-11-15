@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Compile an original v29 water room and shared TFO/R1 camera checks.
+
+Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
+References retail material names; includes no retail assets.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+from compiler_regression import box
+from inspect_bsp import inspect
+from portals import locate_cell
+from validate_records import load_records, validate
+
+
+def prepare(remap, output):
+    output.mkdir(parents=True, exist_ok=False)
+    assets = output / 'assets/shaders'
+    assets.mkdir(parents=True)
+    floor = 'world/concrete/concrete_floor_01'
+    water = 'world/water/water_mp_angelcity_cheap'
+    beneath = 'world/water/water_floating_village_beneath'
+    (assets / 'water.shader').write_text(''.join(
+        f'textures/{name}\n{{\n $shadertype {kind}\n}}\n'
+        for name, kind in ((floor, 'LitBumpGeneric'), (water, 'Water'),
+                           (beneath, 'WaterBeneath'))), encoding='utf-8')
+    shapes = [((-1024, -1024, -32), (1024, 1024, 0)),
+              ((-1024, -1024, 512), (1024, 1024, 544)),
+              ((-1056, -1056, 0), (-1024, 1056, 512)),
+              ((1024, -1056, 0), (1056, 1056, 512)),
+              ((-1024, -1056, 0), (1024, -1024, 512)),
+              ((-1024, 1024, 0), (1024, 1056, 512))]
+    geometry = '\n'.join(box(lo, hi, floor).replace('compat/' + floor, floor)
+                         for lo, hi in shapes)
+    geometry += '\n' + box((-512, -512, 0), (0, 512, 128), water).replace('compat/' + water, water)
+    geometry += '\n{\npatchDef2\n{\n' + beneath + '\n( 3 3 0 0 0 )\n(\n' + '\n'.join(
+        '( ' + ' '.join(f'( {x} {y} 128 {i / 2} {j / 2} )'
+                        for j, y in enumerate((-512, 0, 512))) + ' )'
+        for i, x in enumerate((0, -256, -512))) + '\n)\n}\n}'
+    source = '{\n"classname" "worldspawn"\n"_viewportals" "1"\n' + \
+             '"_remap_lightmap_pagesize" "256"\n' + geometry + '\n}\n'
+    source += ''.join('{\n"classname" "' + kind + '"\n"origin" "512 0 64"\n' +
+                      f'"teamnumber" "{team}"\n"ignoreGamemode" "1"\n"gamemode_tdm" "1"\n}}\n'
+                      for team in (2, 3)
+                      for kind in ('info_spawnpoint_human', 'info_spawnpoint_human_start'))
+    source += '{\n"classname" "light"\n"origin" "0 0 384"\n"light" "1000"\n"_color" "1 1 1"\n}\n'
+    maps = output / 'maps'
+    maps.mkdir()
+    path = maps / 'mp_tf1_water.map'
+    path.write_text(source, encoding='utf-8')
+    command = [str(remap.resolve()), '-game', 'titanfallonline', '-fs_basepath',
+               str(output.resolve()), '-bsp', str(path.resolve())]
+    with (output / 'compile.log').open('wb') as log:
+        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    report = validate(bsp)
+    (output / 'static.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    if report['issues']:
+        raise RuntimeError(report['issues'])
+    records = load_records(bsp, inspect(bsp))
+    cells = []
+    for point, wet in (((-256, 0, 64), True), ((-256, 0, 192), False), ((256, 0, 64), False)):
+        cell = locate_cell(records, point)
+        water_index = records[107][cell][3]
+        if (water_index >= 0) != wet:
+            raise RuntimeError(f'incorrect wet/dry cell at {point}')
+        cells.append({'point': point, 'cell': cell, 'water': water_index})
+    checks = {'traces': [[-256, 0, 256, -256, 0, -32], [256, 0, 256, 256, 0, -32]],
+              'expect': {'trace_z': [[0, 0, .1], [1, 0, .1]]},
+              'views': [[-256, -320, 192, 20, 90], [-256, -320, 16, 0, 90], [256, -320, 16, 0, 90]]}
+    (output / 'checks.json').write_text(json.dumps(checks, indent=2), encoding='utf-8')
+    manifest = {'command': command, 'cells': cells,
+                'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),
+                'bsp_sha256': hashlib.sha256(bsp.read_bytes()).hexdigest(),
+                'scope': 'Rectangular water room, explicit reversed underside, three views and two floor rays. '
+                         'No buoyancy, navigation or gameplay acceptance. Materials must be supplied locally.'}
+    (output / 'build.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--remap', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    prepare(args.remap, args.output)

@@ -23,6 +23,47 @@ def fixture():
 
 
 class Tf1AuxiliaryTests(unittest.TestCase):
+    def test_shadow_mesh_local_indices_and_pool_selection(self):
+        records, inventory = fixture()
+        records[124] = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
+        records[125] = [(0., 0., 1., 0., 0.)] * 3
+        records[126] = [(0,), (1,), (2,)] * 2
+        records[127] = [(0, 1, 1, -1), (0, 1, 0, 0)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        records[127][1] = (1, 1, 0, 0)
+        self.assertIn('mesh-local index', str(check_tf1_records(records, inventory)))
+
+    def test_shadow_stream_lengths_selectors_and_materials(self):
+        for mesh, message in (((0, 1, 2, -1), 'opaque selector'),
+                              ((0, 1, 0, -1), 'shadow material'),
+                              ((0, 1, 1, 1), 'shadow material'),
+                              ((4, 0, 1, -1), 'vertex base'),
+                              ((0, 2, 1, -1), 'triangle range')):
+            records, inventory = fixture()
+            records[124] = [(0., 0., 0.)] * 3
+            records[126] = [(0,), (1,), (2,)]
+            records[127] = [mesh]
+            self.assertIn(message, str(check_tf1_records(records, inventory)))
+        records, inventory = fixture()
+        records[126] = [(0,)]
+        self.assertIn('do not consume', str(check_tf1_records(records, inventory)))
+
+    def test_occlusion_triangles_and_finite_shadow_vertices(self):
+        records, inventory = fixture()
+        records[117] = [(0., 0., 0.)] * 3
+        records[118] = [(0,), (1,), (2,)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        records[118] = [(3,)]
+        issues = str(check_tf1_records(records, inventory))
+        self.assertIn('not a triangle list', issues)
+        self.assertIn('occlusion index outside', issues)
+        for lump, vertex in ((117, (float('nan'), 0., 0.)),
+                             (124, (0., float('inf'), 0.)),
+                             (125, (0., 0., 0., float('nan'), 0.))):
+            records, inventory = fixture()
+            records[lump] = [vertex]
+            self.assertIn('nonfinite occlusion/shadow vertex', str(check_tf1_records(records, inventory)))
+
     def test_csm_bounds_children_and_reference_ranges(self):
         # One root with a leaf child and one shadow-object reference.
         root = (0., 0., 0., 1, 0, 1, 10., 10., 10., 1, 0)

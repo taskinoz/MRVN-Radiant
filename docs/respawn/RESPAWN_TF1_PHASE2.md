@@ -1,6 +1,6 @@
 # Phase 2: Titanfall 1 / Titanfall Online support
 
-Checkpoint: 15 November 2026. **Partially verified; full support is not complete.**
+Checkpoint: 17 November 2026. **Partially verified; full support is not complete.**
 Phase 1's surf release gates remain open; the user requested Phase 2 work in
 parallel with them. Initial runtime testing used TFORevive because another
 system was using EA/Origin. After the user confirmed EA was signed in,
@@ -14,12 +14,12 @@ The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique
 lump written by `WriteR1BSPFile`, including conditional lighting writes and the
 separately serialized GAME_LUMP. It compares a fresh authored baseline against
 local Angel City, Colony and the installed TFO lobby. The machine-readable
-current report is `.local/respawn/phase2-rtl-fixed/lump-audit.json`.
+current report is `.local/respawn/phase2-geometry-final/lump-audit.json`.
 
-- 70 unique writer lump types; 54 have schemas in `validate_records.py`, 16 do
+- 70 unique writer lump types; 61 have schemas in `validate_records.py`, 9 do
   not. Individual tools and compiler regressions cover some of the latter;
   absence of a schema does not mean no implementation exists. The first audit
-  had 44 schemas; eight earlier layouts and two CSM layouts were added during this work.
+  had 44 schemas; 17 additional record layouts were added during this work.
 - All four maps pass the selected static cross-reference checks and directory
   inventory without issues. Populated lump versions agree across this sample.
 - `PHYSICS_TRIANGLES` occurs in the reference corpus but is not emitted. The
@@ -641,3 +641,44 @@ aliases are cleaned up. Retail files, account-bearing logs and screenshots
 remain local. Full Phase 2 is still open for R1 underwater rendering, broader
 lighting/physics, complete dependency packages, gameplay/navigation and human
 release gates.
+
+
+## Retail underwater reference and geometry/raw-lump checks (17 November)
+
+A fresh retail Angel City run now has three exact, alive poses and three
+internal engine screenshots. Camera-only `god`/`SetInvulnerable` protection
+prevents the retail damage volume from turning this into a death-camera test;
+this is not gameplay acceptance. Cell traversal confirms two eyes at z=-80
+are in native water cells (surface z=26); the first eye is in a dry cell and is
+retained as a control. At (-8000,8000,-80), the native retail view also shows a
+dark horizontal horizon strip. The other wet view has a broad pale horizontal
+region. All images were reviewed. This establishes that horizon artifacts are
+not unique to remap-authored BSPs, without asserting equal severity or a fixed
+renderer cause. No speculative compiler/material workaround is applied.
+Evidence: `phase2-water-retail-alive/{report.json,camera-protection.json,cell-audit.json}`.
+
+Six more v29 geometry schemas cover occlusion vertices/indices, opaque and
+alpha shadow vertices, shadow indices and 12-byte shadow meshes. Checks reject
+nonfinite positions/UVs, incomplete occlusion triangles, invalid opaque selectors,
+material references and out-of-pool mesh-local shadow indices. Cumulative shadow
+triangle ranges must consume the index stream. CSM object IDs remain opaque;
+these checks do not prove cascade or shadow appearance semantics.
+
+A seventh schema covers texture string-table offsets. Validation rejects
+out-of-range/interior/empty/unterminated names and texture-data name indices
+outside the table. Raw PHYSICS_COLLIDE framing now bounds every model payload,
+solid length/count and keydata string, checks model indices/duplicates and VPHY
+signatures, and requires the exact terminal header without trailing bytes.
+It does not decode IVP trees, fluid keydata semantics or PHYSICS_TRIANGLES.
+Raw payload readers prefer the default sidecar and reject oversized, encoded or
+unknown-version payloads. Writer schema coverage is now 61/70, not a parity score.
+
+All six TF1 references, the installed TFO lobby and the authored audit baseline
+pass the expanded validator. The four-map checklist is regenerated. The tool
+suite passes 255 tests. The fresh shadow-check compiler run has 60 passing
+regression reports; its generated v29/v37 maps are also checked with the final
+raw-lump validator. Apex records are explicitly outside this validator. ARES
+receives the same implementation and tests: 166 format tests, 81 adapter tests
+and registry validation pass. These structural checks leave native lighting,
+physics stress, complete dependencies, modes/objectives/navigation and human
+match gates open.

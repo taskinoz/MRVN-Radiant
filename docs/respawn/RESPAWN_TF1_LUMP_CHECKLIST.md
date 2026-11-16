@@ -19,7 +19,7 @@ Bytes below prefer the default external sidecar when present. Empty payloads can
 | 40 | PAKFILE | yes | no | empty | 759180 B / v0 | 819533 B / v0 | 74778 B / v0 |
 | 42 | CUBEMAPS | yes | yes | empty | 16 B / v0 | 16 B / v0 | empty |
 | 43 | TEXTURE_DATA_STRING_DATA | yes | no | 33 B / v0 | 15315 B / v0 | 10921 B / v0 | 266 B / v0 |
-| 44 | TEXTURE_DATA_STRING_TABLE | yes | no | 4 B / v0 | 1732 B / v0 | 1236 B / v0 | 36 B / v0 |
+| 44 | TEXTURE_DATA_STRING_TABLE | yes | yes | 4 B / v0 | 1732 B / v0 | 1236 B / v0 | 36 B / v0 |
 | 54 | WORLD_LIGHTS | yes | yes | 200 B / v1 | 67800 B / v1 | 45400 B / v1 | 1400 B / v1 |
 | 66 | TRICOLL_TRIS | yes | yes | 32 B / v2 | 2364576 B / v2 | 391748 B / v2 | empty |
 | 68 | TRICOLL_NODES | yes | yes | 64 B / v1 | 6318272 B / v1 | 1043904 B / v1 | empty |
@@ -67,19 +67,13 @@ Bytes below prefer the default external sidecar when present. Empty payloads can
 | 114 | PORTAL_INTERSECT_EDGE | yes | yes | empty | 42704 B / v0 | 14448 B / v0 | 192 B / v0 |
 | 115 | PORTAL_INTERSECT_VERTEX | yes | yes | empty | 42704 B / v0 | 14448 B / v0 | 192 B / v0 |
 | 116 | PORTAL_INTERSECT_HEADER | yes | yes | empty | 17464 B / v0 | 6336 B / v0 | 96 B / v0 |
-| 117 | OCCLUSION_MESH_VERTICES | yes | no | empty | 29760 B / v0 | 12324 B / v0 | empty |
-| 118 | OCCLUSION_MESH_INDICES | yes | no | empty | 62184 B / v0 | 13134 B / v0 | empty |
+| 117 | OCCLUSION_MESH_VERTICES | yes | yes | empty | 29760 B / v0 | 12324 B / v0 | empty |
+| 118 | OCCLUSION_MESH_INDICES | yes | yes | empty | 62184 B / v0 | 13134 B / v0 | empty |
 | 119 | CELL_AABB_NODES | yes | yes | 32 B / v0 | 1133376 B / v0 | 622528 B / v0 | 640 B / v0 |
 | 120 | OBJ_REFERENCES | yes | yes | 4 B / v0 | 85242 B / v0 | 53238 B / v0 | 46 B / v0 |
 | 121 | OBJ_REFERENCE_BOUNDS | yes | yes | 64 B / v0 | 1363872 B / v0 | 851808 B / v0 | 736 B / v0 |
 | 123 | LEVEL_INFO | yes | yes | 28 B / v0 | 28 B / v0 | 28 B / v0 | 28 B / v0 |
-| 124 | SHADOW_MESH_OPAQUE_VERTICES | yes | no | empty | 1801380 B / v0 | 529932 B / v0 | 1512 B / v0 |
-| 125 | SHADOW_MESH_ALPHA_VERTICES | yes | no | empty | 20780 B / v0 | 8300 B / v0 | 160 B / v0 |
-| 126 | SHADOW_MESH_INDICES | yes | no | empty | 1036470 B / v0 | 320982 B / v0 | 798 B / v0 |
-| 127 | SHADOW_MESHES | yes | no | empty | 300 B / v0 | 228 B / v0 | 48 B / v0 |
-
-Underwater follow-up: wet-cell OBJ_REFERENCES enable the world MESHES
-underwater bit; TEXTURE_DATA omits mesh draw flags. TFO room rendering/fog
-and R1 surfaces with packaged Water shader caches are sampled successfully;
-an R1 underwater band remains open. CSM schemas validate tree structure,
-not shadow-object ID meanings or lighting appearance. See [Phase 2](RESPAWN_TF1_PHASE2.md).
+| 124 | SHADOW_MESH_OPAQUE_VERTICES | yes | yes | empty | 1801380 B / v0 | 529932 B / v0 | 1512 B / v0 |
+| 125 | SHADOW_MESH_ALPHA_VERTICES | yes | yes | empty | 20780 B / v0 | 8300 B / v0 | 160 B / v0 |
+| 126 | SHADOW_MESH_INDICES | yes | yes | empty | 1036470 B / v0 | 320982 B / v0 | 798 B / v0 |
+| 127 | SHADOW_MESHES | yes | yes | empty | 300 B / v0 | 228 B / v0 | 48 B / v0 |

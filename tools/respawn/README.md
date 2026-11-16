@@ -168,3 +168,8 @@ floor, pilot spawns and axis-aligned/rotated trigger brushes, then writes shared
 ARES `triggers` checks and compiler/source/BSP hashes. Entity origins translate
 model-local brush coordinates. Touch checks use controlled player repositioning;
 they do not certify walking or modes. No retail assets are bundled.
+
+Add `--titans` to `prepare_tf1_triggers.py` to include an ARES native atlas
+NPC support probe. It uses each runtime's own atlas settings name, verifies
+sampled alive/native state and support/motion, then destroys the NPC. It is not
+an AI navigation, piloting or combat check.

@@ -100,7 +100,9 @@ horizon artifact too, so the band is not unique to an authored BSP.
 Both adapters validate declared v29 entity partition syntax before staging,
 including default external partition tables. Initial spawn poses and native axis-aligned/rotated trigger enter/exit
 outputs now pass in both runtimes through shared ARES checks; normal traversal,
-objectives and navigation remain open.
+objectives and navigation remain open. A live native atlas NPC also passes
+five sampled flat-floor support checks in each runtime; its setting name differs
+between R1Delta and TFO. This does not establish titan piloting or combat.
 R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
 

@@ -155,3 +155,16 @@ to package supplied `shaders/fxc/*.vcs` caches into a shader-only map VPK.
 R1Delta's native Water control requires this VPK load path; loose cache files
 alone did not restore the surface. Supply materials, textures, models and entity
 sidecars separately. Neither command extracts or bundles retail assets.
+
+
+`validate_records.py` also parses v29 embedded entities and declared `ENTITIES01`
+partitions with `entity_text.py`. Duplicate output keys survive parsing. The
+default partition-table sidecar takes precedence; invalid syntax, unsafe names,
+case aliases and missing/linked/oversized files fail. Entity counts describe
+syntax coverage, not spawn or objective correctness.
+
+`prepare_tf1_triggers.py --remap PATH --output NEW_DIR` compiles an original
+floor, pilot spawns and axis-aligned/rotated trigger brushes, then writes shared
+ARES `triggers` checks and compiler/source/BSP hashes. Entity origins translate
+model-local brush coordinates. Touch checks use controlled player repositioning;
+they do not certify walking or modes. No retail assets are bundled.

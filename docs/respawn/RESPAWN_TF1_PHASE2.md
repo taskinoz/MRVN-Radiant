@@ -36,8 +36,8 @@ current report is `.local/respawn/phase2-geometry-final/lump-audit.json`.
 1. **Lighting records:** v29 schemas and selected checks now cover WORLD_LIGHTS
    (100 bytes), LIGHTMAP_HEADERS, LIGHTPROBES, LIGHTPROBE_TREE,
    LIGHTPROBE_REFERENCES (16 bytes) and static-prop probe indices. Nonempty baked
-   fixtures and six reference maps pass. CSM node/reference structure is now checked. Remaining: shadow
-   meshes, deeper lighting semantics and RTL channel decoding before replacing
+   fixtures and six reference maps pass. CSM node/reference structure is now checked. Remaining: native shadow
+   appearance, deeper lighting semantics and RTL channel decoding before replacing
    the all-255 output.
 2. **Water assignment:** validate LEAF_WATER_DATA against visibility cells,
    including single-cell maps; compare paired wet/dry and retail controls for
@@ -682,3 +682,64 @@ receives the same implementation and tests: 166 format tests, 81 adapter tests
 and registry validation pass. These structural checks leave native lighting,
 physics stress, complete dependencies, modes/objectives/navigation and human
 match gates open.
+
+
+## Entity partitions and native touch outputs (17 November)
+
+A shared original entity reader now validates embedded KeyValues and every
+required `ENTITIES01` partition, preserving duplicate output keys and literal
+path separators. It rejects malformed blocks/headers, data after a NUL
+terminator, unsafe or duplicate (including Windows case aliases) partition
+names, and missing/empty/linked/oversized files. Both runtime preflights honor
+the default external `.0018.bsp_lump` partition declaration. A client variant
+is not silently substituted for the default declaration.
+
+All six TF1 references pass with their five declared partitions. Expanded
+validation also passes 61 generated v29/v37 maps, the TFO lobby and the original
+trigger fixture; the Apex fixture is outside the v29/v37 validator and excluded.
+The unchanged mask fixture passes a fresh native run in each runtime: 16 rays
+and 16 hulls apiece, loaded and finished without errors. Local evidence:
+`phase2-entity-reference-validation.json`, `phase2-entity-generated-validation.json`
+and `phase2-entity-native/{r1,tfo}/report.json`.
+
+ARES now accepts bounded `triggers` checks in both adapters. Each check names
+an authored trigger and provides player positions and exact cumulative start/end
+touch counts. Every sampled result must be unique, alive, finite and near its
+requested position. Missing outputs, targets or samples fail the check. R1's
+MCP setup is guarded against duplicate execution after a control-call timeout.
+The original axis-aligned `trigger_multiple` fires exactly one `OnStartTouch`
+and one `OnEndTouch` in both runtimes. This uses controlled repositioning;
+it does not establish walking, networking or objective behavior. Evidence:
+`phase2-trigger/reusable-{r1,tfo}/report.json`.
+
+The MRVN tool suite passes 261 tests; ARES passes 172 format tests and 95
+adapter tests plus registry validation. Entity syntax and sampled touch output
+checks leave full Phase 2 open: broader rendering/lighting, collision/physics
+stress, complete asset packages, modes/objectives, AI navigation and human-match
+release acceptance still require native evidence.
+
+
+The model-local rotated fixture also passes in both runtimes: a narrow brush
+translated to (400,200,0) and yawed 45 degrees receives one enter and one exit;
+a point across its narrow axis remains outside. The initial diagnostic fixture
+incorrectly combined world-space brush coordinates with an explicit entity
+origin and correctly failed its expected touch counts. Correcting the fixture
+to model-local coordinates resolved it without a compiler change. Both local
+reports are retained (`phase2-triggers-transformed` for the failed setup,
+`phase2-triggers-local/{r1,tfo}` for the corrected control).
+
+
+A final fresh run uses the public `spawn_probe` option before any harness
+repositioning and checks both original triggers. Both R1Delta 3.0.5 and TFORevive
+Core135 spawn a living team-2 player at (-400,0,0.03125), within two units of
+the authored origin. All six trigger samples then match exact touch counts and
+poses. Both reports load, finish and contain zero errors. This validates one
+initial spawn, not team-3 selection, respawns or every mode's spawn logic.
+Evidence: `phase2-spawn-triggers/{manifest.json,static.json,checks.json,r1/report.json,tfo/report.json}`.
+Commands: `python tools/respawn/prepare_tf1_triggers.py --remap install/Release/remap.exe --output .local/respawn/phase2-spawn-triggers`,
+then each ARES adapter with `--maps` set to that directory's `maps`,
+`--map mp_tf1_triggers --checks` set to its `checks.json`; TFO additionally uses
+`--game D:/Games/Titanfall Online --enable Titanfall1.Content.Client --enable Titanfall1.Content.Shared`.
+No view captures were requested for these output/pose checks. Game files,
+screenshots and account-bearing logs remain local; owned runtime staging is
+removed after each run.

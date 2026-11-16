@@ -7,12 +7,14 @@ Binary format research credited in docs/respawn/RESPAWN_SOURCES.md; original cod
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 import struct
 import sys
 
 from inspect_bsp import FormatError, HEADER_SIZE, inspect
 from game_lump import inspect_game_lump
+from entity_text import parse_entities, parse_partition
 from tricoll import check_tricoll_records
 from portals import check_portal_records
 
@@ -293,6 +295,42 @@ def load_raw_payload(path, inventory, index):
     return data
 
 
+def check_tf1_entities(path, inventory):
+    """Validate embedded text and required 01* partition syntax, not gameplay."""
+    issues, counts = [], {}
+    def error(message):
+        issues.append({'severity': 'error', 'lump': 24, 'record': None, 'message': message})
+    try:
+        counts['embedded'] = len(parse_entities(load_raw_payload(path, inventory, 0).decode(
+            'utf-8', errors='surrogateescape')))
+    except FormatError as exc:
+        issues.append({'severity': 'error', 'lump': 0, 'record': None, 'message': str(exc)})
+    declaration = load_raw_payload(path, inventory, 24)
+    if not declaration:
+        return issues, counts
+    if len(declaration) > 65536:
+        error('oversized entity partition declaration')
+        return issues, counts
+    try:
+        tokens = declaration.rstrip(b'\0').decode('ascii').split()
+        if (not tokens or tokens[0] != '01*' or len({token.casefold() for token in tokens[1:]}) != len(tokens[1:]) or
+                any(not re.fullmatch(r'[A-Za-z0-9_]+', token) for token in tokens[1:])):
+            raise ValueError('unsupported or duplicate entity partition declaration')
+        for name in tokens[1:]:
+            sidecar = Path(path).with_name(Path(path).stem + '_' + name + '.ent')
+            if (sidecar.is_symlink() or getattr(sidecar, 'is_junction', lambda: False)() or
+                    not sidecar.is_file() or not 0 < sidecar.stat().st_size <= 64 * 1024 * 1024):
+                error(f'missing, empty, linked or oversized entity partition: {sidecar.name}')
+                continue
+            try:
+                counts[name] = len(parse_partition(sidecar.read_bytes()))
+            except FormatError as exc:
+                error(f'{sidecar.name}: {exc}')
+    except (UnicodeError, ValueError) as exc:
+        error(str(exc))
+    return issues, counts
+
+
 def check_tf1_texture_strings(data, table, textures):
     issues = []
     def error(lump, index, message):
@@ -477,6 +515,8 @@ def validate(path):
     report["issues"].extend(check_tricoll_records(records, inventory["version_raw"]))
     if inventory['version_raw'] == 29:
         report['issues'].extend(check_tf1_records(records, inventory))
+        entity_issues, report['entity_counts'] = check_tf1_entities(path, inventory)
+        report['issues'].extend(entity_issues)
         report['issues'].extend(check_tf1_texture_strings(
             load_raw_payload(path, inventory, 43), records[44], records[2]))
         report['issues'].extend(check_tf1_physics(

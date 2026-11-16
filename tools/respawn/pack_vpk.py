@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Original, uncompressed Titanfall 2 VPK 2.3 writer for small test packages.
+"""Original, uncompressed Respawn VPK 2.3 writer for small test packages.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
 Format reference: pg9182/tf2vpk, commit b73c54d8e4245075ea207c7e51a2a86fdb94e4ff

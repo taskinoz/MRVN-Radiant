@@ -41,7 +41,7 @@ samples, map trials, crash investigations and the converter notes. See the
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall 1 / R1Delta + Titanfall Online | 99% (74/75), legacy writer count | Shared v29 compiler. Sampled collision and prop support pass in both runtimes; underwater geometry/fog passes one TFO scene. R1Delta water surface/upper-view rendering remains unresolved. Full Phase 2 compatibility is open; see [Phase 2 evidence](docs/respawn/RESPAWN_TF1_PHASE2.md) |
+| Titanfall 1 / R1Delta + Titanfall Online | 99% (74/75), legacy writer count | Shared v29 compiler. Sampled collision and prop support pass in both runtimes; underwater geometry/fog passes one TFO scene. R1Delta surfaces render with packaged shader caches; an underwater band remains unresolved. Full Phase 2 compatibility is open; see [Phase 2 evidence](docs/respawn/RESPAWN_TF1_PHASE2.md) |
 | Titanfall 2 | 100% (81/81) | Every lump retail fills; triangle collision bevels use a natively tested rule, not retail's exact lists; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
 | Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals. Not yet recounted for empty lumps |
 
@@ -64,21 +64,20 @@ must be packaged with their dependencies for standalone maps.
 | Area | Verified samples | Remaining acceptance |
 | --- | --- | --- |
 | v29 structure/startup | 37 compiled/reference maps validate; fresh maps start in both runtimes | Remaining record semantics and broader maps |
-| Collision/physics | Paired ray/hull and transformed-brush probes; flat-patch backface samples; 32 TFO contents-mask probes; prop support samples | Broader curved collision, actual projectiles/titans, repeated stress and historical fall-through |
-| Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 surface rendering, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
+| Collision/physics | Paired ray/hull and transformed-brush probes; paired flat-patch/backface and 32 contents-mask probes; prop support samples | Broader curved collision, actual projectiles/titans, repeated stress and historical fall-through |
+| Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 underwater band, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
 | Lighting | Fallback lightmap planes and structural probe checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
 
-Validation at this checkpoint: 232 MRVN tool tests and 60 compiler regression
+Validation at this checkpoint: 236 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
 counts and the writer coverage above are not a percentage of full compatibility.
 The v29 mesh vertex-type enum now matches surveyed retail TF1 maps (unlit 0,
 lit-flat 1, lit-bump 2), with pool selection/lightmap bookkeeping kept separate.
 Material sorts also store their referenced vertex span, matching the surveyed
 retail records. Regression cases check both metadata relationships.
-R1 diagnostic unlit surfaces render from staged materials; switching those same
-surfaces to native Water still fails. This narrows the water investigation but
-does not close it.
+R1 Water shader caches must load through the map VPK in the tested scene.
+See the packaging result below.
 Paired wet/dry cardboard probes now show flotation in both runtimes, with dry
 PHY support passing. The wet bodies continue bobbing; entity-reported velocity
 can be zero during motion. ARES now checks sampled translation separately and
@@ -87,11 +86,12 @@ broad physics parity or proof of rest.
 The [Phase 2 log](docs/respawn/RESPAWN_TF1_PHASE2.md) retains native failures and
 is the detailed source for acceptance status.
 
-Recent native controls restore R1 custom water surfaces when the full retail
-map VPK resources are available or retail water is rendered first. A black
-underwater band and standalone dependency packaging remain unresolved. New
-fixtures verify five transformed brush models in both runtimes and 32 TFO
-contents-mask probes. These results narrow the remaining work; Phase 2 is open.
+R1 cold-load water surfaces now render when the two supplied compiled Water
+shader caches are in a map VPK; loose shader copies do not work. The explicit
+`pack_tf1_shaders.py` command reproduces the native-tested shader package and
+records hashes without including retail assets. The underwater black band
+remains. R1 prefers verified engine screenshots; TFO engine capture remains
+opt-in after native crashes. Full Phase 2 release acceptance is still open.
 
 ## Other tools
 - [bsp_tool](https://github.com/snake-biscuits/bsp_tool)

@@ -510,3 +510,41 @@ Validation at this checkpoint: 234 MRVN tests, 76 ARES adapter tests and registr
 validation pass. No game assets are committed. Full Phase 2 remains open for
 water, broader collision/physics and lighting, dependency packaging,
 mode/objective/navigation behavior and the documented human match gates.
+
+
+Water dependency follow-up: retaining the native Water material/texture assets
+and adding only `shaders/fxc/water_ps40.vcs` and `water_vs40.vcs` to the filtered
+map VPK restores the top and underside on a cold R1Delta 3.0.5 launch
+(`phase2-water-shader-vpk`). All three fresh captures came from the engine's
+`screenshot` command (`capture_methods: engine`), with valid alive camera poses
+and no desktop popup. The underwater black band remains. R1 now prefers engine
+captures by default; TFO's crashing engine path remains opt-in. No retail shader
+bytes are committed or redistributed. Water parity and standalone packaging
+are still open; the missing compiled shader dependency is now isolated.
+
+
+The shader dependency is reproducible without copying a retail map archive.
+An uncompressed shader-only map VPK made by `pack_vpk.pack_files`, containing
+just the supplied Water vertex/pixel caches, restores the same cold R1 surfaces
+with loose materials (`phase2-water-authored-vpk`). Loose shader copies alone
+fail (`phase2-water-loose-shaders`); both sets have three reviewed engine
+captures and valid poses. This isolates the VPK shader-loading requirement.
+`pack_tf1_shaders.py --source EXPLICIT_TREE --map mp_name --output NEW_DIR`
+packages only `shaders/fxc/*.vcs`, rejects linked/unrelated files and records
+member/archive hashes. Its final output is byte-identical to the native-tested
+pair of VPKs. This packages supplied caches; it neither compiles shaders nor
+includes retail bytes. Material/model dependency discovery, the underwater band
+and complete authored/converted-map release packages remain open.
+
+
+The final mask generator also passes all 32 checks in a fresh R1Delta run
+(`phase2-mask-repro-final/r1`), paired with the final TFO generator run.
+Both engine constants and solid/playerclip/bulletclip/water inclusion and
+exclusion are now sampled in both runtimes. Actual projectile/gameplay-titan
+acceptance is still separate. Current MRVN suite: 236 tests pass.
+
+
+Final transformed flat-patch R1 run also passes all 25 collision checks
+(`phase2-transform-repro-patch/r1`). The final brush, flat-patch and mask
+fixtures therefore pass 77 probes per runtime (20 + 25 + 32). This closes only
+these sampled collision cases, not curved-patch, gameplay or release gates.

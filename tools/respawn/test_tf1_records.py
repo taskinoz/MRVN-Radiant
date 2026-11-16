@@ -23,6 +23,27 @@ def fixture():
 
 
 class Tf1AuxiliaryTests(unittest.TestCase):
+    def test_csm_bounds_children_and_reference_ranges(self):
+        # One root with a leaf child and one shadow-object reference.
+        root = (0., 0., 0., 1, 0, 1, 10., 10., 10., 1, 0)
+        leaf = (0., 0., 0., 0, 1, 1, 10., 10., 10., 0, 0)
+        records, inventory = fixture()
+        records[99], records[100] = [root, leaf], [(60000,)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        # Object IDs are intentionally opaque; only the reference slice is checked.
+        for field, value, message in ((0, float('nan'), 'bounds'), (6, -1., 'bounds'),
+                                      (9, 2, 'child range'), (5, 2, 'reference range'),
+                                      (4, 2, 'reference range')):
+            bad = list(root)
+            bad[field] = value
+            records[99] = [tuple(bad), leaf]
+            self.assertIn(message, str(check_tf1_records(records, inventory)))
+
+    def test_csm_cycles_are_rejected(self):
+        records, inventory = fixture()
+        records[99] = [(0., 0., 0., 1, 0, 0, 1., 1., 1., 0, 0)]
+        self.assertIn('CSM tree cycle', str(check_tf1_records(records, inventory)))
+
     def test_valid_records_and_missing_probe_sentinel(self):
         self.assertEqual(check_tf1_records(*fixture()), [])
 

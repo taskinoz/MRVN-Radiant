@@ -17,7 +17,7 @@ from portals import locate_cell
 from validate_records import load_records, validate
 
 
-def prepare(remap, output, diagnostic_texture=None):
+def prepare(remap, output, diagnostic_texture=None, basin=False):
     if diagnostic_texture is not None and diagnostic_texture.read_bytes()[:4] != b'VTF\0':
         raise ValueError('diagnostic texture must be a locally supplied VTF')
     output.mkdir(parents=True, exist_ok=False)
@@ -47,6 +47,13 @@ def prepare(remap, output, diagnostic_texture=None):
               ((1024, -1056, 0), (1056, 1056, 512)),
               ((-1024, -1056, 0), (1024, -1024, 512)),
               ((-1024, 1024, 0), (1024, 1056, 512))]
+    if basin:
+        # Keep water side exits behind solid banks, as in a contained pool.
+        # The original open-sided volume remains available as an edge control.
+        shapes += [((-528, -528, 0), (-512, 528, 128)),
+                   ((0, -528, 0), (16, 528, 128)),
+                   ((-512, -528, 0), (0, -512, 128)),
+                   ((-512, 512, 0), (0, 528, 128))]
     geometry = '\n'.join(box(lo, hi, floor).replace('compat/' + floor, floor)
                          for lo, hi in shapes)
     geometry += '\n' + box((-512, -512, 0), (0, 512, 128), water).replace('compat/' + water, water)
@@ -92,7 +99,7 @@ def prepare(remap, output, diagnostic_texture=None):
                 'expect': {'trace_z': checks['expect']['trace_z'],
                            'drop_z': [[0, 64, 160], [1, 0, 32]]}}
     (output / 'buoyancy-checks.json').write_text(json.dumps(buoyancy, indent=2), encoding='utf-8')
-    manifest = {'command': command, 'cells': cells,
+    manifest = {'command': command, 'cells': cells, 'solid_banks': basin,
                 'runtime_surface_shader': 'UnlitGeneric diagnostic' if diagnostic_texture else 'retail Water',
                 'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),
                 'bsp_sha256': hashlib.sha256(bsp.read_bytes()).hexdigest(),
@@ -108,5 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--diagnostic-texture', type=Path,
                         help='Local VTF for magenta/cyan UnlitGeneric surface controls; not Water shader acceptance')
+    parser.add_argument('--basin', action='store_true',
+                        help='Enclose the water sides with solid banks; default keeps the exposed-edge control')
     args = parser.parse_args()
-    prepare(args.remap, args.output, args.diagnostic_texture)
+    prepare(args.remap, args.output, args.diagnostic_texture, args.basin)

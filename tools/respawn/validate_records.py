@@ -40,6 +40,7 @@ SCHEMAS = {
 # v29 only: v37 world lights and probe references have different strides.
 TF1_SCHEMAS = {
     36: ('2fi', 1), 42: ('3iI', 0), 54: ('12f3i7f3i', 1),
+    99: ('3fBBH3fHH', 0), 100: ('H', 0),
     83: ('I2H', 1), 101: ('16h4B4hI', 0), 102: ('H', 0),
     103: ('2I', 0), 104: ('3fI', 0),
 }
@@ -234,9 +235,45 @@ def check_records(records):
     return issues
 
 
+def check_tf1_csm_records(records):
+    """Check v29 CSM tree structure, without assigning meanings to shadow IDs."""
+    issues = []
+    nodes, references = records[99], records[100]
+    graph = {}
+    def error(index, message):
+        issues.append({'severity': 'error', 'lump': 99, 'record': index, 'message': message})
+    for index, node in enumerate(nodes):
+        mins, maxs = node[:3], node[6:9]
+        children, local_count, total_count, first_child, first_ref = node[3:6] + node[9:11]
+        if (not all(math.isfinite(v) for v in (*mins, *maxs)) or
+                any(lo > hi for lo, hi in zip(mins, maxs))):
+            error(index, 'invalid CSM bounds')
+        if local_count > total_count or first_ref + total_count > len(references):
+            error(index, 'CSM reference range outside CSM_OBJ_REFERENCES')
+        if children:
+            if first_child + children > len(nodes):
+                error(index, 'CSM child range outside CSM_AABB_NODES')
+            else:
+                graph[index] = range(first_child, first_child + children)
+    colors = {}
+    for root in graph:
+        pending = [(root, False)]
+        while pending:
+            index, leaving = pending.pop()
+            if leaving:
+                colors[index] = 2
+            elif colors.get(index) == 1:
+                error(index, 'CSM tree cycle')
+            elif colors.get(index) != 2:
+                colors[index] = 1
+                pending.append((index, True))
+                pending.extend((child, False) for child in graph.get(index, ()))
+    return issues
+
+
 def check_tf1_records(records, inventory):
     """Known v29 auxiliary layouts; no claim about RTL channel meanings."""
-    issues = []
+    issues = check_tf1_csm_records(records)
     def error(lump, index, message):
         issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
     for i, (surface, bottom, texture) in enumerate(records[36]):

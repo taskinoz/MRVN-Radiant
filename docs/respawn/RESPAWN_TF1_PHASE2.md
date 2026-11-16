@@ -779,3 +779,33 @@ second launch loaded and finished. Evidence:
 Command: prepare with `--titans`, then the same public adapter arguments used
 for `phase2-spawn-triggers`, pointing to `phase2-titan-public` instead. No visual
 or navigation acceptance is inferred from these pose/output results.
+
+
+## Standing traversal through an authored trigger (17 November)
+
+An additional local diagnostic uses actual forward input after one initial
+placement at (-300,0,1), with no per-sample teleporting or velocity injection.
+R1 sends `+forward` through its owned MCP console and releases it in Python's
+`finally`; TFO sends the same input through `ClientCommand` and releases it
+after its guarded sampling loop. Both runtimes sample an alive, standing
+(`IsCrouched=false`) pilot 16 times. All samples remain on y=0, z=0.03125;
+reported forward velocity is about 172. Each sequence begins outside, fires
+one `OnStartTouch`, then one `OnEndTouch` and ends outside the trigger.
+
+The final sampled X positions are 280.982635 (R1) and 231.608826 (TFO). These
+are not an equal-duration speed comparison: R1's host polling includes MCP
+round trips, whereas TFO waits 0.2 engine seconds between samples. The bounded
+local audit requires finite, ordered samples, a living standing player, the
+floor/axis/speed constraints, positive progress and exactly one enter/exit.
+It passes both final runs and records source-script and report SHA-256 hashes.
+Evidence: `phase2-trigger-walk/{r1-long,tfo-long}/report.json` and `walk-audit.json`.
+The short TFO run ended inside the contact volume (no exit), so it is not counted
+as a full crossing. An initial TFO script used invalid `wait .2` syntax; that
+failed control is retained and was corrected to `wait 0.2`. Only the owned failed
+game process was stopped; harness staging cleanup completed before the retry.
+
+This is an ad-hoc native diagnostic, not a new public ARES walking option. The
+public `triggers` option still uses controlled repositioning. One straight,
+flat-floor crossing does not validate ramps, jumps, obstacles, surf-stage crouch
+resets, every movement mode, networking or AI navigation. These and the wider
+Phase 2 gates remain open.

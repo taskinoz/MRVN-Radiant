@@ -98,9 +98,11 @@ schema coverage is 61/70; texture-name references and physics model/solid framin
 also validate against the reference corpus. Alive retail R1 water captures show a
 horizon artifact too, so the band is not unique to an authored BSP.
 Both adapters validate declared v29 entity partition syntax before staging,
-including default external partition tables. Initial spawn poses and native axis-aligned/rotated trigger enter/exit
-outputs now pass in both runtimes through shared ARES checks; normal traversal,
-objectives and navigation remain open. A live native atlas NPC also passes
+including default external partition tables. Initial spawn poses and native
+axis-aligned/rotated trigger enter/exit outputs pass in both runtimes through
+shared ARES checks. A separate forward-input control also passes one standing,
+flat-floor trigger crossing in each runtime. Broader traversal, objectives and
+navigation remain open. A live native atlas NPC also passes
 five sampled flat-floor support checks in each runtime; its setting name differs
 between R1Delta and TFO. This does not establish titan piloting or combat.
 R1 prefers verified engine screenshots; TFO engine capture remains

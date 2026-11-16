@@ -89,8 +89,11 @@ is the detailed source for acceptance status.
 R1 cold-load water surfaces now render when the two supplied compiled Water
 shader caches are in a map VPK; loose shader copies do not work. The explicit
 `pack_tf1_shaders.py` command reproduces the native-tested shader package and
-records hashes without including retail assets. The underwater black band
-remains. The CSM-tree structure now validates against seven TF1/TFO reference maps.
+records hashes without including retail assets. A new dependency audit checks the
+known Water material, texture and cache files before packaging. On the same fully
+flooded BSP, TFO renders the sampled underwater view without a black band while
+R1Delta retains it; a supplied zero-refraction underside control also retains it.
+The CSM-tree structure now validates against seven TF1/TFO reference maps.
 Both adapters reject missing declared v29 entity sidecars before staging.
 R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.

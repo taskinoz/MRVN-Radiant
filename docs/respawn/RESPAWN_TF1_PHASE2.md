@@ -588,3 +588,56 @@ Validation: 238 MRVN tool tests, 157 ARES format-tool tests, 81 adapter tests,
 assets or account-bearing logs are committed. Water parity, lighting semantics,
 complete dependency packages, gameplay/navigation and human release gates keep
 Phase 2 open.
+
+
+## Flooded-room comparison and bounded Water dependency audit (17 November)
+
+`prepare_tf1_water.py --flooded` extends the water brush and reverse-facing
+underside to all four room walls, with water at z=0..128. It validates both wet
+floor regions and the dry air above them, moves spawns above water and omits the
+wet/dry buoyancy checks because no dry floor remains. `--basin` and `--flooded`
+are mutually exclusive, including the Python entry point. Default, basin and
+flooded outputs compile and pass record/cell validation. The regenerated basin
+source matches the previous native control. Compiler code is unchanged.
+
+The same flooded BSP and checks finish in R1Delta 3.0.5 and TFORevive.Core 135:
+two floor rays end at z=0.03125; all three exact camera origins have finite eye
+coordinates and alive=true. The underwater eye is (-256,-320,76). All nine
+images from these three runs were reviewed:
+
+| Control | Captures | Underwater observation |
+| --- | --- | --- |
+| Flooded room, R1Delta | Three internal engine captures | Black band remains |
+| Same BSP, TFO | Three window-fallback captures, unobscured | No black band in sampled view |
+| Same BSP, R1Delta; supplied underside VMT `$refractamount` .2 to 0 | Three internal engine captures | Black band remains |
+
+R1 runs retain the native-tested shader-only VPK and loose material tree. The
+last control changes only the supplied underside VMT; no claim is made that this
+parameter alone explains all renderer refraction behavior. TFO uses its installed
+TF1 content mods and needed one normal startup retry. Its engine capture remains
+disabled following prior crashes. Runtime/shader/resource differences remain
+possible causes; the comparison does not justify a speculative compiler change.
+The navigation warning remains visible: navigation acceptance is still open.
+Evidence stays local in `phase2-water-flooded/{r1,tfo}`, its `layout-validation.json`,
+and `phase2-water-zero-refract/{control.json,r1}`.
+
+`audit_tf1_water.py` now checks the known direct Water VMT dependency path before
+packaging: bottom materials, known textures, HDR-only cubemaps, runtime targets
+and the two required compiled Water caches. It fingerprints supplied files,
+checks VTF magic and nonempty resources, and rejects unsafe paths, links and
+unsupported dependency syntax. Eight original synthetic tests cover missing
+files, malformed syntax, unknown dependency parameters/proxies and bounded cycles.
+The local native-tested set passes with two VMTs, four VTFs and two VCS caches
+(`phase2-water-flooded/dependencies.json`). Patch/include materials, conditional
+blocks and other shaders/proxies are unsupported; texture/cache decoding,
+mounted archives, other asset classes and complete map dependency closure remain
+open. Loose cache presence alone is not the required native VPK load path.
+
+Validation: 246 MRVN tool tests pass; all three generator layouts compile and
+pass static checks; the two R1 and one TFO runs above finish without probe or
+capture errors. Prior paired collision and 60-report compiler results remain
+the earlier checkpoint, not fresh runs for this change. Task-owned addons/VPK
+aliases are cleaned up. Retail files, account-bearing logs and screenshots
+remain local. Full Phase 2 is still open for R1 underwater rendering, broader
+lighting/physics, complete dependency packages, gameplay/navigation and human
+release gates.

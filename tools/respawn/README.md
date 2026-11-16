@@ -124,3 +124,34 @@ PHY, `--floor 1 0 --motion 1`, to check the dry body's support and tail-window
 translation. Checking wet `--motion 0` currently fails because the floating box
 keeps bobbing. Zero entity-reported velocity alone does not establish rest.
 This is a controlled sample; it does not establish broad buoyancy compatibility.
+
+
+Add `--basin` to enclose the pool with solid banks, or `--flooded` to extend
+water to all four room walls. These options are mutually exclusive. The flooded
+layout has no dry floor: it validates wet cells on both sides, keeps spawn points
+and the third camera above water, and omits `buoyancy-checks.json` rather than
+emitting a misleading wet/dry pair. All three layouts compile and validate.
+The same flooded BSP has a clean sampled underwater TFO view and retains the
+R1Delta black band; this is a diagnostic comparison, not full water acceptance.
+
+Audit the known direct Water dependencies in explicitly supplied local trees:
+
+```powershell
+python tools/respawn/audit_tf1_water.py --source LOCAL_MATERIAL_TREE --shader-source LOCAL_SHADER_TREE --material world/water/water_mp_angelcity_cheap --output water-dependencies.json
+```
+
+The audit follows `$bottommaterial`, checks known texture references (including
+HDR-only cubemaps), distinguishes runtime render targets, and requires both
+`water_ps40.vcs` and `water_vs40.vcs`. It records SHA-256 hashes and fails missing,
+empty or linked resources, bad VTF headers and unsupported dependency syntax.
+It supports direct `Water` VMTs and the `TextureScroll`/`WaterLOD` proxies used by
+the native control. Patch/includes, conditions, other shaders/proxies and unknown
+texture/material parameters fail explicitly. It does not decode textures or
+shader caches, discover dependencies of other shaders/models, or resolve mounted
+VPKs. A pass is a bounded file audit, not a complete package or visual check.
+
+Use `pack_tf1_shaders.py --source LOCAL_SHADER_TREE --map mp_name --output NEW_DIR`
+to package supplied `shaders/fxc/*.vcs` caches into a shader-only map VPK.
+R1Delta's native Water control requires this VPK load path; loose cache files
+alone did not restore the surface. Supply materials, textures, models and entity
+sidecars separately. Neither command extracts or bundles retail assets.

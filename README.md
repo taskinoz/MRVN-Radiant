@@ -41,7 +41,7 @@ samples, map trials, crash investigations and the converter notes. See the
 
 | Game | Coverage | Note |
 |------|----------|------|
-| Titanfall 1 / R1Delta + Titanfall Online | 99% (74/75), legacy writer count | Shared v29 compiler. Sampled collision and prop support pass in both runtimes; underwater geometry/fog passes one TFO scene. R1Delta surfaces render with packaged shader caches; an underwater band remains unresolved. Full Phase 2 compatibility is open; see [Phase 2 evidence](docs/respawn/RESPAWN_TF1_PHASE2.md) |
+| Titanfall 1 / R1Delta + Titanfall Online | Partial; legacy writer count 74/75 | Shared v29 compiler. Sampled collision and prop support pass in both runtimes; underwater geometry/fog passes one TFO scene. R1Delta surfaces render with packaged shader caches; an underwater band remains unresolved. Full Phase 2 compatibility is open; see [Phase 2 evidence](docs/respawn/RESPAWN_TF1_PHASE2.md) |
 | Titanfall 2 | 100% (81/81) | Every lump retail fills; triangle collision bevels use a natively tested rule, not retail's exact lists; see [RESPAWN_TF2_LUMPS.md](docs/respawn/RESPAWN_TF2_LUMPS.md) |
 | Apex Legends | 38% (26/68) | BVH collision; no lighting, no portals. Not yet recounted for empty lumps |
 
@@ -54,7 +54,7 @@ samples, map trials, crash investigations and the converter notes. See the
 > NOTE: These values are updated manually. Last counted 2026-11-06 from
 > `titanfall.cpp`, `titanfall2.cpp` and `apex_legends.cpp`.
 
-## TF1 / TFO compatibility (16 November 2026)
+## TF1 / TFO compatibility (17 November 2026)
 
 The shared compiler target does not imply identical runtime behavior. R1Delta
 needs an intermission camera and coordinates within +/-16384; the compiler now
@@ -69,7 +69,7 @@ must be packaged with their dependencies for standalone maps.
 | Lighting | Fallback lightmap planes; structural probe and CSM-tree checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
 
-Validation at this checkpoint: 238 MRVN tool tests and 60 compiler regression
+Validation at this checkpoint: 255 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
 counts and the writer coverage above are not a percentage of full compatibility.
 The v29 mesh vertex-type enum now matches surveyed retail TF1 maps (unlit 0,
@@ -93,7 +93,10 @@ records hashes without including retail assets. A new dependency audit checks th
 known Water material, texture and cache files before packaging. On the same fully
 flooded BSP, TFO renders the sampled underwater view without a black band while
 R1Delta retains it; a supplied zero-refraction underside control also retains it.
-The CSM-tree structure now validates against seven TF1/TFO reference maps.
+The CSM, shadow and occlusion streams now have structural checks. Writer record
+schema coverage is 61/70; texture-name references and physics model/solid framing
+also validate against the reference corpus. Alive retail R1 water captures show a
+horizon artifact too, so the band is not unique to an authored BSP.
 Both adapters reject missing declared v29 entity sidecars before staging.
 R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.

@@ -39,10 +39,12 @@ SCHEMAS = {
 
 # v29 only: v37 world lights and probe references have different strides.
 TF1_SCHEMAS = {
-    36: ('2fi', 1), 42: ('3iI', 0), 54: ('12f3i7f3i', 1),
+    36: ('2fi', 1), 42: ('3iI', 0), 44: ('I', 0), 54: ('12f3i7f3i', 1),
     99: ('3fBBH3fHH', 0), 100: ('H', 0),
     83: ('I2H', 1), 101: ('16h4B4hI', 0), 102: ('H', 0),
     103: ('2I', 0), 104: ('3fI', 0),
+    117: ('3f', 0), 118: ('H', 0),
+    124: ('3f', 0), 125: ('5f', 0), 126: ('H', 0), 127: ('2I2h', 0),
 }
 
 
@@ -271,9 +273,131 @@ def check_tf1_csm_records(records):
     return issues
 
 
+def load_raw_payload(path, inventory, index):
+    """Read one bounded, unencoded lump, preferring its default sidecar."""
+    entry = inventory['lumps'][index]
+    external = next((item for item in entry['external_files'] if item['variant'] == 'default'), None)
+    size = external['size'] if external else entry['length']
+    if size > 256 * 1024 * 1024 or (size and (entry['version'] != 0 or entry['fourcc'])):
+        raise FormatError(f'lump {index}: oversized, encoded or unsupported payload version')
+    if external:
+        data = Path(external['path']).read_bytes()
+    else:
+        if size and (entry['offset'] < HEADER_SIZE or entry['offset'] + size > inventory['size']):
+            raise FormatError(f'lump {index}: embedded payload outside file')
+        with Path(path).open('rb') as stream:
+            stream.seek(entry['offset'])
+            data = stream.read(size)
+    if len(data) != size:
+        raise FormatError(f'lump {index}: truncated payload')
+    return data
+
+
+def check_tf1_texture_strings(data, table, textures):
+    issues = []
+    def error(lump, index, message):
+        issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
+    for index, (offset,) in enumerate(table):
+        if not 0 <= offset < len(data):
+            error(44, index, 'texture string offset outside TEXTURE_DATA_STRING_DATA')
+        elif offset and data[offset - 1] != 0:
+            error(44, index, 'texture string offset points inside another string')
+        elif data.find(b'\0', offset) == -1 or data[offset] == 0:
+            error(44, index, 'texture string is empty or unterminated')
+    for index, texture in enumerate(textures):
+        if not 0 <= texture[3] < len(table):
+            error(2, index, 'texture name index outside TEXTURE_DATA_STRING_TABLE')
+    return issues
+
+
+def check_tf1_physics(data, model_count):
+    """Bound model/solid framing and keydata; do not decode IVP collision trees."""
+    issues = []
+    def error(index, message):
+        issues.append({'severity': 'error', 'lump': 29, 'record': index, 'message': message})
+    cursor, seen = 0, set()
+    while cursor < len(data):
+        if len(data) - cursor < 16:
+            error(None, 'truncated physics model header')
+            return issues
+        model, size, keysize, count = struct.unpack_from('<4i', data, cursor)
+        cursor += 16
+        if model == -1:
+            if (size, keysize, count) != (-1, 0, 0) or cursor != len(data):
+                error(None, 'invalid physics terminal header or trailing bytes')
+            return issues
+        if model < 0 or model >= model_count or model in seen:
+            error(model, 'physics model index outside MODELS or duplicated')
+        seen.add(model)
+        if size < 0 or keysize < 0 or count < 0 or size + keysize > len(data) - cursor:
+            error(model, 'physics model payload range outside PHYSICS_COLLIDE')
+            return issues
+        end = cursor + size
+        if count > size // 4:
+            error(model, 'physics solid count exceeds model payload')
+            return issues
+        for _ in range(count):
+            if end - cursor < 4:
+                error(model, 'truncated physics solid length')
+                return issues
+            length, = struct.unpack_from('<i', data, cursor)
+            cursor += 4
+            if length < 4 or length > end - cursor:
+                error(model, 'physics solid range outside model payload')
+                return issues
+            if data[cursor:cursor + 4] != b'VPHY':
+                error(model, 'unsupported physics solid signature')
+            cursor += length
+        if cursor != end:
+            error(model, 'physics solids do not consume model payload')
+        keys = data[end:end + keysize]
+        if keysize and (keys[-1:] != b'\0' or b'\0' in keys[:-1]):
+            error(model, 'physics keydata is not one terminated string')
+        cursor = end + keysize
+    if data:
+        error(None, 'missing physics terminal header')
+    return issues
+
+
+def check_tf1_shadow_records(records):
+    """Check v29 occlusion/shadow streams; shadow-object IDs remain opaque."""
+    issues = []
+    def error(lump, index, message):
+        issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
+    for lump in (117, 124, 125):
+        for index, vertex in enumerate(records[lump]):
+            if not all(math.isfinite(value) for value in vertex):
+                error(lump, index, 'nonfinite occlusion/shadow vertex')
+    if len(records[118]) % 3:
+        error(118, None, 'occlusion index count is not a triangle list')
+    for index, (vertex,) in enumerate(records[118]):
+        if vertex >= len(records[117]):
+            error(118, index, 'occlusion index outside OCCLUSION_MESH_VERTICES')
+    first = 0
+    indices = records[126]
+    for index, (base, triangles, opaque, material) in enumerate(records[127]):
+        end = first + triangles * 3
+        if opaque not in (0, 1):
+            error(127, index, 'invalid shadow opaque selector')
+        else:
+            pool = records[124 if opaque else 125]
+            if base > len(pool):
+                error(127, index, 'shadow vertex base outside selected pool')
+            if any(base + vertex >= len(pool) for (vertex,) in indices[first:end]):
+                error(127, index, 'shadow mesh-local index outside selected vertex pool')
+        if material < -1 or material >= len(records[82]) or (not opaque and material == -1):
+            error(127, index, 'shadow material outside MATERIAL_SORT')
+        if end > len(indices):
+            error(127, index, 'shadow triangle range outside SHADOW_MESH_INDICES')
+        first = end
+    if first != len(indices):
+        error(126, None, 'shadow mesh triangle counts do not consume index stream')
+    return issues
+
+
 def check_tf1_records(records, inventory):
     """Known v29 auxiliary layouts; no claim about RTL channel meanings."""
-    issues = check_tf1_csm_records(records)
+    issues = check_tf1_csm_records(records) + check_tf1_shadow_records(records)
     def error(lump, index, message):
         issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
     for i, (surface, bottom, texture) in enumerate(records[36]):
@@ -353,6 +477,10 @@ def validate(path):
     report["issues"].extend(check_tricoll_records(records, inventory["version_raw"]))
     if inventory['version_raw'] == 29:
         report['issues'].extend(check_tf1_records(records, inventory))
+        report['issues'].extend(check_tf1_texture_strings(
+            load_raw_payload(path, inventory, 43), records[44], records[2]))
+        report['issues'].extend(check_tf1_physics(
+            load_raw_payload(path, inventory, 29), len(records[14])))
     if inventory["version_raw"] == 37:
         report["game_lump"] = inspect_game_lump(path, inventory=inventory)
         # Minimal synthetic fixtures may have no visibility data at all.

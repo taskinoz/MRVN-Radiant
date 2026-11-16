@@ -16,6 +16,7 @@ import struct
 import subprocess
 
 from game_lump import inspect_game_lump
+from entity_text import parse_entities
 from inspect_bsp import FormatError, inspect
 from recover_collision_map import plane_points
 from tricoll import triangle_indices
@@ -41,42 +42,6 @@ def payload(path, inventory, index):
     with path.open('rb') as stream:
         stream.seek(entry['offset'])
         return stream.read(entry['length'])
-
-
-def parse_entities(text):
-    """Preserve duplicate keyvalues. Reject incomplete/nested entity blocks."""
-    tokens, i = [], 0
-    while i < len(text):
-        c = text[i]
-        if c.isspace() or c == '\0':
-            i += 1; continue
-        if text.startswith('//', i):
-            end = text.find('\n', i); i = len(text) if end < 0 else end+1; continue
-        if c in '{}':
-            tokens.append(c); i += 1; continue
-        if c != '"':
-            raise FormatError('Expected a quoted entity key/value')
-        i += 1; value = ''
-        while i < len(text) and text[i] != '"':
-            if text[i] == '\\' and i+1 < len(text) and text[i+1] in '\\"':
-                i += 1
-            value += text[i]; i += 1
-        if i == len(text):
-            raise FormatError('Unterminated entity string')
-        i += 1; tokens.append(('value', value))
-    result, i = [], 0
-    while i < len(tokens):
-        if tokens[i] != '{':
-            raise FormatError('Expected entity opening brace')
-        pairs = []; i += 1
-        while i < len(tokens) and tokens[i] != '}':
-            if i+1 >= len(tokens) or not isinstance(tokens[i], tuple) or not isinstance(tokens[i+1], tuple):
-                raise FormatError('Entity key/value pair is incomplete')
-            pairs.append([tokens[i][1], tokens[i+1][1]]); i += 2
-        if i == len(tokens):
-            raise FormatError('Unterminated entity block')
-        result.append(pairs); i += 1
-    return result
 
 
 def quote(value):

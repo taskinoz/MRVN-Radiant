@@ -64,7 +64,7 @@ must be packaged with their dependencies for standalone maps.
 | Area | Verified samples | Remaining acceptance |
 | --- | --- | --- |
 | v29 structure/startup | 37 compiled/reference maps validate; fresh maps start in both runtimes | Remaining record semantics and broader maps |
-| Collision/physics | Paired ray/hull probes, barrel support, sequential R1 drops; actual-PHY support in one TFO crate stress scene | Curved/transformed/backface collision, masks, repeated stress and historical fall-through |
+| Collision/physics | Paired ray/hull and transformed-brush probes; flat-patch backface samples; 32 TFO contents-mask probes; prop support samples | Broader curved collision, actual projectiles/titans, repeated stress and historical fall-through |
 | Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 surface rendering, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
 | Lighting | Fallback lightmap planes and structural probe checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
@@ -86,6 +86,12 @@ TFO sequential drops honor sample recording. This is one buoyancy sample, not
 broad physics parity or proof of rest.
 The [Phase 2 log](docs/respawn/RESPAWN_TF1_PHASE2.md) retains native failures and
 is the detailed source for acceptance status.
+
+Recent native controls restore R1 custom water surfaces when the full retail
+map VPK resources are available or retail water is rendered first. A black
+underwater band and standalone dependency packaging remain unresolved. New
+fixtures verify five transformed brush models in both runtimes and 32 TFO
+contents-mask probes. These results narrow the remaining work; Phase 2 is open.
 
 ## Other tools
 - [bsp_tool](https://github.com/snake-biscuits/bsp_tool)

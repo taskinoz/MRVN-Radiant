@@ -66,10 +66,10 @@ must be packaged with their dependencies for standalone maps.
 | v29 structure/startup | 37 compiled/reference maps validate; fresh maps start in both runtimes | Remaining record semantics and broader maps |
 | Collision/physics | Paired ray/hull and transformed-brush probes; paired flat-patch/backface and 32 contents-mask probes; prop support samples | Broader curved collision, actual projectiles/titans, repeated stress and historical fall-through |
 | Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 underwater band, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
-| Lighting | Fallback lightmap planes and structural probe checks | World/character appearance and real-time-light semantics in both runtimes |
+| Lighting | Fallback lightmap planes; structural probe and CSM-tree checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
 
-Validation at this checkpoint: 236 MRVN tool tests and 60 compiler regression
+Validation at this checkpoint: 238 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
 counts and the writer coverage above are not a percentage of full compatibility.
 The v29 mesh vertex-type enum now matches surveyed retail TF1 maps (unlit 0,
@@ -90,7 +90,9 @@ R1 cold-load water surfaces now render when the two supplied compiled Water
 shader caches are in a map VPK; loose shader copies do not work. The explicit
 `pack_tf1_shaders.py` command reproduces the native-tested shader package and
 records hashes without including retail assets. The underwater black band
-remains. R1 prefers verified engine screenshots; TFO engine capture remains
+remains. The CSM-tree structure now validates against seven TF1/TFO reference maps.
+Both adapters reject missing declared v29 entity sidecars before staging.
+R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
 
 ## Other tools

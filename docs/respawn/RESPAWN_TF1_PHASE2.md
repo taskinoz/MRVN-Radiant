@@ -16,10 +16,10 @@ separately serialized GAME_LUMP. It compares a fresh authored baseline against
 local Angel City, Colony and the installed TFO lobby. The machine-readable
 current report is `.local/respawn/phase2-rtl-fixed/lump-audit.json`.
 
-- 70 unique writer lump types; 52 have schemas in `validate_records.py`, 18 do
+- 70 unique writer lump types; 54 have schemas in `validate_records.py`, 16 do
   not. Individual tools and compiler regressions cover some of the latter;
   absence of a schema does not mean no implementation exists. The first audit
-  had 44 schemas; eight v29-specific layouts were added during this work.
+  had 44 schemas; eight earlier layouts and two CSM layouts were added during this work.
 - All four maps pass the selected static cross-reference checks and directory
   inventory without issues. Populated lump versions agree across this sample.
 - `PHYSICS_TRIANGLES` occurs in the reference corpus but is not emitted. The
@@ -36,7 +36,7 @@ current report is `.local/respawn/phase2-rtl-fixed/lump-audit.json`.
 1. **Lighting records:** v29 schemas and selected checks now cover WORLD_LIGHTS
    (100 bytes), LIGHTMAP_HEADERS, LIGHTPROBES, LIGHTPROBE_TREE,
    LIGHTPROBE_REFERENCES (16 bytes) and static-prop probe indices. Nonempty baked
-   fixtures and six reference maps pass. Remaining: CSM nodes/references, shadow
+   fixtures and six reference maps pass. CSM node/reference structure is now checked. Remaining: shadow
    meshes, deeper lighting semantics and RTL channel decoding before replacing
    the all-255 output.
 2. **Water assignment:** validate LEAF_WATER_DATA against visibility cells,
@@ -548,3 +548,43 @@ Final transformed flat-patch R1 run also passes all 25 collision checks
 (`phase2-transform-repro-patch/r1`). The final brush, flat-patch and mask
 fixtures therefore pass 77 probes per runtime (20 + 25 + 32). This closes only
 these sampled collision cases, not curved-patch, gameplay or release gates.
+
+
+## CSM structure, entity-sidecar preflight and water controls (16 November)
+
+The v29 CSM_AABB_NODES (32-byte) and CSM_OBJ_REFERENCES (2-byte) schemas
+raise writer-schema coverage to 54 of 70 types. Validation checks finite ordered
+node bounds, child/reference ranges, local-versus-total reference counts and
+tree cycles. Object IDs remain opaque: no claim is made about their shadow-mesh
+namespace, cascade semantics or lighting appearance. Six local TF1 references
+(Angel City, beta Angel City, Colony, Fracture, Lagoon, Relic), the installed TFO
+lobby and the authored water fixture pass. The four-map lump inventory was
+regenerated. Two old lighting fixtures still fail the pre-existing missing RTL
+plane check; their reports are retained rather than treated as passes. Fresh
+compiler regression produces 60 passing reports, including nonempty lit cases.
+Evidence: `.local/respawn/phase2-csm-validation` and `phase2-csm-regression`.
+
+The Water shader package and internal R1 captures were retained for three
+negative controls: top-only Water faces (`phase2-water-planar-shader`), solid
+banks (`phase2-water-basin/r1`) and underwater draw flags on every above-water
+world mesh (`phase2-water-all-draw/r1-with-sidecar`). All finish with valid alive
+poses, two expected floor rays and three reviewed engine screenshots. The black
+band remains in every underwater view. No broad compiler flag change is made.
+`prepare_tf1_water.py --basin` reproduces the contained-pool control while
+preserving the original exposed-edge fixture as the default. TFO basin runtime
+has not been tested.
+
+The first draw-flag control omitted the generated spawn `.ent` sidecar and
+remained on the loading screen. A second incomplete control was stopped by
+matching its task-owned parent process. These are setup failures, not draw-flag
+results. The complete rerun passes startup and retains the band. Both adapters
+now check embedded v29 `01*` ENTITY_PARTITIONS declarations before staging and
+reject missing, empty or linked named sidecars. Malformed paths/payload ranges
+fail; other BSP versions and external partition-table overrides are outside
+this narrow check. This does not validate entity syntax, objectives or modes.
+
+Validation: 238 MRVN tool tests, 157 ARES format-tool tests, 81 adapter tests,
+60 fresh compiler regression reports and registry validation pass. No retail
+assets or account-bearing logs are committed. Water parity, lighting semantics,
+complete dependency packages, gameplay/navigation and human release gates keep
+Phase 2 open.

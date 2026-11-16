@@ -49,8 +49,8 @@ Bytes below prefer the default external sidecar when present. Empty payloads can
 | 96 | TRICOLL_BEVEL_STARTS | yes | yes | 16 B / v0 | 1182288 B / v0 | 195874 B / v0 | empty |
 | 97 | TRICOLL_BEVEL_INDICES | yes | yes | empty | 3047496 B / v0 | 591444 B / v0 | empty |
 | 98 | LIGHTMAP_DATA_SKY | yes | no | 524288 B / v0 | 38797312 B / v0 | 16252928 B / v0 | 524288 B / v0 |
-| 99 | CSM_AABB_NODES | yes | no | 32 B / v0 | 180800 B / v0 | 125120 B / v0 | 256 B / v0 |
-| 100 | CSM_OBJ_REFERENCES | yes | no | empty | 17578 B / v0 | 14492 B / v0 | 14 B / v0 |
+| 99 | CSM_AABB_NODES | yes | yes | 32 B / v0 | 180800 B / v0 | 125120 B / v0 | 256 B / v0 |
+| 100 | CSM_OBJ_REFERENCES | yes | yes | empty | 17578 B / v0 | 14492 B / v0 | 14 B / v0 |
 | 101 | LIGHTPROBES | yes | yes | empty | 1939344 B / v0 | 1254000 B / v0 | 9264 B / v0 |
 | 102 | STATIC_PROP_LIGHTPROBE_INDICES | yes | yes | empty | 73456 B / v0 | 67564 B / v0 | 40 B / v0 |
 | 103 | LIGHTPROBE_TREE | yes | yes | empty | 357080 B / v0 | 231992 B / v0 | 3752 B / v0 |
@@ -78,7 +78,8 @@ Bytes below prefer the default external sidecar when present. Empty payloads can
 | 126 | SHADOW_MESH_INDICES | yes | no | empty | 1036470 B / v0 | 320982 B / v0 | 798 B / v0 |
 | 127 | SHADOW_MESHES | yes | no | empty | 300 B / v0 | 228 B / v0 | 48 B / v0 |
 
-Underwater follow-up: wet-cell OBJ_REFERENCES now enable the world MESHES
-underwater bit; TEXTURE_DATA omits mesh draw flags. TFO rectangular-room
-rendering/fog is sampled successfully; R1Delta surface rendering remains open.
-See [Phase 2](RESPAWN_TF1_PHASE2.md#underwater-draw-and-camera-follow-up-15-november).
+Underwater follow-up: wet-cell OBJ_REFERENCES enable the world MESHES
+underwater bit; TEXTURE_DATA omits mesh draw flags. TFO room rendering/fog
+and R1 surfaces with packaged Water shader caches are sampled successfully;
+an R1 underwater band remains open. CSM schemas validate tree structure,
+not shadow-object ID meanings or lighting appearance. See [Phase 2](RESPAWN_TF1_PHASE2.md).

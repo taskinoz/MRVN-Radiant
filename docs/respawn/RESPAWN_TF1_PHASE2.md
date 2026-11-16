@@ -743,3 +743,39 @@ then each ARES adapter with `--maps` set to that directory's `maps`,
 No view captures were requested for these output/pose checks. Game files,
 screenshots and account-bearing logs remain local; owned runtime staging is
 removed after each run.
+
+
+## Native atlas NPC support (17 November)
+
+The authored floor now also supports a real native atlas NPC in both runtimes,
+not just a broad trace hull. Each local control creates an alive `npc_titan` at
+(0,500,256); at all five one-second samples its origin is (0,500,0.03125),
+velocity is zero and native bounds are (-60,-60,0)..(60,60,235). Sampled
+translation is zero and the bounds bottom remains at the native floor margin.
+This is one flat-floor support test, not piloting, combat, navigation, curved
+surface acceptance or a proof of rest between samples.
+
+There is a material runtime API difference: R1Delta 3.0.5 uses the player setting
+`titan_atlas`, whereas the TFORevive Core135 native helper uses
+`titan_atlas_tier0`. Passing the TFO setting to R1Delta produced a null-model
+script error at `SpawnNPCTitan`/`SetModel`. Both failed R1 attempts are retained;
+the corrected R1 atlas control and TFO control pass without a compiler change.
+Evidence: `phase2-titan-native/{r1,r1-template,r1-atlas,tfo}/report.json`.
+
+ARES now exposes bounded `titans` checks with per-runtime settings, exact sample
+counts, alive/native state, finite bounds, expected XY and floor support, and
+independent sampled-translation checks. It destroys each NPC after sampling or
+a caught script failure; R1 thread startup is guarded against control retries.
+`prepare_tf1_triggers.py --titans` adds the original support probe. ARES's
+adapter suite passes 102 tests; MRVN's 261 tests and ARES's 172 format tests
+remain passing. Full Phase 2 acceptance is still open.
+
+
+The public adapters also pass a final paired combined run of this source fixture:
+initial spawn, five native atlas support samples and all six trigger samples,
+with zero report errors. TFO required one normal pre-map graphics retry; the
+second launch loaded and finished. Evidence:
+`phase2-titan-public/{manifest.json,static.json,checks.json,r1/report.json,tfo/report.json}`.
+Command: prepare with `--titans`, then the same public adapter arguments used
+for `phase2-spawn-triggers`, pointing to `phase2-titan-public` instead. No visual
+or navigation acceptance is inferred from these pose/output results.

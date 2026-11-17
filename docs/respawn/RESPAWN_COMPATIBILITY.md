@@ -1,5 +1,11 @@
 # Respawn compatibility work
 
+For the current TF1/R1Delta, TFO and TF2 assessment, read the
+[17 November 2026 map support audit](RESPAWN_MAP_SUPPORT_AUDIT.md). It supersedes
+older checkpoint statements below where work has since advanced. This document
+retains the historical plan and release gates; structural coverage does not
+establish complete playable compatibility.
+
 ## Objective and release gates
 
 Version 1 targets authoring and compiling maps, importing models/materials,

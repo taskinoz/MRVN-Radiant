@@ -332,11 +332,18 @@ void ApexLegends::EmitEntity(const entity_t &e) {
 */
 void ApexLegends::EmitLevelInfo() {
     ApexLegends::LevelInfo_t &li = ApexLegends::Bsp::levelInfo.emplace_back();
-    li.unk0 = 51;
-    li.unk1 = 51;
-    li.unk2 = 51;
-    li.unk3 = 256;
-    li.unk4 = 22;
+    // Adapt the fork's generated v47 level metadata, using the emitted world
+    // model rather than the mutable shared mesh list. All world meshes retain
+    // one conservative category here; retail decal/translucent/sky splits and
+    // their culling semantics require separate work.
+    // Source/revision: docs/respawn/RESPAWN_APEX_FORK_REVIEW.md.
+    const int32_t worldMeshes = ApexLegends::Bsp::models.empty()
+        ? 0 : ApexLegends::Bsp::models.front().meshCount;
+    li.unk0 = worldMeshes;
+    li.unk1 = worldMeshes;
+    li.unk2 = worldMeshes;
+    li.unk3 = (worldMeshes + 63) & ~63;
+    li.unk4 = Titanfall2::Bsp::gameLumpProps.size();
 
     li.modelCount = 0;
     for( Model_t &model : ApexLegends::Bsp::models ) {
@@ -423,7 +430,9 @@ void ApexLegends::EmitStaticProp(entity_t &e) {
     Shared::visRef_t &ref = Shared::visRefs.emplace_back();
 
     ref.minmax = minmax;
-    ref.index = ApexLegends::Bsp::models.at(0).meshCount + Titanfall2::Bsp::gameLumpProps.size() - 1;
+    // Match the aligned static-prop namespace declared in v47 LEVEL_INFO.
+    const uint32_t firstProp = (ApexLegends::Bsp::models.at(0).meshCount + 63) & ~63u;
+    ref.index = firstProp + Titanfall2::Bsp::gameLumpProps.size() - 1;
 }
 
 void ApexLegends::SetupGameLump() {

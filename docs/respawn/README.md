@@ -7,6 +7,9 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 ## Start here
 
+- [RESPAWN_MAP_SUPPORT_AUDIT.md](RESPAWN_MAP_SUPPORT_AUDIT.md): 17 November 2026
+  TF1/R1Delta, TFO and TF2 engine/game-file review, support matrix and measured limits.
+
 - [RESPAWN_COMPATIBILITY.md](RESPAWN_COMPATIBILITY.md): current gaps, release
   gates and how to inspect a BSP.
 - [RESPAWN_SOURCES.md](RESPAWN_SOURCES.md): who and what the research and tools
@@ -16,8 +19,10 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 | Note | Covers |
 | --- | --- |
+| [RESPAWN_APEX_FORK_REVIEW.md](RESPAWN_APEX_FORK_REVIEW.md) | Pinned r5valkyrie fork review, initial Apex metadata fixes and season/schema limits |
 | [RESPAWN_TF2_LUMPS.md](RESPAWN_TF2_LUMPS.md) | Cubemaps, probe BSP, CSM objects, collision primitives and noded triangle collision |
 | [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md) | Titanfall 1 lighting, tangents, cubemaps, VPhysics, portals and testing in Titanfall Online |
+| [RESPAWN_TF1_NAVIGATION.md](RESPAWN_TF1_NAVIGATION.md) | Native AIN export, offline CRC packaging and two paired grunt route fixtures |
 | [RESPAWN_TF1_PHASE2.md](RESPAWN_TF1_PHASE2.md) | Phase 2 parity checklist, remaining tasks and reproducible TFO baseline |
 | [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md) | Lightmaps, sun, probes and the baker |
 | [RESPAWN_BUILD_PERFORMANCE.md](RESPAWN_BUILD_PERFORMANCE.md) | Compiler speed, memory, worker budgets and before/after output checks |

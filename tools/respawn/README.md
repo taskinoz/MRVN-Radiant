@@ -173,3 +173,11 @@ Add `--titans` to `prepare_tf1_triggers.py` to include an ARES native atlas
 NPC support probe. It uses each runtime's own atlas settings name, verifies
 sampled alive/native state and support/motion, then destroys the NPC. It is not
 an AI navigation, piloting or combat check.
+
+
+`prepare_tf1_objectives.py --remap PATH --output NEW_DIR` creates an original
+v29 Hardpoint initialization fixture, shared ARES mode/spawn/floor checks and
+compiler/source/BSP hashes. It references a base-game terminal model without
+bundling assets. It does not certify captures, scoring, respawns, AI navigation
+or human matches. See the TFO harness guide for Core135's CP dialogue-routing
+issue and explicit temporary compatibility option.

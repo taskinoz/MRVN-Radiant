@@ -105,7 +105,10 @@ flat-floor trigger crossing in each runtime. Broader traversal, objectives and
 navigation remain open. A live native atlas NPC also passes
 five sampled flat-floor support checks in each runtime; its setting name differs
 between R1Delta and TFO. This does not establish titan piloting or combat.
-R1 prefers verified engine screenshots; TFO engine capture remains
+Hardpoint mode initialization also passes in both runtimes. TFO Core135 needs
+explicit, reported temporary dialogue fixes and a repaired supplied sound-definition
+file; unmodified-Core controls fail. Capture, scoring and complete audio acceptance
+remain open. R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
 
 ## Other tools

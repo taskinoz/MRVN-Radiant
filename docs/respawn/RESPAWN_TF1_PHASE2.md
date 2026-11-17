@@ -939,6 +939,10 @@ probes do not contain navigation assertions, and their observations fail the
 intended route gate. No navigation success is inferred from those fields.
 
 Installed graphs and original source scripts were not replaced. The failed
-full builder is not added to the public adapter. Native export, valid graph
+full builder is not added to the public adapter. The matching TFO `tfo-enabled` control also stays alive and stationary for all
+12 samples with NPCs enabled and movement starts disabled; its neighbor query
+still returns only node zero. No graph or routing acceptance is inferred.
+
+Native export, valid graph
 header/CRC loading in both runtimes, actual obstacle routing, broader hulls and
 release acceptance remain open. No AIN sidecar packaging is advertised yet.

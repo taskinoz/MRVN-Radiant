@@ -8,6 +8,12 @@ R1Delta 3.0.5 also passed the six shared baseline collision checks. Subsequent
 work added paired barrel support controls and sequential drops, described below.
 Broader acceptance in both runtimes remains outstanding.
 
+The [navigation export/integrity checkpoint](RESPAWN_TF1_NAVIGATION.md) adds a
+bounded native exporter and offline CRC calculation. Original and changed
+pillar/node fixtures route in both runtimes; live R1/TFO CRC observations agree
+with the changed fixture's offline result. Broader AI and full release gates
+remain open.
+
 ## Compiler parity inventory
 
 The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique
@@ -1019,3 +1025,78 @@ python ../ARES/harnesses/adapters/tfo_harness.py --game "D:/Games/Titanfall Onli
 At this checkpoint, 261 MRVN tool tests, 172 ARES format tests, 151 ARES adapter
 tests, registry validation and skill-mirror validation pass. The fixture generator
 also compiles again with emitted navigation checks and no structural issues.
+
+
+### 17 November: repeatable native export and offline CRC packaging
+
+The earlier map-specific CRC preparation limit now has a bounded implementation:
+`tf1_navigation_crc.py` reproduces physical-lump-order map CRC and selected-
+entity updates. `build_tf1_navigation.py` exports through an owned R1 session
+with explicit initialization, then creates a new CRC-adjusted package. Actual
+runtime hashes are pinned before staging. Source graphs and installed binaries
+are not overwritten; unsupported layouts/text and existing outputs fail.
+
+The original offline base/entity CRCs 2011031715/4285011719 match a fresh R1
+process. Changed fixture `mp_ares_nav_64d4ee22` widens the pillar to
+(-80,-160)..(80,160) and moves three southern nodes to y=-288. The public exporter
+builds its 949-byte v54 graph with eight nodes and 14 links. Offline base/entity
+CRCs are 2027006736/1916430116. Independent owned R1 and TFO observations confirm
+file CRC equals expected CRC 1916430116 and computed flag 1. Integrity checks
+were not disabled.
+
+Original and variant packages each pass both runtimes' shared route probe:
+12 living samples, valid floor/forbidden-volume checks and final hold at
+(400,0,0.03125). Export and route acceptance remain separate steps. An additional
+fresh TFO route records its native header state.
+
+[The navigation guide](RESPAWN_TF1_NAVIGATION.md) records commands, hashes,
+algorithm RVAs and evidence under `.local/respawn/phase2-navigation-crc`.
+This closes a scoped export/CRC workflow, not general navigation: other hulls,
+default AI, dynamic/repeated routes, combat, titan piloting, tail/script
+semantics and the full Phase 2 release gates remain open. Prior entries retain
+their chronological failures and narrower evidence.
+
+### 18 November: repeated native goal/return routing
+
+The completed late-17-November reports now establish two round trips on the
+changed-pillar fixture in both R1Delta and TFO. Each uses one grunt, four legs,
+48 movement samples and four leg-start poses. Every leg's living floor/obstacle
+poses and final two samples must pass independently; returns remain within
+24 units of the requested start. No post-spawn repositioning is used.
+
+Shared `round_trips` validation and indexed per-leg events reject missing,
+duplicate, dead, stationary and incomplete later-leg results. Total sampled time
+is bounded to 180 seconds; legacy one-way checks retain their format. The public
+fixture generator accepts `--round-trips 2`. Native evidence is in
+`.local/respawn/phase2-navigation-repeat` and described in the
+[navigation checkpoint](RESPAWN_TF1_NAVIGATION.md).
+
+All 278 MRVN tests pass; ARES runs 170 adapter tests with one skip. This is
+repeated human-hull routing, not dynamic obstacles, default AI, other hulls or
+combat. Atlas routing is being investigated separately from the earlier
+flat-floor support result; no atlas navigation acceptance is inferred here.
+
+
+### 18 November: actual atlas NPC navigation in both runtimes
+
+The new shared `navigation_probe.actor="atlas"` uses native per-runtime atlas
+settings, `HULL_TITAN` connectivity and a required native titan/type/bounds
+event. Both runtimes report bounds (-60,-60,0)..(60,60,235). On the changed-pillar
+fixture, final public runs pass outbound and return legs on one atlas NPC:
+40 movement samples per runtime, expanded sampled clearance, living floor poses
+and two final hold samples per leg. There is no post-spawn repositioning.
+
+An initial TFO fixed-facing return control fails its hold despite reaching the
+return area. That report remains intact. The supplied goal helper makes facing
+optional, while the probe's assertions only require positional routing. The final
+atlas probe leaves arrival facing unspecified (`angles=null`); both runtimes
+then pass without relaxing radius/floor/clearance/hold assertions. The fixed-facing
+TFO behavior remains open and is not classified as a compiler defect.
+
+[The navigation guide](RESPAWN_TF1_NAVIGATION.md) identifies all controls and
+artifacts under `.local/respawn/phase2-atlas-navigation`. A fresh original
+generator fixture also compiles with `--actor atlas --round-trips 1`.
+Current checks: 278 MRVN tests pass; ARES runs 173 adapter tests with one skip,
+including 15 passing focused navigation tests. Piloting, combat, other titan
+types, dynamic obstacles, default AI, broader visuals/assets and release
+acceptance remain open. Full Phase 2 is not complete.

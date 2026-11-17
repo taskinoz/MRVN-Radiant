@@ -72,6 +72,8 @@ commands, environment and limits of the resulting evidence.
 
 | Tool | Does |
 | --- | --- |
+| `build_tf1_navigation.py` | Owned native AIN export and CRC packaging; requires ARES and pinned runtime ([guide](../../docs/respawn/RESPAWN_TF1_NAVIGATION.md)) |
+| `tf1_navigation_crc.py` | Scoped v29 map/entity CRC and exclusive graph-copy adjustment; route acceptance remains separate |
 | `compiler_regression.py` | Compiles the regression set with a given `remap` and compares |
 | `tfo_harness.py` | Loads a compiled TF1 map in Titanfall Online and runs traces, views and physics drops ([RESPAWN_TF1_LUMPS.md](../../docs/respawn/RESPAWN_TF1_LUMPS.md)) |
 | `r5_harness.py`, `r5_harnessctl.py`, `r5_harness_smoke.py` | Local R5Reloaded map harness ([RESPAWN_R5_HARNESS.md](../../docs/respawn/RESPAWN_R5_HARNESS.md)) |

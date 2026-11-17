@@ -787,6 +787,52 @@ def physics_material_limit_fixture(folder, command, reports, game):
     reports.append({'game':game,'fixture':'physics-material-overflow-rejected','issues':[]})
 
 
+def apex_levelinfo_fixtures(folder, command, reports, game):
+    """Original asset-free v47 metadata/reference controls across a 64-object boundary."""
+    model_root = folder.parent / 'assets/models/compat'
+    model_root.mkdir(parents=True, exist_ok=True)
+    (model_root / 'apex-prop.obj').write_text(
+        'v 0 0 0\nv 8 0 0\nv 0 0 4\nf 1 2 3\n', encoding='ascii')
+    for count in (1, 70):
+        path = folder / f'level-info-{count}.map'
+        world = '{\n"classname" "worldspawn"\n' + '\n'.join(
+            box((i * 128, 0, 0), (i * 128 + 64, 64, 64), f'limit_{i:03}')
+            for i in range(count)) + '\n}\n'
+        path.write_text(world + ''.join(entity(classname='prop_static',
+            model='models/compat/apex-prop.obj', origin=f'{12000 + i * 128} 128 16')
+            for i in range(2)), encoding='utf-8')
+        with path.with_suffix('.log').open('wb') as log:
+            subprocess.run(command[:-1] + [str(path)], stdout=log,
+                           stderr=subprocess.STDOUT, check=True)
+        bsp = path.with_suffix('.bsp')
+        inventory = inspect(bsp)
+        if inventory['issues']:
+            raise RuntimeError(f'Apex metadata fixture inventory: {inventory["issues"]}')
+        with bsp.open('rb') as stream:
+            def payload(index):
+                entry = inventory['lumps'][index]
+                stream.seek(entry['offset'])
+                return stream.read(entry['length'])
+            level = struct.unpack('<5I3fI', payload(123))
+            models = list(struct.iter_unpack('<6f6i3fi', payload(14)))
+            references = [r[0] for r in struct.iter_unpack('<I', payload(120))]
+            mesh_count = len(payload(80)) // 28
+            game_lump = payload(35)
+        first_prop = (mesh_count + 63) & ~63
+        if mesh_count != count or level[:5] != (count, count, count, first_prop, 2):
+            raise RuntimeError(f'Apex level metadata does not describe the map: {level}, meshes={mesh_count}')
+        if len(models) != 1 or models[0][6:8] != (0, count) or models[0][:6] != (0, 0, 0, (count - 1) * 128 + 64, 64, 64):
+            raise RuntimeError(f'Apex world model bounds/range incorrect: {models}')
+        if sorted(references) != list(range(count)) + [first_prop, first_prop + 1]:
+            raise RuntimeError(f'Apex prop namespace disagrees with level metadata: {references}')
+        data_offset = struct.unpack_from('<I', game_lump, 12)[0] - inventory['lumps'][35]['offset']
+        path_count = struct.unpack_from('<I', game_lump, data_offset)[0]
+        prop_count = struct.unpack_from('<I', game_lump, data_offset + 4 + 128 * path_count)[0]
+        if prop_count != level[4]:
+            raise RuntimeError('Apex level prop count disagrees with GAME_LUMP')
+        reports.append({'game': game, 'fixture': f'level-info-{count}', 'issues': []})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remap", required=True, type=Path)
@@ -874,6 +920,8 @@ def main():
         for pool in pools:
             if not inventory["lumps"][pool]["length"]:
                 raise RuntimeError(f"{game}: expected populated vertex pool {pool}")
+        if game == "apexlegends":
+            apex_levelinfo_fixtures(folder, command, reports, game)
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":

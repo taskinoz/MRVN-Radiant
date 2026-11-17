@@ -1,5 +1,11 @@
 # Titanfall 2 lumps added in November 2026
 
+The [17 November support audit](RESPAWN_MAP_SUPPORT_AUDIT.md) recounts 74 explicit
+payload write paths plus seven named lumps empty in eight surveyed v37 maps.
+The resulting 81/81 is surveyed lump representation, not full game compatibility.
+The implementation notes and earlier native tests below retain their original
+scope; navigation, gameplay, packaging and visual equivalence need separate gates.
+
 remap now writes every Titanfall 2 lump that retail maps fill. Triangle
 collision bevel indices use a functional rule rather than retail's exact selector. Layouts were read from the six retail samples in
 `.local/respawn/samples/tf2-*` (Coliseum, Colony, Glitch, Homestead, Live Fire

@@ -262,3 +262,32 @@ credits and any bundled license notices. Check compatibility with this project's
 GPL-2.0-or-later licensing before copying source; GPL-3.0-derived code can impose
 GPL-3.0 requirements on a combined derivative. Do not assume that naming an
 upstream tool permits source copying or binary redistribution.
+
+## r5valkyrie Apex compiler fork (17 November 2026)
+
+Reviewed [r5valkyrie/MRVN-Radiant](https://github.com/r5valkyrie/MRVN-Radiant) at
+`5f7caa513171ebbaeba46d5d7348f5d31c3c1a23` (main). Apex source files carry
+GPL-2.0-or-later notices. Credit r5valkyrie/MRVN-Radiant contributors and retain
+inherited GtkRadiant/NetRadiant/MRVN-Radiant notices.
+
+Adapted the per-model bounds loop and generated level-metadata approach from
+`tools/remap/source/apex_legends/apex_legends_models.cpp` into our
+`apex_legends_misc.cpp` and `apex_legends_vis.cpp`; aligned prop visibility IDs
+follow the fork's level/visibility namespace approach. The local regression
+fixtures are original, asset-free tests. No full writer merge, third-party GPU
+code or editor/game assets were imported. Candidate vertex and debug-visibility
+behavior was not adopted. See [review and validation](RESPAWN_APEX_FORK_REVIEW.md)
+for exact scope, local corpus findings and remaining runtime gates.
+
+
+## Native v29 navigation CRC/export research (17 November 2026)
+
+Original `tf1_navigation_crc.py` and `build_tf1_navigation.py` use read-only
+inspection of supplied R1/TFO binaries and R1Delta source at
+`c48f0003cddc5ba3af99baa415cb5b885764f84f`. No native implementation was copied.
+R1Delta's `engine/core/load.cpp` documents launch-gated initialization;
+`server/ai/navmesh.cpp` documents explicit non-legacy `updateain` export.
+Credit R1Delta contributors for the native builder and Respawn/Nexon for the
+formats. [The navigation checkpoint](RESPAWN_TF1_NAVIGATION.md) records binary
+hashes, algorithm RVAs and independent observations. Private graphs, binaries
+and account-bearing logs are not redistributed.

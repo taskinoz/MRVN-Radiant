@@ -15,7 +15,7 @@ from compiler_regression import box, entity
 from validate_records import validate
 
 
-def prepare(remap, output):
+def prepare(remap, output, capture=False):
     output.mkdir(parents=True, exist_ok=False)
     (output/'maps').mkdir()
     (output/'assets/shaders').mkdir(parents=True)
@@ -55,6 +55,8 @@ def prepare(remap, output):
     checks = {'mode_check': {'mode':'cp', 'hardpoints':3},
               'spawn_probe': {'origins':[[-400,-300,0]], 'tolerance':2},
               'traces':[[-900,-300,256,-900,-300,-64]], 'expect':{'trace_z':[[0,-.1,.1]]}}
+    if capture:
+        checks['cp_capture'] = dict(targetname='ares_cp_a', origin=[-600,-90,1])
     (output/'checks.json').write_bytes(json.dumps(checks,indent=2).encode('utf-8'))
     manifest = dict(command=command, compiler_sha256=hashlib.sha256(remap.read_bytes()).hexdigest(),
                     source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -69,8 +71,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--remap',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--capture',action='store_true',help='Include natural capture and team-score acceptance')
     args = parser.parse_args()
-    prepare(args.remap,args.output)
+    prepare(args.remap,args.output,capture=args.capture)
     print(f'Compiled Hardpoint fixture and shared checks in {args.output}')
 
 

@@ -69,7 +69,7 @@ must be packaged with their dependencies for standalone maps.
 | Lighting | Fallback lightmap planes; structural probe and CSM-tree checks | World/character appearance and real-time-light semantics in both runtimes |
 | Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
 
-Validation at this checkpoint: 255 MRVN tool tests and 60 compiler regression
+Validation at this checkpoint: 261 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
 counts and the writer coverage above are not a percentage of full compatibility.
 The v29 mesh vertex-type enum now matches surveyed retail TF1 maps (unlit 0,
@@ -111,6 +111,10 @@ file; unmodified-Core controls fail. One neutral Hardpoint capture and subsequen
 team-score gain now pass in both runtimes without setting ownership or scores.
 Contested/recapture, other modes and complete audio acceptance remain open. R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
+The original `prepare_tf1_navigation.py` fixture reproduces an open AI gate:
+R1Delta's native full builder links all eight nodes in memory but fails while
+building the unknown-node tail, exports no AIN, and the sampled grunt remains
+stationary. Node discovery/connectivity is not a route or export pass.
 
 ## Other tools
 - [bsp_tool](https://github.com/snake-biscuits/bsp_tool)

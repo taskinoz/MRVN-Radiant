@@ -893,3 +893,52 @@ baseline. Registry validation passes. This closes one neutral-point capture/hold
 sample, not every objective/mode: contested points, recapture, respawns, AI,
 networking, full audio/visual verification and human-match release gates remain
 open. Full Phase 2 parity is still not complete.
+
+
+### 17 November: original AI graph build and route controls (open)
+
+`tools/respawn/prepare_tf1_navigation.py` now compiles an asset-free geometry/node
+fixture with an original floor, central pillar, eight `info_node` entities,
+team pilot spawns, and separate NPC start/goal positions on opposite sides of
+the pillar. It writes compile/static reports, source/compiler/BSP hashes and
+layout metadata. It generates no AIN and does not claim navigation acceptance.
+Reproduction from the repository root:
+
+```powershell
+python tools/respawn/prepare_tf1_navigation.py --remap install/Release/remap.exe --output .local/respawn/navigation-new
+```
+
+The public generator compiled `mp_ares_nav_9bf00b39` with no structural issues.
+All 261 MRVN tool tests pass. Earlier native controls use the equivalent original
+`mp_ares_nav_b19c8107` fixture under `.local/respawn/phase2-navigation`.
+R1Delta 3.0.5 consumes the eight node entities into its native network; TFO
+Core135 does too. Initial neighbor queries return only the starting node and
+neither raw assault goals nor `SendAIToAssaultPoint` move the grunt in the
+recorded 20 one-second samples. `ai_rebuild_graph` does not resolve that gate.
+The native neighbor-query maximum is 32; an earlier request for 500 is retained
+as a diagnostic API error rather than a routing failure.
+
+The installed R1Delta binary exposes `updateain`. The non-legacy command was
+invoked on the owned fixture with an explicit, new local output filename.
+Unlike the older rebuild command, it makes all eight nodes reachable through
+`GetNeighborNodes(0,32,HULL_HUMAN)`, but then prints:
+
+```text
+buildain: failed to create unknown-node-tail record for node 0.
+```
+
+No graph is exported. This is a partially mutated in-memory graph, not a
+successful native build. The grunt remains alive at `(-400,0,0.03125)` for all
+20 samples. A repeat captures the builder error immediately, avoiding the
+MCP console's last-50-lines limit. A further 12-sample control explicitly enables
+NPCs and disables movement-start animations; it also remains stationary.
+Evidence: `r1-native-updateain`, `r1-native-updateain-diagnostic` and
+`r1-native-enabled` beneath the private fixture directory. Their generic harness
+`finished=true`/empty error lists indicate only script completion: these scratch
+probes do not contain navigation assertions, and their observations fail the
+intended route gate. No navigation success is inferred from those fields.
+
+Installed graphs and original source scripts were not replaced. The failed
+full builder is not added to the public adapter. Native export, valid graph
+header/CRC loading in both runtimes, actual obstacle routing, broader hulls and
+release acceptance remain open. No AIN sidecar packaging is advertised yet.

@@ -107,8 +107,9 @@ five sampled flat-floor support checks in each runtime; its setting name differs
 between R1Delta and TFO. This does not establish titan piloting or combat.
 Hardpoint mode initialization also passes in both runtimes. TFO Core135 needs
 explicit, reported temporary dialogue fixes and a repaired supplied sound-definition
-file; unmodified-Core controls fail. Capture, scoring and complete audio acceptance
-remain open. R1 prefers verified engine screenshots; TFO engine capture remains
+file; unmodified-Core controls fail. One neutral Hardpoint capture and subsequent
+team-score gain now pass in both runtimes without setting ownership or scores.
+Contested/recapture, other modes and complete audio acceptance remain open. R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
 
 ## Other tools

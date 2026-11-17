@@ -181,3 +181,9 @@ compiler/source/BSP hashes. It references a base-game terminal model without
 bundling assets. It does not certify captures, scoring, respawns, AI navigation
 or human matches. See the TFO harness guide for Core135's CP dialogue-routing
 issue and explicit temporary compatibility option.
+
+Add `--capture` to the Hardpoint fixture builder to require natural match start,
+a neutral-to-friendly capture, native trigger contact and a team-score gain via
+the shared ARES `cp_capture` probe. The sampler does not set ownership or scores.
+One capture/hold passes in both runtimes with the documented TFO compatibility
+setup; contested/recapture, navigation and multiplayer acceptance remain open.

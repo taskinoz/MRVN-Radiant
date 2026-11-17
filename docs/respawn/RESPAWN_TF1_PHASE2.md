@@ -864,3 +864,32 @@ For TFO, add `tfo_cp_dialogue_compat:true` to a separate checks copy and the sou
 source/repair options above, plus the usual Client/Shared content modules.
 The native R1 mode observations establish server initialization; no complete
 client-console-error, dialogue playback or visual acceptance is inferred.
+
+
+## Natural Hardpoint capture and scoring (17 November)
+
+The public `cp_capture` sampler now passes the same final fixture in R1Delta
+and compatibility-assisted TFO. Both matches naturally reach Playing (state 4).
+The target begins neutral with zero progress and team score. After one initial
+player placement, ownership changes to the player's team at about ten seconds;
+all ten samples show a living player in native trigger contact. The last sample
+has team-2 ownership, progress -1 and five earned team points in both runs. A
+preceding TFO control also verifies team-3 ownership/progress +1 and five points.
+No match-state, ownership, progress or score setter is used. Native player origin
+settles at (-600,-90,0.575566), near the terminal, within the declared tolerance.
+
+The shared verifier rejects missing/duplicate/dead/outside samples, wrong capture
+direction, non-neutral starts, lost ownership during the hold, decreasing scores
+and insufficient final score gain. It waits for natural Playing rather than
+forcing the lobby/intro state. R1's server-thread sampler is token-guarded; TFO
+reports its explicit temporary dialogue and sound-definition interventions.
+Evidence: `phase2-cp-capture-public/{manifest.json,static.json,checks.json,r1/report.json,tfo/report.json}`.
+The earlier direct controls remain under `phase2-cp-capture/{r1,tfo}`.
+
+Prepare with `prepare_tf1_objectives.py --capture`, then use the public adapters
+and the same TFO compatibility/sound options described above. The adapter suite
+passes 136 tests; this change does not alter the 261 MRVN or 172 ARES format-test
+baseline. Registry validation passes. This closes one neutral-point capture/hold
+sample, not every objective/mode: contested points, recapture, respawns, AI,
+networking, full audio/visual verification and human-match release gates remain
+open. Full Phase 2 parity is still not complete.

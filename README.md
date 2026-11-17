@@ -67,7 +67,7 @@ must be packaged with their dependencies for standalone maps.
 | Collision/physics | Paired ray/hull and transformed-brush probes; paired flat-patch/backface and 32 contents-mask probes; prop support samples | Broader curved collision, actual projectiles/titans, repeated stress and historical fall-through |
 | Water | Wet/dry cell regression; compiled underwater geometry/fog in TFO; paired wet/dry cardboard buoyancy sample | R1 underwater band, broader buoyancy/model/depth controls, slopes/multiple pools and submerged props |
 | Lighting | Fallback lightmap planes; structural probe and CSM-tree checks | World/character appearance and real-time-light semantics in both runtimes |
-| Assets/gameplay/release | Controlled harness staging and baseline spawns | Complete dependency packages, objectives/modes/navigation and human matches |
+| Assets/gameplay/release | Controlled staging, spawns, neutral Hardpoint capture/scoring and one native grunt obstacle route in both runtimes | Complete dependencies, contested/other modes, broader AI and human matches |
 
 Validation at this checkpoint: 261 MRVN tool tests and 60 compiler regression
 reports pass. ARES provides the paired native adapters and diagnostics. These
@@ -111,10 +111,12 @@ file; unmodified-Core controls fail. One neutral Hardpoint capture and subsequen
 team-score gain now pass in both runtimes without setting ownership or scores.
 Contested/recapture, other modes and complete audio acceptance remain open. R1 prefers verified engine screenshots; TFO engine capture remains
 opt-in after native crashes. Full Phase 2 release acceptance is still open.
-The original `prepare_tf1_navigation.py` fixture reproduces an open AI gate:
-R1Delta's native full builder links all eight nodes in memory but fails while
-building the unknown-node tail, exports no AIN, and the sampled grunt remains
-stationary. Node discovery/connectivity is not a route or export pass.
+The original `prepare_tf1_navigation.py` fixture now includes shared ARES
+`navigation_probe` checks. With the native builder's initialization hook enabled
+and an exported AIN staged, one living grunt routes around the pillar and holds
+the goal in both runtimes. R1's control uses its engine-computed entity CRC.
+General CRC/export automation, other AI hulls and broader routes remain open;
+node discovery/connectivity alone is not a navigation pass.
 
 ## Other tools
 - [bsp_tool](https://github.com/snake-biscuits/bsp_tool)

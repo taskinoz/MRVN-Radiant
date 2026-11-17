@@ -49,6 +49,10 @@ def prepare(remap, output):
                   obstacle_min=[-48, -128, 0], obstacle_max=[48, 128, 192],
                   verification='structural only; native graph build and obstacle routing required')
     (output / 'layout.json').write_bytes(json.dumps(layout, indent=2).encode('utf-8'))
+    checks = {'navigation_probe': dict(start=layout['npc_start'], goal=layout['goal'],
+                                      nodes=len(nodes), floor_z=0, samples=12,
+                                      forbidden_box=[[-64, -144, -1], [64, 144, 192]])}
+    (output / 'checks.json').write_bytes(json.dumps(checks, indent=2).encode('utf-8'))
     manifest = dict(command=command, compiler_sha256=hashlib.sha256(remap.read_bytes()).hexdigest(),
                     source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                     bsp_sha256=hashlib.sha256(source.with_suffix('.bsp').read_bytes()).hexdigest())

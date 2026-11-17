@@ -946,3 +946,76 @@ still returns only node zero. No graph or routing acceptance is inferred.
 Native export, valid graph
 header/CRC loading in both runtimes, actual obstacle routing, broader hulls and
 release acceptance remain open. No AIN sidecar packaging is advertised yet.
+
+
+### 17 November: initialized AIN export and paired grunt route
+
+The earlier `updateain` failure has a concrete launch prerequisite. Local source
+inspection at R1Delta commit `c48f0003cddc5ba3af99baa415cb5b885764f84f`
+shows the delayed-init hook is installed only with one of the AIN launch flags.
+That hook initializes the globals used by the builder. No upstream implementation
+was copied or installed binary patched. The private control launches with
+`-r1delta_build_ain_no_existing`, then calls non-legacy `updateain` with a fresh
+absolute output path on the owned map. It exports a 949-byte v54 AIN with eight
+nodes, 14 links, three unknown-node-tail records, three unknown-link-tail records,
+map revision 6 and script version 19. The original exporter CRC is zero.
+
+The in-memory post-build grunt still does not move; loading the exported graph
+on a fresh launch does. Both runtimes route a living native grunt from
+`(-400,0,1)` around the pillar to `(400,0,0.03125)` by the fifth one-second sample,
+then hold that position through sample 11. Neighbor queries return all eight
+nodes. These are native assault goals, with no per-sample NPC repositioning.
+The explicit controls enable NPCs and disable movement-start animations and
+squad following. Those controls do not certify default AI/animation behavior.
+
+A read-only diagnostic of the owned R1 process's native validation state finds
+expected CRC `4285011719` against exporter CRC zero. A private copy receives that
+expected CRC, with all other bytes unchanged; another fresh R1 load confirms
+file CRC equals computed CRC and repeats the route. No validation check is
+disabled. TFO routes using the same corrected file, although its internal CRC
+comparison was not separately instrumented. A general offline entity-CRC
+algorithm/export workflow is still unresolved. Do not turn this map-specific
+native diagnostic into a general CRC acceptance claim.
+
+Original graph SHA256:
+`c2acf9a71746213c019365a9ceeb0ac0805ae323a91d38fb9abd11a059288cfe`.
+CRC-matched private graph SHA256:
+`a5dad15cd8668ac422eeff301e962eed6b2176ad192f4a3dcccfd0d4581b396c`.
+Evidence is beneath `.local/respawn/phase2-navigation`: `r1-native-initialized`,
+`r1-graph-zero-crc`, `r1-graph-matched-crc`, `tfo-graph-zero-crc`,
+`tfo-graph-matched-crc`, and `r1-public-graph-staging`. The TFO matched-file run
+retains one startup crash/retry; the successful attempt is the route observation.
+
+ARES now stages the exact optional `maps/graphs/<map>.ain` into the owned R1
+addon and preflights matching graph framing in both runtimes. Limits cover file
+size, v54 header/map revision, node counts and finite geometry, link counts and
+valid unique endpoints. This is deliberately not full tail/script/CRC semantic
+validation. Original malformed/truncated graph tests reject before addon mutation.
+
+The new shared `navigation_probe` API and generated fixture `checks.json` make
+the route repeatable with supplied graph data. It requires an alive initial pose,
+expected node count and connected neighbors, exactly one valid living sample
+per index, floor height within two units, optional sampled forbidden-volume
+exclusion and final two samples within the goal radius. It rejects stationary,
+dead, malformed, missing/duplicate, wrong-floor and obstacle-intersecting samples.
+The R1 asynchronous setup is token-guarded against delayed MCP retries.
+The fixture generator still generates no graph and labels compilation structural.
+
+This closes one sampled human-hull obstacle route only. Continuous swept
+collision, other NPC hulls, dynamic/repeated routes, combat, animations and
+complete navigation/export acceptance remain open alongside the broader Phase 2
+gates. Private graphs, screenshots, logs and diagnostic scripts stay ignored.
+
+
+Final public API runs both pass with `loaded=true`, `finished=true`, and no
+navigation errors: `r1-public-api/report.json` and `tfo-public-api/report.json`.
+Commands (run sequentially from MRVN-Radiant):
+
+```powershell
+python ../ARES/harnesses/adapters/r1_harness.py --maps .local/respawn/phase2-navigation/maps --map mp_ares_nav_b19c8107 --checks .local/respawn/phase2-navigation/checks-public.json --output .local/respawn/phase2-navigation/r1-public-api
+python ../ARES/harnesses/adapters/tfo_harness.py --game "D:/Games/Titanfall Online" --maps .local/respawn/phase2-navigation/maps --map mp_ares_nav_b19c8107 --checks .local/respawn/phase2-navigation/checks-public.json --output .local/respawn/phase2-navigation/tfo-public-api --enable Titanfall1.Content.Client --enable Titanfall1.Content.Shared
+```
+
+At this checkpoint, 261 MRVN tool tests, 172 ARES format tests, 151 ARES adapter
+tests, registry validation and skill-mirror validation pass. The fixture generator
+also compiles again with emitted navigation checks and no structural issues.

@@ -809,3 +809,58 @@ public `triggers` option still uses controlled repositioning. One straight,
 flat-floor crossing does not validate ramps, jumps, obstacles, surf-stage crouch
 resets, every movement mode, networking or AI navigation. These and the wider
 Phase 2 gates remain open.
+
+
+## Explicit Hardpoint initialization and TFO compatibility (17 November)
+
+`prepare_tf1_objectives.py` now builds an original three-point Hardpoint room,
+with four assault points per terminal, linked brush triggers, pilot and droppod
+spawns, a floor trace and shared mode/spawn checks. The final source passes in
+R1Delta 3.0.5 and TFORevive Core135: both report `cp` in GameRules and GAMETYPE,
+three initialized native hardpoints with unique IDs 0..2, valid terminals, a
+living pilot at the authored spawn and the expected floor margin. Evidence:
+`phase2-cp-final/{manifest.json,static.json,checks.json,r1/report.json,tfo/report.json}`.
+This is initialization, not capture, scoring, AI navigation or match acceptance.
+
+TFO requires explicit temporary compatibility interventions. Unpatched authored
+and retail Colony launch controls both fail duplicate Hardpoint conversation
+registration. The bounded `tfo_cp_dialogue_compat` transform adds CP to the legacy
+dialogue switch and limits five MFDP-only voice registrations to their own mode.
+Those conversations are referenced by the MFDP mode, not CP. The helper does
+not disable dialogue assertions. Reports identify the intervention and hash both
+the installed source and staged result. Unsupported/already-fixed routing fails
+closed. Installed Core files remain unchanged.
+
+The supplied Hardpoint sound definitions also contain a commented closing brace
+inside `diag_hp_mcor_bish_generalpurpose_02`, leaving later aliases nested in an
+unfinished block. A strict bounded KeyValues reader detects it. The optional
+`--sound-file LOCAL_AUDIO/mp_hardpoints.txt --repair-hardpoint-sound` path repairs
+only that known brace in the owned temporary mod. Unknown faults fail validation;
+the source file is never edited. The repaired file has 592 aliases, 627 wave
+references and 513 unique wave paths. These are definition counts, not playback
+or complete audio-package verification. No sound definitions or wave assets are
+bundled in the repository.
+
+A client alias diagnostic checks 162 literal names in the supplied TFO CP
+script: 156 exist in R1Delta and 42 in unmodified TFO; all 42 overlap. Six names
+absent in both are VDU whitelist references, so the literal list is not itself
+a complete set of required radio aliases. The repaired TFO definitions restore
+the sampled previously missing Hardpoint aliases. Adding an MFDP definition file
+does not resolve its unrelated missing alias; mode-specific registration avoids
+making CP depend on that other mode. MFDP acceptance remains open. Evidence:
+`phase2-cp-aliases/alias-audit.json`, `phase2-cp-sound-alias-check/tfo/report.json`
+and the retained failed controls under `phase2-cp-*`.
+
+The final TFO report labels both the dialogue transform and supplied/repaired
+sound definitions. Core's source hash remains unchanged after cleanup. Its
+passing result is a compatibility-assisted run, not unmodified-Core acceptance.
+TFO script errors now stop promptly and do not trigger graphics-startup retries.
+R1 caches mode observations before printing to prevent delayed MCP retries from
+producing duplicate sets; the failed duplicate-output control is retained.
+
+Validation: 261 MRVN tool tests, 172 ARES format tests and 127 adapter tests pass,
+plus registry validation. Run the public R1 adapter with the generated checks.
+For TFO, add `tfo_cp_dialogue_compat:true` to a separate checks copy and the sound
+source/repair options above, plus the usual Client/Shared content modules.
+The native R1 mode observations establish server initialization; no complete
+client-console-error, dialogue playback or visual acceptance is inferred.

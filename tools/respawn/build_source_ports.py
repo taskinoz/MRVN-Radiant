@@ -860,7 +860,10 @@ def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights
                 config['finishZones'] = [dict(mins=[-14352, -1024, -7700], maxs=[-13824, 1024, -6088]),
                                          dict(mins=[-14352, -2048, -4484], maxs=[-13952, 2048, -4100])]
         surf_export = surf_map_export(config)
-        surf_teleport = ('    if ( "MRVN_SurfTeleported" in getroottable() )\n'
+        surf_teleport = ('    // A teleport ends any surf: stand the pilot up at the destination.\n'
+                         '    if ( player in file.rampTimes )\n'
+                         '     StopSurfing( player )\n'
+                         '    if ( "MRVN_SurfTeleported" in getroottable() )\n'
                          '     getroottable().MRVN_SurfTeleported( player, file.destinations[k], touchOrigin )\n')
     (scripts/(level+'.nut')).write_text(('untyped\n' if surf else '')+'''global function CodeCallback_MapInit
 struct
@@ -1242,6 +1245,18 @@ void function StopSurfing( entity player )
  }
  player.UnforceCrouch()
  player.SetGroundFrictionScale( 1.0 )
+ // Lifting the forced crouch leaves a Titanfall pilot crouched until they jump or crouch
+ // again, so stand them up as Northstar's bleedout does, if there is headroom to stand.
+ TraceResults h = TraceHull( player.GetOrigin(), player.GetOrigin() + <0, 0, 1>, < -16, -16, 0 >, < 16, 16, 72 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+ if ( !h.startSolid )
+  thread StandUp( player )
+}
+void function StandUp( entity player )
+{
+ player.EndSignal( "OnDestroy" )
+ player.ForceStand()
+ WaitFrame()
+ player.UnforceStand()
 }
 '''
 

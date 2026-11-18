@@ -237,12 +237,16 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    visibility get slots. Suns keep their slot even when fully shadowed, as
    retail does. Lights behind walls give up their slot. Each chart gets one RTL
    page holding at most 63 lights.
-4. Shadow masks average four sub-texel rays against opaque, non-sky world
-   brushes. Sky brushes let sun and sky rays through.
+4. Shadow masks, and static (`realtime 0`) lights, average four sub-texel
+   rays against opaque, non-sky world brushes. Sky brushes let sun and sky
+   rays through. A texel whose ray origin is inside a brush is first moved
+   within its footprint; if it stays buried it copies a visible texel of its
+   chart (see [Bake quality](#bake-quality-18-november-2026)).
 5. SKY B is the bent sky direction × ∛(sky visibility), using 16
-   cosine-weighted rays. SKY A is a fill of ambient × 0.04 × (0.4 + 0.6 ×
-   visibility), plus static (`realtime 0`) lights. That is about 0.03 for a
-   typical ambient, in line with retail and the converter.
+   cosine-weighted rays (`_skysamples`), smoothed within the chart. SKY A is a
+   fill of ambient × 0.04 (`_ambientscale`) × (0.4 + 0.6 × visibility), plus
+   static lights. That is about 0.03 for a typical ambient, matching Coliseum
+   and the converter; see the retail comparison below.
 6. Character probes sit where characters stand, plus a coarse grid for open
    air. Retail probe sets are adaptive (neighbours a median 56–58 units apart in
    Glitch and Angel City, 128 in Coliseum; a quarter within about 60 units of the
@@ -331,6 +335,60 @@ defaults to 3, which brings E1M1's SKY A (median 0.0032 → 0.0215, p90 0.0069 �
 retail Coliseum's range. Worldspawn `_bouncescale` overrides it, and 0 turns
 bounce off. Harness captures show darker walls lifted: in the `start-back` view,
 near-black pixels dropped from 43% to 36%.
+
+### Bake quality (18 November 2026)
+
+Released custom maps showed harsh, splotchy lighting. Ray counts were not the
+cause: the Minecraft and Source port builders already use 128–256 sky rays.
+Decoding the released atlases found three defects, now fixed:
+
+- **Buried texels.** CSG keeps partly buried faces whole, so texels under a
+  touching brush started their rays inside it and baked black. Bilinear
+  filtering bled that onto the visible face, giving regular dark dots and
+  dark seams at wall feet. Such texels are now nudged within their footprint
+  or, if fully buried, copy every plane from a visible texel of their chart.
+  They are left out of the bounce grid.
+- **Speckle.** Sky visibility and bounce came from 16 rays per texel with no
+  filtering. Both are now smoothed with a tent filter that only averages
+  texels of the same chart facing within ~25°: 3×3 for sky (`_skyfilter`),
+  5×5 for bounce (`_bouncefilter`); 0 turns either off. Shadow masks and
+  direct light are not filtered.
+- **Stair-stepped static-light shadows.** Static lights used one ray from the
+  texel centre; they now use the four sub-texel rays of realtime masks.
+
+Uma, same map and settings: the 90th percentile of the neighbour-to-neighbour
+change in sky visibility fell from 1.00 (a full on/off jump) to 0.15; retail
+Glitch, Angel City, Relic and Coliseum range 0.08–0.55. Bake time went from
+49.8 to 52.2 s. New worldspawn keys: `_ambientscale`, `_bouncesamples`,
+`_skyfilter`, `_bouncefilter`.
+
+**Fill level is a separate, open question.** The 0.04 fill was calibrated on
+Coliseum, which is the dim outlier in retail. Decoded SKY A medians: Coliseum
+0.014, Angel City 0.082, Relic 0.054, Glitch 0.176, Colony 0.169. Released
+ports sit at 0.013–0.030, and the Minecraft ports also turn bounce off, so
+shade gets a much dimmer fill than in most retail maps. Raising
+`_ambientscale` or `_bouncescale` per map is supported. The default is
+unchanged until in-game captures confirm the right level.
+
+**TF1 SKY A is linear.** A contributed R1 patch encodes SKY A RGB as sRGB.
+Retail TF1 and TF2 builds of the same maps argue against that: decoded as
+linear, TF1 Angel City's median (0.049) is near TF2's (0.082). Decoded as
+sRGB it would be 0.012. Colony and Relic agree. The multiplier, (alpha+1)/64,
+is the same in both readings. Linear encoding is kept.
+
+**TF1 texture reflectivity** is now written. Retail v29 TEXTURE_DATA stores
+each texture's mean linear colour (431 of 433 Angel City records are nonzero),
+while v37 leaves it zero. Missing textures keep zero. This follows r3muxd's R1
+patch.
+
+**The rest of that patch is not merged.** It was written against an
+unpublished tree, and four files fail to apply even to upstream `main`. Its
+R1 lighting, tricoll, physics and visibility code duplicates this branch's.
+It also stops with an error on `light_environment`, `prop_static`, styled or
+targeted lights, lit-bump materials and rotated brush models, which every
+custom map uses. Two smaller pieces were taken: the reflectivity above, and
+checked `fseek`/`fclose` results in the BSP writers, so a failed flush on a
+full disk is now an error rather than a silently truncated file.
 
 ### Hidden brush faces
 

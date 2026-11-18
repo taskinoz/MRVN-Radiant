@@ -71,6 +71,23 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
     // flags in TEXTURE_DATA. All 1,485 surveyed retail TF1 materials omit them.
     if (g_game->bspVersion == 29)
         td.flags &= ~(S_MESH_UNKNOWN | S_TF1_UNDERWATER_DRAW);
+    // Retail v29 stores each texture's mean linear colour here (431 of 433 Angel
+    // City records are nonzero); retail v37 leaves it zero. Average per pixel in
+    // linear space, as Source's vrad does. Credit: r3muxd's R1 patch. A missing
+    // texture (the white placeholder image) stays zero rather than claiming 1.0.
+    td.reflectivity = Vector3(0, 0, 0);
+    const image_t *image = shader.shaderImage;
+    if (g_game->bspVersion == 29 && image && image->pixels && image->width > 0 && image->height > 0
+        && !strEqual(image->name.c_str(), DEFAULT_IMAGE)) {
+        const std::size_t pixels = static_cast<std::size_t>(image->width) * image->height;
+        double sum[3] = {0, 0, 0};
+        for (std::size_t pixel = 0; pixel < pixels; ++pixel)
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const double c = image->pixels[pixel * 4 + channel] / 255.0;
+                sum[channel] += c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+            }
+        td.reflectivity = Vector3(sum[0] / pixels, sum[1] / pixels, sum[2] / pixels);
+    }
 
     return index;
 }

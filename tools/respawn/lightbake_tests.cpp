@@ -171,6 +171,52 @@ int main() {
         const std::array<std::uint8_t, 4> glow{g.sky[shaded * 4], g.sky[shaded * 4 + 1], g.sky[shaded * 4 + 2], g.sky[shaded * 4 + 3]};
         require(near(decodeRGBM(glow).x, 0.8, 0.02) && rtlWord(g, shaded) == RtlUnusedTexel, "Constant chart is self-lit");
 
+        // A block resting on the x<0 half of the floor buries those texels. They
+        // must not bake black: they copy the nearest visible texel, so bilinear
+        // filtering at the block's foot reads lit values.
+        {
+            const Occluders blocked({box({-64, -64, -16}, {64, 64, 0}), box({-64, -64, 0}, {0, 64, 64})});
+            const Result rb = bake({floorChart()}, pages, {sun}, {0.8, 0.8, 0.8}, blocked, options);
+            auto skyB = [&](std::size_t i) {
+                return decodeDirection({rb.sky[256 * 4 + i * 4], rb.sky[256 * 4 + i * 4 + 1], rb.sky[256 * 4 + i * 4 + 2], 255});
+            };
+            const std::size_t buried = texel(3, 6), open = texel(8, 6);
+            require(length(skyB(open)) > 0.8, "Open floor texel sees the sky");
+            require(length(skyB(buried)) > 0.5, "Buried texel takes a visible neighbour's sky, not black");
+            const std::uint8_t* rtlB = rb.rtl.data() + 256 * 4;
+            require(rtlB[buried * 4] > 0, "Buried texel's sun mask is filled from a lit neighbour");
+        }
+
+        // Chart-aware smoothing: noise within a chart drops, other charts and
+        // creases are untouched.
+        {
+            std::vector<detail::Sample> page(16 * 16);
+            std::vector<double> noisy(page.size());
+            for (std::size_t i = 0; i < page.size(); ++i) {
+                page[i].nz = 1;
+                page[i].chart = (i % 16) < 8 ? 0 : 1;
+                noisy[i] = (detail::hash(std::uint32_t(i)) & 1) ? 1.0 : 0.0;
+            }
+            page[texel(12, 12)].nz = 0; page[texel(12, 12)].nx = 1;  // a crease texel
+            const auto smoothed = detail::smooth(noisy, page, 16, 16, 2, 2);
+            auto spread = [&](const std::vector<double>& v) {
+                double mean = 0, var = 0;
+                for (int y = 2; y < 14; ++y) for (int x = 2; x < 6; ++x) mean += v[texel(x, y)];
+                mean /= 48;
+                for (int y = 2; y < 14; ++y) for (int x = 2; x < 6; ++x) var += (v[texel(x, y)] - mean) * (v[texel(x, y)] - mean);
+                return var / 48;
+            };
+            require(spread(smoothed) < spread(noisy) * 0.25, "Smoothing reduces in-chart noise");
+            require(smoothed[texel(12, 12)] == noisy[texel(12, 12)], "A texel facing elsewhere is not blended");
+            // Chart 0's right edge only averages chart-0 texels.
+            double edge = 0, total = 0;
+            for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 0; ++dx) {
+                const double w = double(3 - std::abs(dx)) * double(3 - std::abs(dy));
+                edge += noisy[texel(7 + dx, 8 + dy)] * w; total += w;
+            }
+            require(near(smoothed[texel(7, 8)], edge / total, 1e-12), "Smoothing stays inside the chart");
+        }
+
         // Bounce: a wall facing -x beside a sunlit floor gets light only via the floor.
         {
             Chart wall;

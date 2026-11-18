@@ -219,11 +219,13 @@ void WriteR2BSPFile(const char *filename) {
         if (header.lumps[index].length)
             header.lumps[index].lumpVer = LittleLong(Respawn::generatedLumpVersion(37, index));
     }
-    fseek(file, 0, SEEK_SET);
+    if (fseek(file, 0, SEEK_SET) != 0)
+        Error("Cannot seek back to the BSP header; the output is incomplete");
     SafeWrite(file, &header, sizeof(header));
 
-    /* close the file */
-    fclose(file);
+    /* close the file; a failed flush (e.g. a full disk) must not pass silently */
+    if (fclose(file) != 0)
+        Error("Cannot flush the completed BSP; the output is incomplete");
 }
 
 

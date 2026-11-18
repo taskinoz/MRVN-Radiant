@@ -32,6 +32,7 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -430,6 +431,11 @@ struct Options {
     double bounceDistance = 2048;  // gather ray length
     double rayOffset = 0.5;        // start rays off the surface along its normal
     unsigned threads = 0;          // 0: hardware concurrency
+    // Edge-aware smoothing of the sampled (noisy, low-frequency) terms, in texels.
+    // Only texels of the same chart with a similar normal are averaged, so chart
+    // seams and creases stay sharp. Shadow masks and direct light are not filtered.
+    int skyFilterRadius = 1;       // sky visibility and bent direction (0: off)
+    int bounceFilterRadius = 2;    // gathered bounce light (0: off)
 };
 
 /*
@@ -527,6 +533,7 @@ struct Sample {
     float px = 0, py = 0, pz = 0, nx = 0, ny = 0, nz = 0;
     float inside = -1e30f;
     std::int32_t chart = -1;
+    bool buried = false;  // no point of the texel lies outside solid brushes
 };
 
 
@@ -558,6 +565,108 @@ inline std::uint32_t hash(std::uint32_t x) {
 inline void basis(V3 n, V3& t, V3& b) {
     t = normalize(std::abs(n.z) < 0.9 ? cross(n, {0, 0, 1}) : cross(n, {1, 0, 0}));
     b = cross(n, t);
+}
+
+/*
+    Texels whose ray origin lies inside a brush (most often where a touching
+    brush buries part of a face) would bake black and bleed into their visible
+    neighbours through bilinear filtering. Move the sample to the nearest open
+    point within the texel's footprint; a texel with none is marked buried and
+    later takes its values from visible texels of the same chart.
+*/
+inline void unbury(std::vector<Sample>& page, const Occluders& occluders, const Options& options, unsigned threads) {
+    if (occluders.empty()) return;
+    static const double ring[16][2] = {{0.25, 0}, {-0.25, 0}, {0, 0.25}, {0, -0.25},
+                                       {0.25, 0.25}, {-0.25, 0.25}, {0.25, -0.25}, {-0.25, -0.25},
+                                       {0.5, 0}, {-0.5, 0}, {0, 0.5}, {0, -0.5},
+                                       {0.5, 0.5}, {-0.5, 0.5}, {0.5, -0.5}, {-0.5, -0.5}};
+    parallelFor(page.size(), threads, [&](std::size_t i) {
+        Sample& s = page[i];
+        if (s.chart < 0) return;
+        const V3 n{s.nx, s.ny, s.nz};
+        const V3 pos{s.px, s.py, s.pz};
+        if (!occluders.inside(pos + n * options.rayOffset)) return;
+        V3 t, b;
+        basis(n, t, b);
+        for (const auto& o : ring) {
+            const V3 moved = pos + t * (o[0] * options.luxelSize) + b * (o[1] * options.luxelSize);
+            if (!occluders.inside(moved + n * options.rayOffset)) {
+                s.px = float(moved.x); s.py = float(moved.y); s.pz = float(moved.z);
+                return;
+            }
+        }
+        s.buried = true;
+    });
+}
+
+/*
+    Weighted average over a (2r+1)^2 window of texels that share the centre's
+    chart, are not buried and face within ~25 degrees of it. Tent weights keep
+    the centre dominant. Deterministic and independent of the thread count.
+*/
+template <class T>
+inline std::vector<T> smooth(const std::vector<T>& values, const std::vector<Sample>& page, std::size_t width,
+                             std::size_t height, int radius, unsigned threads) {
+    if (radius <= 0) return values;
+    std::vector<T> out(values);
+    parallelFor(height, threads, [&](std::size_t y) {
+        for (std::size_t x = 0; x < width; ++x) {
+            const std::size_t i = y * width + x;
+            const Sample& c = page[i];
+            if (c.chart < 0 || c.buried) continue;
+            T sum{};
+            double total = 0;
+            for (int dy = -radius; dy <= radius; ++dy) {
+                const long long yy = static_cast<long long>(y) + dy;
+                if (yy < 0 || yy >= static_cast<long long>(height)) continue;
+                for (int dx = -radius; dx <= radius; ++dx) {
+                    const long long xx = static_cast<long long>(x) + dx;
+                    if (xx < 0 || xx >= static_cast<long long>(width)) continue;
+                    const std::size_t j = static_cast<std::size_t>(yy) * width + static_cast<std::size_t>(xx);
+                    const Sample& o = page[j];
+                    if (o.chart != c.chart || o.buried) continue;
+                    if (c.nx * o.nx + c.ny * o.ny + c.nz * o.nz < 0.9f) continue;
+                    const double w = double(radius + 1 - std::abs(dx)) * double(radius + 1 - std::abs(dy));
+                    sum = sum + values[j] * w;
+                    total += w;
+                }
+            }
+            if (total > 0) out[i] = sum * (1.0 / total);
+        }
+    });
+    return out;
+}
+
+/*
+    Give buried texels the bytes of the nearest visible texel of the same chart
+    (breadth-first over 4-neighbours), for each listed 4-byte plane.
+*/
+inline void fillBuried(const std::vector<Sample>& page, std::size_t width, std::size_t height,
+                       std::initializer_list<std::uint8_t*> planes) {
+    std::vector<std::size_t> frontier;
+    std::vector<char> done(page.size(), 0);
+    bool any = false;
+    for (std::size_t i = 0; i < page.size(); ++i) {
+        if (page[i].chart < 0) continue;
+        if (page[i].buried) any = true;
+        else { done[i] = 1; frontier.push_back(i); }
+    }
+    if (!any) return;
+    while (!frontier.empty()) {
+        std::vector<std::size_t> next;
+        for (const std::size_t i : frontier) {
+            const std::size_t x = i % width, y = i / width;
+            const std::size_t around[4] = {x ? i - 1 : i, x + 1 < width ? i + 1 : i,
+                                           y ? i - width : i, y + 1 < height ? i + width : i};
+            for (const std::size_t j : around) {
+                if (done[j] || page[j].chart != page[i].chart || !page[j].buried) continue;
+                for (std::uint8_t* plane : planes) std::memcpy(plane + j * 4, plane + i * 4, 4);
+                done[j] = 1;
+                next.push_back(j);
+            }
+        }
+        frontier.swap(next);
+    }
 }
 }  // namespace detail
 
@@ -641,8 +750,10 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                      std::chrono::duration<double>(now - stageStarted).count());
         stageStarted = now;
     };
-    const auto samples = rasterize(charts, pages);
+    auto samples = rasterize(charts, pages);
     lap("rasterize");
+    for (auto& page : samples) detail::unbury(page, occluders, options, options.threads);
+    lap("unbury");
 
     // Scene extent for sky and sun rays.
     V3 lo = occluders.empty() ? V3{1e300, 1e300, 1e300} : occluders.mins();
@@ -798,6 +909,50 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
         // workers join. Keep only one page of scratch, preserving grid sums.
         std::vector<V3> directLight(samples[p].size());
         const std::size_t texels = std::size_t(pages[p].width) * pages[p].height;
+
+        // Sky visibility (fraction of cosine-weighted rays that escape) and the
+        // mean open direction, smoothed across each chart before use: 16 rays
+        // per texel alone leave visible speckle in SKY A and SKY B.
+        std::vector<double> skyFraction(texels, 1.0);
+        std::vector<V3> skyDirection(texels);
+        const bool skyLit = luminance(ambient) > 0;
+        if (skyLit) {
+            detail::parallelFor(pages[p].height, options.threads, [&](std::size_t y) {
+                for (std::size_t x = 0; x < pages[p].width; ++x) {
+                    const std::size_t i = y * pages[p].width + x;
+                    const auto& s = samples[p][i];
+                    if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
+                    const V3 n{s.nx, s.ny, s.nz};
+                    skyDirection[i] = n;
+                    if (!options.ambientOcclusion) continue;
+                    const V3 start = V3{s.px, s.py, s.pz} + n * options.rayOffset;
+                    V3 t, b;
+                    detail::basis(n, t, b);
+                    double visible = 0;
+                    V3 openDirection{};
+                    const std::uint32_t seed = detail::hash(std::uint32_t(i * 2654435761u + p));
+                    const double rotate = options.ambientFixedPattern ? 0.0 : (seed & 0xffff) / 65536.0;
+                    for (int k = 0; k < ambientSamples; ++k) {
+                        const double u = (k + 0.5) / ambientSamples;
+                        const double phi = 2 * 3.14159265358979323846 * std::fmod(k * 0.6180339887498949 + rotate, 1.0);
+                        const double r = std::sqrt(u);
+                        const V3 dir = t * (r * std::cos(phi)) + b * (r * std::sin(phi)) + n * std::sqrt(1 - u);
+                        if (!occluders.blocked(start, start + dir * far)) {
+                            visible += 1;
+                            openDirection = openDirection + dir;
+                        }
+                    }
+                    skyFraction[i] = visible / ambientSamples;
+                    skyDirection[i] = visible > 0 ? normalize(openDirection) : n;
+                }
+            });
+            if (options.ambientOcclusion) {
+                skyFraction = detail::smooth(skyFraction, samples[p], pages[p].width, pages[p].height,
+                                             options.skyFilterRadius, options.threads);
+                skyDirection = detail::smooth(skyDirection, samples[p], pages[p].width, pages[p].height,
+                                              options.skyFilterRadius, options.threads);
+            }
+        }
         std::uint8_t* skyA = result.sky.data() + skyOffset[p];
         std::uint8_t* skyB = skyA + texels * 4;
         std::uint8_t* rtlA = result.rtl.data() + rtlOffset[p];
@@ -824,30 +979,12 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                     V3 baked{};
                     V3 sky = n;  // SKY B: bent sky direction scaled by cbrt(visibility)
 
-                    // Sky ambient: cosine-weighted visibility of the sky.
-                    if (luminance(ambient) > 0) {
-                        double visible = ambientSamples;
-                        V3 openDirection = n;
-                        if (options.ambientOcclusion) {
-                            visible = 0;
-                            openDirection = {};
-                            const std::uint32_t seed = detail::hash(std::uint32_t(i * 2654435761u + p));
-                            const double rotate = options.ambientFixedPattern ? 0.0 : (seed & 0xffff) / 65536.0;
-                            for (int k = 0; k < ambientSamples; ++k) {
-                                const double u = (k + 0.5) / ambientSamples;
-                                const double phi = 2 * 3.14159265358979323846 * std::fmod(k * 0.6180339887498949 + rotate, 1.0);
-                                const double r = std::sqrt(u);
-                                const V3 dir = t * (r * std::cos(phi)) + b * (r * std::sin(phi)) + n * std::sqrt(1 - u);
-                                if (!occluders.blocked(start, start + dir * far)) {
-                                    visible += 1;
-                                    openDirection = openDirection + dir;
-                                }
-                            }
-                        }
-                        const double fraction = std::max(options.minimumSkyVisibility, visible / ambientSamples);
+                    // Sky ambient: smoothed cosine-weighted visibility of the sky.
+                    if (skyLit) {
+                        const double fraction = std::max(options.minimumSkyVisibility, skyFraction[i]);
                         baked = baked + ambient * (options.ambientScale * (0.4 + 0.6 * fraction));
                         directLight[i] = directLight[i] + ambient * fraction;
-                        sky = (visible > 0 ? normalize(openDirection) : n) * std::cbrt(fraction);
+                        sky = normalize(skyDirection[i]) * std::cbrt(fraction);
                     }
 
                     // Static (non-realtime) local lights.
@@ -859,8 +996,12 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         const V3 l3 = toLight * (1.0 / d);
                         const double lambert = dot(n, l3);
                         if (lambert <= 0) continue;
-                        const double scale = falloff(light, d) * lambert * spotFactor(light, -l3);
-                        if (!(scale > 0) || occluders.blocked(start, light.origin)) continue;
+                        double scale = falloff(light, d) * lambert * spotFactor(light, -l3);
+                        if (!(scale > 0)) continue;
+                        // Four sub-texel rays, as for realtime shadow masks: one ray
+                        // from the texel centre leaves stair-stepped shadow edges.
+                        scale *= visibility(s, light) / 255.0;
+                        if (!(scale > 0)) continue;
                         baked = baked + light.intensity * scale;
                         directLight[i] = directLight[i] + light.intensity * scale;
                     }
@@ -907,7 +1048,7 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
         });
         for (std::size_t i = 0; i < samples[p].size(); ++i) {
             const auto& s = samples[p][i];
-            if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0) continue;
+            if (s.chart < 0 || charts[s.chart].constant >= 0 || s.inside < 0 || s.buried) continue;
             const V3 a = charts[s.chart].albedo;
             const V3 e = directLight[i];
             grid.add({s.px, s.py, s.pz}, {s.nx, s.ny, s.nz}, {a.x * e.x, a.y * e.y, a.z * e.z});
@@ -921,7 +1062,9 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
     // probes read it. Pass 3 adds one diffuse bounce to SKY A.
     lap("pass2 direct");
     for (std::size_t p = 0; p < pages.size(); ++p) {
+        const std::size_t texels = std::size_t(pages[p].width) * pages[p].height;
         std::uint8_t* skyA = result.sky.data() + skyOffset[p];
+        std::vector<V3> bounce(texels);
         detail::parallelFor(pages[p].height, options.threads, [&](std::size_t y) {
             for (std::size_t x = 0; x < pages[p].width; ++x) {
                 const std::size_t i = y * pages[p].width + x;
@@ -929,12 +1072,24 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
                 const V3 n{s.nx, s.ny, s.nz};
                 const V3 start = V3{s.px, s.py, s.pz} + n * options.rayOffset;
-                const V3 bounce = gatherBounce(start, n, occluders, grid, options.bounceSamples, options.bounceDistance,
-                                               detail::hash(std::uint32_t(i * 2246822519u + p)));
-                auto a = encodeRGBM(bakedSky[p][i] + bounce * options.bounceScale);
-                std::memcpy(skyA + i * 4, a.data(), 4);
+                bounce[i] = gatherBounce(start, n, occluders, grid, options.bounceSamples, options.bounceDistance,
+                                         detail::hash(std::uint32_t(i * 2246822519u + p)));
             }
         });
+        // A few gather rays per texel are noisy; indirect light is smooth, so
+        // average it over the chart neighbourhood before encoding.
+        bounce = detail::smooth(bounce, samples[p], pages[p].width, pages[p].height,
+                                options.bounceFilterRadius, options.threads);
+        for (std::size_t i = 0; i < texels; ++i) {
+            const auto& s = samples[p][i];
+            if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
+            auto a = encodeRGBM(bakedSky[p][i] + bounce[i] * options.bounceScale);
+            std::memcpy(skyA + i * 4, a.data(), 4);
+        }
+        // Buried texels copy every plane from visible texels of their chart.
+        std::uint8_t* rtlA = result.rtl.data() + rtlOffset[p];
+        detail::fillBuried(samples[p], pages[p].width, pages[p].height,
+                           {skyA, skyA + texels * 4, rtlA, rtlA + texels * 4});
     }
     result.bounce = std::move(grid);
     result.chartedTexels = charted;

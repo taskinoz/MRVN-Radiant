@@ -736,6 +736,24 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         if (options.bounceScale <= 0)
             options.bounceSamples = 0;
     }
+    // Quality and level overrides. "_ambientscale" scales the sky fill in SKY A
+    // (default 0.04, calibrated to Coliseum; open retail maps sit several times
+    // brighter). Ray counts trade compile time for less noise; the filter radii
+    // (texels, 0 = off) smooth sky visibility and bounce within each chart.
+    if (HasKey(world, "_ambientscale")) {
+        const double scale = DoubleForKey(world, "_ambientscale", options.ambientScale);
+        if (!std::isfinite(scale) || scale < 0) Error("_ambientscale must be finite and nonnegative");
+        options.ambientScale = scale;
+    }
+    if (HasKey(world, "_bouncesamples") && options.bounceSamples > 0) {
+        const double samples = DoubleForKey(world, "_bouncesamples", 16);
+        if (!std::isfinite(samples)) Error("Bounce sample count must be finite");
+        options.bounceSamples = static_cast<int>(std::clamp(samples, 1.0, 256.0));
+    }
+    if (HasKey(world, "_skyfilter"))
+        options.skyFilterRadius = static_cast<int>(std::clamp(DoubleForKey(world, "_skyfilter", 1), 0.0, 8.0));
+    if (HasKey(world, "_bouncefilter"))
+        options.bounceFilterRadius = static_cast<int>(std::clamp(DoubleForKey(world, "_bouncefilter", 2), 0.0, 8.0));
     Respawn::Bake::Result result;
     try {
         REMAP_STAGE("  lightmap bake");

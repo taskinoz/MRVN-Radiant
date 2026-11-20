@@ -62,6 +62,7 @@ commands, environment and limits of the resulting evidence.
 | `tricoll.py` | Triangle collision decoding and OBJ export |
 | `rpak.py`, `rpak_apex.py` | TF2 v7 and Apex v8 RPak readers |
 | `lighting.py` | Light and lightmap inspection, authored lights |
+| `analyze_rtl.py` | Decodes RTL light slots per texel and tests them against lights and ray casts; summarises WORLD_LIGHTS fields |
 | `decompile_bsp.py` | Recovers a TF2 scene as an editable map ([RESPAWN_DECOMPILE.md](../../docs/respawn/RESPAWN_DECOMPILE.md)) |
 | `recover_collision_map.py` | Recovers collision brushes as a Radiant map |
 | `extract_maps.py` | Extracts sample maps through tf2vpk |

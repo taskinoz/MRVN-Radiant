@@ -198,8 +198,9 @@ prop object ids follow straight after the world meshes, not TF2's 64-aligned bas
 - Every used byte names a realtime point or spot light (flags 30 or 14), never
   the sun (hardware 0, shadowed by CSM) or a baked light (flags 6).
 - Slot *k* is used on 99–100% of texels reached by more than *k* shadowed
-  realtime lights, and almost never otherwise. Lights blocked from a texel get
-  no slot. Slot order is neither by index nor by contribution.
+  realtime lights, and almost never otherwise. Slot order is neither by index
+  nor by contribution. (This note originally said blocked lights get no slot;
+  that holds only for flag 14 lights. See the next section.)
 - So these are TF2's RTL A slots with absolute indices and no page. Retail TF1
   orders realtime lights straight after the ambient and sun (Angel City: 200 of
   676 lights) so their indices fit in a byte.
@@ -218,6 +219,52 @@ lit nothing on TF1 world surfaces. In a covered room with two realtime lights,
 TFO and R1Delta now show orange and blue pools on the floor and walls, while the
 same BSP with the plane reset to 255 renders black in TFO
 (`.local/respawn/tfo-light-isolation-20261120/run-rtl-room-{new,old,new-r1}`).
+
+### Which lights get a slot, and SKY B alpha (21 November 2026)
+
+`tools/respawn/analyze_rtl.py rtl <bsp>` rasterises every lit world triangle
+into its lightmap page and tests each texel's slots against the light records
+and against ray casts through the opaque world meshes (static props are not
+occluders). Run on all five retail TF1 maps (Angel City, Colony, Fracture,
+Lagoon, Relic; 0.37–1.3 million texels each, 1,000–1,500 ray samples per light
+group), it corrects the "blocked lights get no slot" statement above:
+
+| Light | Entity keys (all five maps) | Slot when in reach | P(slot), clear ray | P(slot), blocked ray |
+| --- | --- | --- | --- | --- |
+| flags 30, point | `light`, `realtime 1` | 98.6–99.7% | 0.98–1.00 | 0.98–1.00 |
+| flags 30, spot | `light_spot`, `realtime 1`, `realtime_shadows 0` | 97.9–99.2% | 0.98–1.00 | 0.98–0.99 |
+| flags 14, spot | `light_spot`, `realtime 1`, `realtime_shadows 1` | 25–39% | 0.80–0.95 | 0.06–0.14 |
+
+"In reach" means inside the record's radius, in front of the surface
+(dot(normal, toLight) > 0) and inside the outer cone (stopdot2). Slots outside
+that reach are border/gutter texels.
+
+- **Flag 30 lights are assigned purely geometrically.** Occlusion is ignored, so
+  they light texels behind walls; TF1 stores no shadow mask for them.
+- **Flag 14 lights (`realtime_shadows 1`) only get texels they can see.** These
+  are the dynamically shadowed spots. The `shadow` key does not decide the flag:
+  `shadow 0` spots occur with flags 30, 14 and 6.
+- **The flag is set by keys:** 2 | 4 for every point/spot, + 8 if `realtime 1`,
+  + 16 if also `realtime_shadows` is 0 or absent. That gives 6, 14 and 30. TF2
+  uses the same 8 and 16 bits (see [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md#tf2-light-flags-and-rtl-slots-21-november-2026)).
+- **Overflow (more than four lights in reach):** the four kept are neither the
+  four lowest indices (4%) nor the four strongest by contribution (32%, 1,218
+  Angel City texels). Ordering is only loosely ascending: slots are in
+  ascending index order on 78–86% of texels with two or more.
+- **SKY B alpha is baked sun occlusion in TF1**, unlike TF2 (always 255). It is
+  0 where the sun reaches the texel and 255 where it is blocked or the face looks
+  away. About 96% of charted texels take one of the 17 values
+  round(255·k/16), so k counts 16 sub-samples. Angel City: rays to the sun that
+  are blocked give 255 on 96% of texels; clear rays give 0 on 64% (and 0 or an
+  intermediate value on 82%). Fracture, Lagoon and Relic agree; Colony is
+  noisier, probably because of props and sky geometry the occluder set lacks.
+  **remap writes 255 on every TF1 texel.** In retail terms that is "fully
+  shadowed", although TFO still draws CSM sun shadows on remap maps. How the
+  engine combines the two is not known; plausibly the baked value applies only
+  beyond the CSM range.
+- **Light probes reference baked lights.** In Angel City, 30,123 of 41,936 used
+  probe light references name baked (flags 6) lights. remap's probes only
+  reference realtime lights (see the TF2 note).
 
 ## Vertices and material sorts
 

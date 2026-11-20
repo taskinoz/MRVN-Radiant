@@ -150,6 +150,16 @@ class R1HarnessTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 r1_harness.validate_checks(bad)
 
+    def test_trace_masks_select_the_engine_mask(self):
+        checks = r1_harness.validate_checks({'traces': [[0, 0, 1, 0, 0, 0]] * 2, 'trace_masks': ['shot', 'water']})
+        script = r1_harness.trace_script(checks['traces'], 0, False, checks['trace_masks'])
+        self.assertIn('TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE', script)
+        self.assertIn('TRACE_MASK_WATER, TRACE_COLLISION_GROUP_NONE', script)
+        for bad in ({'traces': [[0, 0, 1, 0, 0, 0]], 'trace_masks': ['shot', 'shot']},
+                    {'traces': [[0, 0, 1, 0, 0, 0]], 'trace_masks': ['glass']}):
+            with self.assertRaises(ValueError):
+                r1_harness.validate_checks(bad)
+
     def test_trace_script_matches_tfo_event_format(self):
         script = r1_harness.trace_script([[1, 2, 3, 4, 5, 6, -1, -1, -1, 1, 1, 1]], 7, True)
         self.assertIn('TraceHull( Vector( 1.0000, 2.0000, 3.0000 )', script)

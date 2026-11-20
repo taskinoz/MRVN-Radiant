@@ -13,6 +13,7 @@ GPL-2.0-or-later.
 
 checks.json uses the TFO harness schema (tools/respawn/tfo_harness.py):
   traces [[x,y,z,ex,ey,ez]], hulls [[x,y,z,ex,ey,ez,minx,miny,minz,maxx,maxy,maxz]],
+  trace_masks/hull_masks (playersolid, solid, shot or water per row),
   views [[x,y,z,pitch,yaw]], drops [[x,y,z]], drop_models, drop_wait,
   drop_samples, drop_velocities [[vx,vy,vz]], drop_angles [[pitch,yaw,roll]],
   expect {trace_z, hull_z, drop_z, drop_x, drop_y, drop_speed}. Events and report.json match
@@ -47,7 +48,8 @@ MAP_NAME = re.compile(r'[A-Za-z0-9_]+')
 MODEL_NAME = re.compile(r'models/[A-Za-z0-9_/-]+\.mdl')
 MODEL_EXTENSIONS = {'.mdl', '.vvd', '.vvc', '.vtx', '.phy', '.ani', '.vcs'}
 PROTOCOL = '2025-06-18'
-BATCH = 120  # rows per Squirrel call; R1Delta captures at most 500 output lines
+BATCH = 120
+TRACE_MASKS = {name: 'TRACE_MASK_' + name.upper() for name in ('playersolid', 'solid', 'shot', 'water')}  # rows per Squirrel call; R1Delta captures at most 500 output lines
 
 
 def digest(path):
@@ -81,6 +83,12 @@ def validate_checks(checks):
               for key, width in (('traces', 6), ('hulls', 12), ('views', 5), ('drops', 3))}
     if any(row[6 + i] > row[9 + i] for row in result['hulls'] for i in range(3)):
         raise ValueError('hull mins must not exceed maxs')
+    for key, rows in (('trace_masks', 'traces'), ('hull_masks', 'hulls')):
+        masks = checks.get(key, [])
+        if (not isinstance(masks, list) or (masks and len(masks) != len(result[rows])) or
+                any(not isinstance(m, str) or m not in TRACE_MASKS for m in masks)):
+            raise ValueError(f'{key} must be empty or name one of {sorted(TRACE_MASKS)} per {rows[:-1]}')
+        result[key] = masks
     models = checks.get('drop_models', [])
     if (not isinstance(models, list) or (models and len(models) != len(result['drops'])) or
             any(not isinstance(m, str) or not MODEL_NAME.fullmatch(m) or '..' in m.split('/') for m in models)):
@@ -357,13 +365,14 @@ def vec(values):
     return 'Vector( ' + ', '.join(f'{float(v):.4f}' for v in values) + ' )'
 
 
-def trace_script(rows, first, hull):
+def trace_script(rows, first, hull, masks=()):
     lines = ['local player = GetPlayerArray().len() ? GetPlayerArray()[0] : null']
     for i, t in enumerate(rows, first):
+        mask = TRACE_MASKS[masks[i - first]] if masks else 'TRACE_MASK_PLAYERSOLID'
         call = (f'TraceHull( {vec(t[:3])}, {vec(t[3:6])}, {vec(t[6:9])}, {vec(t[9:12])}, player, '
                 if hull else f'TraceLine( {vec(t[:3])}, {vec(t[3:6])}, player, ')
         kind = 'HULL' if hull else 'TRACE'
-        lines.append(f'{{ local r = {call}TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_NONE ); '
+        lines.append(f'{{ local r = {call}{mask}, TRACE_COLLISION_GROUP_NONE ); '
                      f'printl( "[MRVN] {kind} {i} fraction=" + r.fraction + " end=" + r.endPos.z + '
                      f'" solid=" + r.startSolid + " normal=" + r.surfaceNormal ) }}')
     return '\n'.join(lines)
@@ -371,9 +380,10 @@ def trace_script(rows, first, hull):
 
 def run_checks(control, checks, pid, output, events, screenshots):
     for key, hull in (('traces', False), ('hulls', True)):
-        rows = checks[key]
+        rows, masks = checks[key], checks.get(key[:-1] + '_masks', [])
         for first in range(0, len(rows), BATCH):
-            events += control.squirrel(trace_script(rows[first:first + BATCH], first, hull))
+            events += control.squirrel(trace_script(rows[first:first + BATCH], first, hull,
+                                                    masks[first:first + BATCH]))
     drops = checks['drops']
     if drops:
         models = checks['drop_models'] or [DEFAULT_MODEL] * len(drops)

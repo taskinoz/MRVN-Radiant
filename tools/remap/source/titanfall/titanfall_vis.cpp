@@ -754,6 +754,6 @@ void Titanfall::EmitLevelInfo() {
     Titanfall::LevelInfo_t &li = Titanfall::Bsp::levelInfo.back();
 
     li.propCount = Titanfall::Bsp::gameLumpPropHeader.numProps;
-    // TODO: unk2 sun vector from last light_environment
-    li.unk2 = { 0.1, 0.8, -0.6 };  // placeholder
+    // Placeholder sun vector; EmitLighting replaces it with the last sun's normal.
+    li.unk2 = { 0.1, 0.8, -0.6 };
 }

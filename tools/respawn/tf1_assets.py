@@ -15,6 +15,7 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import struct
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -73,6 +74,39 @@ def material_files(source, names, depth_limit=4):
         if not visit(name, 0):
             missing.append(name)
     return {'files': files, 'missing': missing}
+
+
+def vpk_names(directory):
+    """Lower-case member paths of a Respawn VPK 2.3 directory file (the
+    layout pack_vpk.py writes: per entry a CRC, preload and archive words,
+    then 30-byte parts each followed by a 0xffff-terminated u16)."""
+    data = Path(directory).read_bytes()
+    signature, major, minor, size, _ = struct.unpack_from('<IHHII', data)
+    if signature != 0x55aa1234 or (major, minor) != (2, 3) or 16 + size > len(data):
+        raise ValueError(f'not a Respawn VPK 2.3 directory: {directory}')
+    cursor, end, names = 16, 16 + size, set()
+
+    def string():
+        nonlocal cursor
+        stop = data.index(bytes(1), cursor, end)
+        value = data[cursor:stop].decode('latin-1')
+        cursor = stop + 1
+        return value
+    while (extension := string()):
+        while (parent := string()):
+            while (stem := string()):
+                _, preload, _ = struct.unpack_from('<IHH', data, cursor)
+                cursor += 8
+                while True:
+                    cursor += 30
+                    (marker,) = struct.unpack_from('<H', data, cursor)
+                    cursor += 2
+                    if marker == 0xffff:
+                        break
+                cursor += preload
+                folder = '' if parent.strip() == '' else parent.strip('/') + '/'
+                names.add((folder + stem + '.' + extension).replace(chr(92), '/').lower())
+    return names
 
 
 def copy_files(found, output):

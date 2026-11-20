@@ -11,9 +11,14 @@ The layouts are the ones the native harnesses load:
 
 The compiled level must pass validate_records.py (records, entity partitions and
 sidecars). Every material named by the BSP and every static-prop model is listed
-in manifest.json as either shipped in --assets or expected from the base game.
---strict fails instead when anything is not shipped. No game files are bundled
-unless you supply them; check you may redistribute what you put in --assets.
+in manifest.json as shipped, base game or missing. With --base-vpk (the game's
+vpk/ folder) "base game" means present in englishclient_mp_common, the only map
+VPK a custom map mounts; anything else must be shipped (most TF1 world materials
+live in per-map VPKs). Without it, unshipped names are "base game (unverified)".
+--asset-source collects the VMTs and VTFs of materials that are neither shipped
+nor in mp_common from a loose tree (tf1_assets.py) and ships them. --strict
+fails when anything is missing. No game files are bundled unless you supply
+them; check you may redistribute what you put in --assets or --asset-source.
 
   python tools/respawn/build_tf1_package.py --maps BUILD/maps --map mp_name \
       --name Author.MapName --version 1.0.0 --output NEW_DIR [--assets DIR] [--shader-vpk DIR]
@@ -29,6 +34,7 @@ import zipfile
 
 from inspect_bsp import FormatError, inspect
 from lighting import payload
+from tf1_assets import material_files, vpk_names
 
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
 MAP = re.compile(r'mp_[A-Za-z0-9_]{1,60}')
@@ -132,11 +138,29 @@ def shader_vpks(folder, map_name):
     return vpks
 
 
-def dependencies(textures, models, shipped):
+def dependencies(textures, models, shipped, base=None):
+    """'shipped', 'base game' (in mp_common), 'missing', or without a base
+    listing 'base game (unverified)', per material and model."""
     lower = {name.lower() for name in shipped}
-    materials = {t: ('shipped' if f'materials/{t}.vmt' in lower else 'base game') for t in textures}
-    props = {m: ('shipped' if m in lower else 'base game') for m in models}
+
+    def status(path):
+        if path in lower:
+            return 'shipped'
+        if base is None:
+            return 'base game (unverified)'
+        return 'base game' if path in base else 'missing'
+    materials = {t: status(f'materials/{t}.vmt') for t in textures}
+    props = {m: status(m) for m in models}
     return {'materials': materials, 'models': props}
+
+
+def base_listing(folder):
+    if folder is None:
+        return None
+    directory = Path(folder) / 'englishclient_mp_common.bsp.pak000_dir.vpk'
+    if linked(Path(folder)) or not directory.is_file():
+        raise ValueError(f'--base-vpk needs {directory.name} in the game vpk folder')
+    return vpk_names(directory)
 
 
 def sha256(path):
@@ -155,7 +179,7 @@ def zip_tree(root, archive):
 
 
 def package(maps, map_name, name, version, output, description='', assets=None, shader_vpk=None,
-            strict=False, validator=None):
+            strict=False, validator=None, base_vpk=None, asset_source=None):
     if not MAP.fullmatch(map_name) or not NAME.fullmatch(name) or not VERSION.fullmatch(version):
         raise ValueError('expected an mp_ map name, a simple package name and an x.y.z version')
     if linked(maps) or not maps.is_dir():
@@ -171,10 +195,23 @@ def package(maps, map_name, name, version, output, description='', assets=None, 
         raise ValueError(f'compiled map fails record validation: {issues[:5]}')
     shipped = asset_files(assets)
     vpks = shader_vpks(shader_vpk, map_name)
-    deps = dependencies(texture_names(bsp, inventory), prop_models(bsp, inventory), shipped)
-    missing = sorted(k for group in deps.values() for k, v in group.items() if v != 'shipped')
-    if strict and missing:
-        raise ValueError(f'--strict: not shipped in --assets: {missing[:10]}')
+    base = base_listing(base_vpk)
+    textures = texture_names(bsp, inventory)
+    collected = []
+    if asset_source is not None:
+        lower = {name.lower() for name in shipped}
+        wanted = [t for t in textures if f'materials/{t}.vmt' not in lower and
+                  (base is None or f'materials/{t}.vmt' not in base)]
+        found = material_files(asset_source, wanted)
+        for relative, path in found['files'].items():
+            if relative.lower() not in lower:
+                shipped[relative] = path
+                collected.append(relative)
+    deps = dependencies(textures, prop_models(bsp, inventory), shipped, base)
+    missing = sorted(k for group in deps.values() for k, v in group.items() if v == 'missing')
+    unverified = sorted(k for group in deps.values() for k, v in group.items() if v.endswith('(unverified)'))
+    if strict and (missing or unverified):
+        raise ValueError(f'--strict: not shipped or in mp_common: {(missing + unverified)[:10]}')
 
     output.mkdir(parents=True, exist_ok=False)
     tfo = output / 'tfo' / name
@@ -198,11 +235,13 @@ def package(maps, map_name, name, version, output, description='', assets=None, 
         (output / 'vpk').mkdir()
         for vpk in vpks:
             shutil.copyfile(vpk, output / 'vpk' / vpk.name)
-    (output / 'INSTALL.md').write_text(install_text(name, map_name, bool(vpks), missing), encoding='utf-8')
+    (output / 'INSTALL.md').write_text(install_text(name, map_name, bool(vpks), missing + unverified),
+                                       encoding='utf-8')
 
     manifest = {'map': map_name, 'name': name, 'version': version, 'bsp_version': 29,
                 'navigation_graph': graph is not None, 'dependencies': deps,
-                'not_shipped': missing, 'files': {}}
+                'missing': missing, 'unverified': unverified, 'collected_from_asset_source': sorted(collected),
+                'files': {}}
     for path in sorted(output.rglob('*')):
         if path.is_file():
             manifest['files'][path.relative_to(output).as_posix()] = sha256(path)
@@ -241,12 +280,17 @@ def main():
     p.add_argument('--description', default='')
     p.add_argument('--assets', type=Path, help='materials/, models/, sound/ ... to ship with the map')
     p.add_argument('--shader-vpk', type=Path, help='output folder of pack_tf1_shaders.py')
-    p.add_argument('--strict', action='store_true', help='fail if any material/model is not shipped')
+    p.add_argument('--base-vpk', type=Path, help="the game's vpk/ folder, to check what mp_common provides")
+    p.add_argument('--asset-source', type=Path,
+                   help='loose tree to collect unshipped, non-mp_common materials from (VMT + VTFs)')
+    p.add_argument('--strict', action='store_true', help='fail if any material/model is missing or unverified')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
     manifest = package(args.maps, args.map, args.name, args.version, args.output, args.description,
-                       args.assets, args.shader_vpk, args.strict)
-    print(json.dumps({k: manifest[k] for k in ('map', 'name', 'version', 'navigation_graph', 'not_shipped')}, indent=2))
+                       args.assets, args.shader_vpk, args.strict, base_vpk=args.base_vpk,
+                       asset_source=args.asset_source)
+    print(json.dumps({k: manifest[k] for k in ('map', 'name', 'version', 'navigation_graph', 'missing', 'unverified',
+                                               'collected_from_asset_source')}, indent=2))
 
 
 if __name__ == '__main__':

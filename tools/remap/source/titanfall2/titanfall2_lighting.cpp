@@ -636,6 +636,13 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         Titanfall2::Bsp::bakeLights.push_back(pending.light);
         bakeLightEnvironments.push_back(pending.environment);
     }
+    // LEVEL_INFO's sun vector is the last sun record's normal (five TF1 and
+    // eight TF2 retail maps). Without a sun the placeholder stays.
+    for (auto light = Titanfall2::Bsp::worldLights.rbegin(); light != Titanfall2::Bsp::worldLights.rend(); ++light)
+        if (light->type == 3) {
+            if (!Titanfall::Bsp::levelInfo.empty()) Titanfall::Bsp::levelInfo.back().unk2 = light->normal;
+            break;
+        }
 
     // Opaque, non-sky world brushes cast shadows; sky brushes let sun and sky rays out.
     std::vector<Respawn::Bake::Brush> brushes;
@@ -737,6 +744,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     if (tf1) {
         options.sunSlots = false;
         options.unshadowedSlots = true;
+        options.sunOcclusionAlpha = true;
     }
     options.luxelSize = Shared::luxelSize;
     // Authored outdoor test yards can opt out of sampled sky occlusion while

@@ -4,7 +4,8 @@
  *
  * Per page the engine reads:
  *   SKY  A  RGBM: rgb/255 * (a/255 * 3.984375 + 0.015625); a small ambient fill
- *   SKY  B  bent sky direction scaled by cbrt(sky visibility): rgb/127 - 1, alpha 255.
+ *   SKY  B  bent sky direction scaled by cbrt(sky visibility): rgb/127 - 1, alpha 255
+ *           (TF1: alpha is baked sun occlusion, 0 sunlit, 255 blocked or facing away).
  *           The shader applies the ambient world light through this vector.
  *   RTL  A  four 6-bit slots into an RTL page (63 = unused), page in the top byte;
  *           texels without realtime lights hold 0xffffffff
@@ -442,6 +443,10 @@ struct Options {
     // lights: retail TF1 slots hold flag-14 and flag-30 lights, never the sun.
     bool sunSlots = true;
     bool unshadowedSlots = false;
+    // Titanfall 1 stores baked sun occlusion in SKY B alpha: 0 sunlit, 255
+    // blocked or facing away (analyze_rtl.py: Angel City blocked sun rays
+    // give 255 on 96% of texels). Titanfall 2 keeps 255.
+    bool sunOcclusionAlpha = false;
 };
 
 /*
@@ -1017,6 +1022,14 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
 
                     bakedSky[p][i] = baked;
                     auto bd = encodeDirection(sky);
+                    if (options.sunOcclusionAlpha) {
+                        for (const Light& light : lights) {
+                            if (!light.realtime || light.type != LightType::Sun) continue;
+                            bd[3] = dot(n, -light.direction) <= 0 ? 255
+                                  : static_cast<std::uint8_t>(255 - visibility(s, light));
+                            break;
+                        }
+                    }
                     std::memcpy(skyB + i * 4, bd.data(), 4);
 
                     // Realtime slots and their shadow masks.

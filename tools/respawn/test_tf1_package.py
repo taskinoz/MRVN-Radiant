@@ -68,7 +68,8 @@ class PackageTests(unittest.TestCase):
                              ['mp_test.bsp', 'mp_test.bsp.0018.bsp_lump', 'mp_test_spawn.ent'])
         mod = json.loads((out / 'tfo/Author.Test/mod.json').read_text())
         self.assertEqual((mod['Name'], mod['Version'], mod['RequiredOnClient']), ('Author.Test', '1.2.3', True))
-        self.assertEqual(manifest['not_shipped'], ['models/x/prop.mdl', 'world/a', 'world/b'])
+        self.assertEqual(manifest['unverified'], ['models/x/prop.mdl', 'world/a', 'world/b'])
+        self.assertEqual(manifest['missing'], [])
         self.assertIn('r1delta/Author.Test/maps/mp_test.bsp', manifest['files'])
         with zipfile.ZipFile(out / 'Author.Test-1.2.3-tfo.zip') as z:
             self.assertIn('Author.Test/mod/maps/mp_test.bsp', z.namelist())
@@ -85,11 +86,27 @@ class PackageTests(unittest.TestCase):
         (self.maps / 'graphs/mp_test.ain').write_bytes(b'graph')
         manifest = self.build(assets=assets, strict=True)
         out = self.root / 'out'
-        self.assertEqual(manifest['not_shipped'], [])
+        self.assertEqual(manifest['missing'] + manifest['unverified'], [])
         self.assertTrue(manifest['navigation_graph'])
         self.assertTrue((out / 'r1delta/Author.Test/models/x/prop.mdl').is_file())
         self.assertTrue((out / 'tfo/Author.Test/mod/materials/world/a.vmt').is_file())
         self.assertTrue((out / 'tfo/Author.Test/mod/maps/graphs/mp_test.ain').is_file())
+
+    def test_base_vpk_and_asset_source(self):
+        from pack_vpk import pack_files
+        vpk = self.root / 'vpk'
+        pack_files({'materials/world/a.vmt': b'"LightmappedGeneric" {}'}, vpk, 'client_mp_common.bsp.pak000')
+        source = self.root / 'dump/materials/world'
+        source.mkdir(parents=True)
+        (source / 'b.vmt').write_text('"LightmappedGeneric"\n{\n"$basetexture" "world\\b_col"\n}\n')
+        (source / 'b_col.vtf').write_bytes(b'VTF\0')
+        manifest = self.build(base_vpk=vpk, asset_source=self.root / 'dump')
+        deps = manifest['dependencies']
+        self.assertEqual(deps['materials'], {'world/a': 'base game', 'world/b': 'shipped'})
+        self.assertEqual(manifest['missing'], ['models/x/prop.mdl'])
+        self.assertEqual(manifest['collected_from_asset_source'],
+                         ['materials/world/b.vmt', 'materials/world/b_col.vtf'])
+        self.assertTrue((self.root / 'out/r1delta/Author.Test/materials/world/b_col.vtf').is_file())
 
     def test_rejections(self):
         with self.assertRaisesRegex(ValueError, 'strict'):

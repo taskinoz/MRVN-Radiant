@@ -537,6 +537,9 @@ def tf1_realtime_light_fixture(folder, command, reports, game):
     found = {expected.get((t, f), f'unexpected type {t} flags {f}') for t, f, _ in kinds.values()}
     if found != set(expected.values()) or any(l[22] != 0 for l in lights if l[13] == 5):
         raise RuntimeError(f'v29 world-light flags: {sorted(found)}')
+    suns = [l for l in lights if l[13] == 3]
+    if not suns or any(abs(a - b) > 1e-5 for a, b in zip(records[123][0][4:7], suns[-1][6:9])):
+        raise RuntimeError('LEVEL_INFO sun vector must be the last sun record normal')
     order = [kinds[h][1] for h in sorted(kinds)]
     realtime_last = max(i for i, f in enumerate(order) if f in (14, 30))
     if any(f == 6 for f in order[:realtime_last]):
@@ -557,6 +560,16 @@ def tf1_realtime_light_fixture(folder, command, reports, game):
         seen.update(used)
     if seen != allowed:
         raise RuntimeError(f'v29 realtime lights missing from texels: {sorted(allowed - seen)}')
+    # SKY: per page, an A plane then a B plane of four bytes per texel. TF1's
+    # B alpha is baked sun occlusion, so the open, sunlit floor must hold 0s.
+    sky = inventory_payload(bsp, inventory, 98)
+    alphas, offset = [], 0
+    for _, w, h in records[83]:
+        count = w * h
+        alphas += list(sky[offset + count * 4 + 3:offset + count * 8:4])
+        offset += count * 8
+    if 0 not in alphas or set(alphas) - {0, 64, 128, 192, 255}:
+        raise RuntimeError('v29 SKY B alpha must hold baked sun occlusion (0 where sunlit)')
     reports.append({'game': game, 'fixture': 'tf1-realtime-lights', 'issues': []})
 
 
@@ -680,6 +693,10 @@ def lit_fixture_checks(bsp):
             return stream.read(length)
         lights = list(struct.iter_unpack("<12f3i7f3i3f", lump(0x36)))
         headers = list(struct.iter_unpack("<I2H", lump(0x53)))
+        level = struct.unpack("<4I3f", lump(0x7B))
+        suns = [l for l in lights if l[13] == 3]
+        if not suns or any(abs(a - b) > 1e-5 for a, b in zip(level[4:7], suns[-1][6:9])):
+            raise RuntimeError("LEVEL_INFO sun vector must be the last sun record normal")
         sky, rtl, pages = lump(0x62), lump(0x69), list(struct.iter_unpack("<63h", lump(0x7A)))
         positions = list(struct.iter_unpack("<3f", lump(0x03)))
         normals = list(struct.iter_unpack("<3f", lump(0x1E)))

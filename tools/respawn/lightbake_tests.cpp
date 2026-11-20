@@ -171,6 +171,53 @@ int main() {
         const std::array<std::uint8_t, 4> glow{g.sky[shaded * 4], g.sky[shaded * 4 + 1], g.sky[shaded * 4 + 2], g.sky[shaded * 4 + 3]};
         require(near(decodeRGBM(glow).x, 0.8, 0.02) && rtlWord(g, shaded) == RtlUnusedTexel, "Constant chart is self-lit");
 
+        // Titanfall 1 slot mode: the sun never takes a slot, unshadowed realtime
+        // lights do, and the sun still reaches the bounce irradiance.
+        {
+            Light lamp;
+            lamp.type = LightType::Point;
+            lamp.origin = {0, 0, 40};
+            lamp.intensity = {1, 1, 1};
+            lamp.zeroDistance = 300;
+            lamp.attenuation = fitAttenuation(300, 90);
+            lamp.shadowMask = false;  // TF2 "shadow 0": no TF2 slot
+            lamp.hardwareIndex = 1;
+            const Result tf2 = bake({floorChart()}, pages, {sun, lamp}, {0.8, 0.8, 0.8}, scene, options);
+            Options tf1Options = options;
+            tf1Options.sunSlots = false;
+            tf1Options.unshadowedSlots = true;
+            const Result tf1 = bake({floorChart()}, pages, {sun, lamp}, {0.8, 0.8, 0.8}, scene, tf1Options);
+            const std::size_t centre = texel(6, 6);
+            require(tf2.rtlPages[0][0] == 0 && (rtlWord(tf2, centre) & 0x3f) == 0, "TF2 mode: sun in slot 0");
+            const std::uint32_t word = rtlWord(tf1, centre);
+            require(word != RtlUnusedTexel && tf1.rtlPages[word >> 24][word & 0x3f] == 1,
+                    "TF1 mode: the unshadowed lamp takes slot 0");
+            require(((word >> 6) & 0x3f) == RtlUnusedSlot, "TF1 mode: the sun takes no slot");
+            // Unused page entries are zero-filled, so check the first entry: the
+            // only page lists the lamp (hardware 1), not the sun (hardware 0).
+            require(tf1.rtlPages.size() == 1 && tf1.rtlPages[0][0] == 1, "TF1 mode: no RTL page lists the sun");
+            // Bounce still sees the sun: compare a wall lit only by the sunlit floor.
+            Chart wall;
+            const double corners[4][3] = {{64, -64, 0}, {64, 64, 0}, {64, 64, 128}, {64, -64, 128}};
+            for (const auto& c : corners) {
+                wall.positions.push_back({c[0], c[1], c[2]});
+                wall.normals.push_back({-1, 0, 0});
+                wall.luxels.push_back({(c[1] + 64) / 16 + 2, c[2] / 16 + 2});
+            }
+            wall.triangles = {0, 1, 2, 0, 2, 3};
+            wall.page = 1;
+            Chart lit = floorChart();
+            lit.albedo = {0.8, 0.8, 0.8};
+            const Occluders room({box({-64, -64, -16}, {64, 64, 0}), box({64, -64, -16}, {80, 64, 128})});
+            const std::vector<PageSize> two{{16, 16}, {16, 16}};
+            Options o = tf1Options;
+            o.bounceSamples = 32;
+            const Result w = bake({lit, wall}, two, {sun}, {0, 0, 0}, room, o);
+            const std::size_t i = 16 * 16 * 8 + texel(6, 6) * 4;
+            require(decodeRGBM({w.sky[i], w.sky[i + 1], w.sky[i + 2], w.sky[i + 3]}).x > 0.2,
+                    "TF1 mode: sunlit floor still bounces onto the wall");
+        }
+
         // A block resting on the x<0 half of the floor buries those texels. They
         // must not bake black: they copy the nearest visible texel, so bilinear
         // filtering at the block's foot reads lit values.

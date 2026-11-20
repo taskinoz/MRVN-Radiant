@@ -601,10 +601,22 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     Sys_Printf("--- EmitLighting ---\n");
     const auto started = std::chrono::steady_clock::now();
 
-    // Retail order: ambient, suns, spots, points. Hardware indices skip ambients.
-    std::stable_sort(pendingLights.begin(), pendingLights.end(), [](const PendingLight &a, const PendingLight &b) {
-        auto rank = [](LightType t) { return t == LightType::Ambient ? 0 : t == LightType::Sun ? 1 : t == LightType::Spot ? 2 : 3; };
-        return rank(a.light.type) < rank(b.light.type);
+    // Retail TF2 order: ambient, suns, spots, points. Hardware indices skip ambients.
+    // Retail TF1 puts every realtime light before the baked ones (unshadowed
+    // spots, shadowed spots, points), because its lightmap stores realtime light
+    // slots as one-byte hardware indices (Angel City: 200 realtime of 676).
+    const bool tf1 = g_game->bspVersion == 29;
+    std::stable_sort(pendingLights.begin(), pendingLights.end(), [tf1](const PendingLight &a, const PendingLight &b) {
+        auto rank = [tf1](const PendingLight &p) {
+            const LightType t = p.light.type;
+            if (t == LightType::Ambient) return 0;
+            if (t == LightType::Sun) return 1;
+            if (!tf1) return t == LightType::Spot ? 2 : 3;
+            if (!p.light.realtime) return t == LightType::Spot ? 5 : 6;
+            if (t == LightType::Spot) return p.light.shadowMask ? 3 : 2;
+            return 4;
+        };
+        return rank(a) < rank(b);
     });
     // Worldspawn "_lightscale" scales every point and spot light.
     const double lightScale = HasKey(world, "_lightscale") ? DoubleForKey(world, "_lightscale", 1) : 1.0;
@@ -720,6 +732,10 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     Respawn::Bake::Options options;
     // Honour the compiler-wide CPU budget for both TF1 and TF2 baking.
     options.threads = static_cast<unsigned>(std::max(1, numthreads));
+    if (tf1) {
+        options.sunSlots = false;
+        options.unshadowedSlots = true;
+    }
     options.luxelSize = Shared::luxelSize;
     // Authored outdoor test yards can opt out of sampled sky occlusion while
     // retaining realtime light shadow masks. Keep the existing default bake.

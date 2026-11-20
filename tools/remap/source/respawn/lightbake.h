@@ -436,6 +436,12 @@ struct Options {
     // seams and creases stay sharp. Shadow masks and direct light are not filtered.
     int skyFilterRadius = 1;       // sky visibility and bent direction (0: off)
     int bounceFilterRadius = 2;    // gathered bounce light (0: off)
+    // Which lights compete for a texel's four realtime slots. Titanfall 2 gives
+    // suns a slot (with a shadow mask) and leaves unshadowed lights out. Titanfall 1
+    // never stores the sun (CSM shadows it) and does store unshadowed realtime
+    // lights: retail TF1 slots hold flag-14 and flag-30 lights, never the sun.
+    bool sunSlots = true;
+    bool unshadowedSlots = false;
 };
 
 /*
@@ -798,7 +804,10 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 Slots& out = slots[p][i];
                 for (std::size_t l = 0; l < lights.size(); ++l) {
                     const Light& light = lights[l];
-                    if (!light.realtime || !light.shadowMask || light.type == LightType::Ambient) continue;
+                    if (!light.realtime || light.type == LightType::Ambient) continue;
+                    if (light.type == LightType::Sun ? !(options.sunSlots && light.shadowMask)
+                                                     : !(light.shadowMask || options.unshadowedSlots))
+                        continue;
                     double score;
                     if (light.type == LightType::Sun) {
                         // Suns outrank local lights so their shadow mask is always kept.
@@ -1039,6 +1048,16 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         if (used) {
                             word = packRtlWord(slotIds, static_cast<std::uint8_t>(page));
                             realtime.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
+                    // Without sun slots the sun still lights surfaces (via CSM at
+                    // run time); count its shadowed reach here so bounce sees it.
+                    if (!options.sunSlots) {
+                        for (const Light& light : lights) {
+                            if (!light.realtime || light.type != LightType::Sun) continue;
+                            const double reach = std::max(0.0, dot(n, -light.direction));
+                            if (reach > 0)
+                                directLight[i] = directLight[i] + light.intensity * (reach * visibility(s, light) / 255.0);
                         }
                     }
                 }

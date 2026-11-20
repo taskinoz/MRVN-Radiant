@@ -91,11 +91,26 @@ void WriteR1BSPFile(const char *filename) {
     // Baked lighting comes from the Titanfall 2 pipeline. Records that differ in
     // TF1 v29: world lights are v1 (the v3 record without its last 12 bytes),
     // probe references drop their trailing word, and the realtime-light plane has
-    // 4 bytes per texel with no RTL pages; it is written unshadowed (255).
+    // 4 bytes per texel with no RTL pages.
+    //
+    // TF1 realtime-light texels hold up to four one-byte HARDWARE light indices
+    // (world index minus preceding ambients), 255 = unused, filled in order. In
+    // retail Angel City every used byte names a realtime point/spot light (flags
+    // 14 or 30), never the sun; slot k is used on ~99% of texels reached by more
+    // than k such lights. They are TF2's RTL A slots with absolute indices and no
+    // page, so the bake's slot words are translated through its RTL pages.
     const bool baked = Titanfall2::Bsp::lightingBaked;
     std::vector<uint8_t> worldLights, realtime, probeReferences;
     if (baked) {
-        for (const Titanfall2::WorldLight_t &light : Titanfall2::Bsp::worldLights) {
+        // Retail TF1 flags: ambient and sun 0, baked 6, realtime 30, realtime
+        // without shadows 14. Every TF1 point/spot light carries bit 2, which the
+        // TF2 values (4, 28, 56, 104, sun 24) lack.
+        for (Titanfall2::WorldLight_t light : Titanfall2::Bsp::worldLights) {
+            if (light.type == 5 || light.type == 3) light.flags = 0;
+            else if (light.flags == 4) light.flags = 6;
+            else if (light.flags == 56) light.flags = 14;
+            else if (light.flags == 28 || light.flags == 104) light.flags = 30;
+            else light.flags |= 2;
             const auto *bytes = reinterpret_cast<const uint8_t *>(&light);
             worldLights.insert(worldLights.end(), bytes, bytes + 100);
         }
@@ -103,6 +118,31 @@ void WriteR1BSPFile(const char *filename) {
         for (const Titanfall2::LightmapHeader_t &page : Titanfall2::Bsp::lightmapHeaders)
             texels += std::size_t(page.width) * page.height;
         realtime.assign(texels * 4, 255);
+        // Each bake page stores RTL A (4 bytes/texel), RTL B (4) and RTL C (1).
+        const std::vector<uint8_t> &rtl = Titanfall2::Bsp::lightmapDataRtl;
+        std::size_t source = 0, target = 0, dropped = 0;
+        for (const Titanfall2::LightmapHeader_t &page : Titanfall2::Bsp::lightmapHeaders) {
+            const std::size_t count = std::size_t(page.width) * page.height;
+            if (source + count * 9 > rtl.size()) Error("TF1 realtime-light conversion: RTL plane is truncated");
+            for (std::size_t i = 0; i < count; ++i) {
+                uint32_t word;
+                std::memcpy(&word, &rtl[source + i * 4], 4);
+                if (word == Respawn::Bake::RtlUnusedTexel) continue;
+                const auto &table = Titanfall2::Bsp::lightmapRtlPages.at(word >> 24);
+                int used = 0;
+                for (int k = 0; k < 4; ++k) {
+                    const uint32_t slot = (word >> (6 * k)) & 63;
+                    if (slot == Respawn::Bake::RtlUnusedSlot) continue;
+                    const int16_t hardware = table.at(slot);
+                    if (hardware < 0 || hardware > 254) { ++dropped; continue; }
+                    realtime[(target + i) * 4 + used++] = static_cast<uint8_t>(hardware);
+                }
+            }
+            source += count * 9;
+            target += count;
+        }
+        if (dropped)
+            Sys_FPrintf(SYS_WRN, "WARNING: %zu TF1 realtime-light slots name a light past hardware index 254 and were dropped\n", dropped);
         for (const Respawn::Bake::ProbeReference &reference : Titanfall2::Bsp::lightprobeReferences) {
             const auto *bytes = reinterpret_cast<const uint8_t *>(&reference);
             probeReferences.insert(probeReferences.end(), bytes, bytes + 16);

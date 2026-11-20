@@ -503,6 +503,73 @@ def tangent_checks(bsp, titanfall1=False):
         raise RuntimeError("no bump-lit triangles to check")
 
 
+def tf1_realtime_light_fixture(folder, command, reports, game):
+    """v29 world-light flags/order and realtime-light texels follow retail TF1:
+    flags 0/30/14/6, realtime lights before baked ones, and texels holding up to
+    four one-byte hardware light indices (255 = unused, filled in order) that
+    name realtime point/spot lights, never the sun or a baked light."""
+    path = folder / 'tf1-realtime-lights.map'
+    path.write_text('{\n"classname" "worldspawn"\n"_bouncescale" "0"\n' +
+                    box((-512, -512, -16), (512, 512, 0), 'bump') + '\n}\n' +
+                    entity(classname='light_environment', origin='0 0 512', pitch='-60', angles='60 30 0',
+                           _light='255 240 220 600', _ambient='150 180 255 100') +
+                    entity(classname='light', origin='-256 0 64', _light='255 255 255 255', _distance='256',
+                           realtime='0') +
+                    entity(classname='light', origin='256 -256 64', _light='255 200 150 200', _distance='256') +
+                    entity(classname='light_spot', origin='0 256 200', pitch='-90', angles='90 0 0',
+                           _light='255 255 255 400', _distance='400', _cone='45', _inner_cone='20', shadow='0'),
+                    encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    issues = validate(bsp)['issues']
+    if issues:
+        raise RuntimeError(f'v29 realtime-light fixture: {issues}')
+    inventory = inspect(bsp)
+    records = load_records(bsp, inventory)
+    lights = records[54]
+    hardware = [i for i, light in enumerate(lights) if light[13] != 5]
+    kinds = {}
+    for h, w in enumerate(hardware):
+        light = lights[w]
+        kinds[h] = (light[13], light[22], tuple(round(v) for v in light[0:3]))
+    expected = {(3, 0): 'sun', (1, 6): 'baked point', (1, 30): 'realtime point', (2, 14): 'unshadowed spot'}
+    found = {expected.get((t, f), f'unexpected type {t} flags {f}') for t, f, _ in kinds.values()}
+    if found != set(expected.values()) or any(l[22] != 0 for l in lights if l[13] == 5):
+        raise RuntimeError(f'v29 world-light flags: {sorted(found)}')
+    order = [kinds[h][1] for h in sorted(kinds)]
+    realtime_last = max(i for i, f in enumerate(order) if f in (14, 30))
+    if any(f == 6 for f in order[:realtime_last]):
+        raise RuntimeError(f'v29 realtime lights must precede baked lights: {order}')
+    rtl = inventory_payload(bsp, inventory, 105)
+    texels = sum(w * h for _, w, h in records[83])
+    if len(rtl) != texels * 4:
+        raise RuntimeError('v29 realtime-light plane must hold four bytes per texel')
+    allowed = {h for h, (t, f, _) in kinds.items() if f in (14, 30)}
+    seen = set()
+    for i in range(texels):
+        slots = rtl[i * 4:i * 4 + 4]
+        used = [b for b in slots if b != 255]
+        if list(slots[:len(used)]) != used:
+            raise RuntimeError('v29 realtime-light slots must fill in order')
+        if any(b not in allowed for b in used) or len(set(used)) != len(used):
+            raise RuntimeError(f'v29 realtime-light texel names a non-realtime or repeated light: {used}')
+        seen.update(used)
+    if seen != allowed:
+        raise RuntimeError(f'v29 realtime lights missing from texels: {sorted(allowed - seen)}')
+    reports.append({'game': game, 'fixture': 'tf1-realtime-lights', 'issues': []})
+
+
+def inventory_payload(bsp, inventory, index):
+    entry = inventory['lumps'][index]
+    external = next((e for e in entry['external_files'] if e['variant'] == 'default'), None)
+    if external:
+        return Path(external['path']).read_bytes()
+    with Path(bsp).open('rb') as stream:
+        stream.seek(entry['offset'])
+        return stream.read(entry['length'])
+
+
 def tf1_shadow_fixture(folder, command, reports, game):
     path = folder / 'tf1-shadow-casters.map'
     path.write_text('{\n"classname" "worldspawn"\n"_bouncescale" "0"\n' +
@@ -1330,6 +1397,7 @@ def main():
             portal_budget_fixture(folder, command, reports, game)
         if game == 'titanfallonline':
             tf1_shadow_fixture(folder, command, reports, game)
+            tf1_realtime_light_fixture(folder, command, reports, game)
         if game == "titanfall2":
             lightmap_split_fixture(folder, command, reports, game)
             submodel_path = folder / 'submodel-bounds.map'

@@ -155,7 +155,7 @@ TF1 maps with light entities run the Titanfall 2 bake (see
 | --- | --- |
 | WORLD_LIGHTS (v1) | The TF2 v3 record without its last 12 bytes (100 bytes) |
 | LIGHTMAP_HEADERS, LIGHTMAP_DATA_SKY | As TF2: 8 bytes per texel, SKY A then B |
-| LIGHTMAP_DATA_REAL_TIME_LIGHTS | **4 bytes per texel**, no RTL pages; written as 255 (unshadowed) |
+| LIGHTMAP_DATA_REAL_TIME_LIGHTS | **4 bytes per texel**, no RTL pages: up to four one-byte hardware light indices, 255 = unused |
 | LIGHTPROBES, LIGHTPROBE_TREE | As TF2 |
 | LIGHTPROBE_REFERENCES | 16 bytes: position and probe index, no trailing word |
 | STATIC_PROP_LIGHTPROBE_INDICES | One probe per static prop, as TF2 |
@@ -164,10 +164,35 @@ TF1 maps with light entities run the Titanfall 2 bake (see
 TF1 has no LIGHTPROBE_PARENT_INFOS, SHADOW_ENVIRONMENTS or RTL page lumps. Static
 prop object ids follow straight after the world meshes, not TF2's 64-aligned base.
 
-The RTL texel's meaning is unresolved. Its bytes are mostly 255: 81% of sampled
-Angel City texels are entirely 255, and the rest look like shadow-mask values.
-Comparing used bytes with nearby realtime lights did not identify which lights
-the slots belong to. Writing 255 keeps realtime lights unshadowed by the bake.
+**The RTL texel holds light indices, not shadow masks** (decoded 20 November
+2026 from 1.79 million mapped Angel City texels):
+
+- Each byte is a **hardware light index**: the WORLD_LIGHTS index minus the one
+  ambient before it, the numbering TF2's RTL pages use. Unused slots are 255
+  and slots fill in order (100% of texels).
+- Every used byte names a realtime point or spot light (flags 30 or 14), never
+  the sun (hardware 0, shadowed by CSM) or a baked light (flags 6).
+- Slot *k* is used on 99–100% of texels reached by more than *k* shadowed
+  realtime lights, and almost never otherwise. Lights blocked from a texel get
+  no slot. Slot order is neither by index nor by contribution.
+- So these are TF2's RTL A slots with absolute indices and no page. Retail TF1
+  orders realtime lights straight after the ambient and sun (Angel City: 200 of
+  676 lights) so their indices fit in a byte.
+
+The writer translates the bake's slot words through its RTL pages. In TF1 mode
+the bake gives the sun no slot (its shadowed reach still feeds bounce) and gives
+unshadowed realtime lights one. Slots naming a light past hardware index 254
+are dropped with a warning.
+
+**World-light flags** also follow retail TF1: ambient and sun 0, baked 6,
+realtime 30, realtime without shadows (`"shadow" "0"`) 14. Every TF1 point or
+spot light has bit 2, which TF2's values (4, 28, 56, 104, sun 24) lack.
+
+Before this, the plane was written as all 255, so realtime point and spot lights
+lit nothing on TF1 world surfaces. In a covered room with two realtime lights,
+TFO and R1Delta now show orange and blue pools on the floor and walls, while the
+same BSP with the plane reset to 255 renders black in TFO
+(`.local/respawn/tfo-light-isolation-20261120/run-rtl-room-{new,old,new-r1}`).
 
 ## Vertices and material sorts
 

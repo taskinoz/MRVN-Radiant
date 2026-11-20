@@ -119,6 +119,18 @@ v29 alpha shadow streams therefore reproduce texture cutouts in TFO. Very
 small holes still fall below the cascade's resolution, as expected for any
 shadow map.
 
+## 20 November: realtime lights now light TF1 world surfaces
+
+The v29 realtime-light plane holds per-texel hardware light indices; the
+compiler wrote all 255, so realtime point and spot lights lit nothing on TF1
+world geometry. It now writes the bake's slots as hardware indices, orders
+realtime lights before baked ones, and uses retail TF1 light flags. Details
+and evidence are in [the TF1 lump notes](RESPAWN_TF1_LUMPS.md#lighting). Both
+runtimes light a covered test room from two realtime lights; the all-255
+control is black in TFO. A new `tf1-realtime-lights` compiler regression checks
+flags, order and slot contents. This replaces the "RTL channel decoding" item
+in follow-up task 1.
+
 ## Compiler parity inventory
 
 The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique

@@ -305,8 +305,11 @@ float ApexLegends::LocalLightSpot(const WorldLight_t &light, const Vector3 &dirF
     object id (prop base from LEVEL_INFO + prop index; 1,891 of 5,863 props).
     Node bounds are in light space: z = -sun, x = normalize(sun.y, -sun.x, 0),
     y = z cross x (the rotation fitted on retail TF2 CSM trees). Nodes:
-      word at +0x0C: child count | first child << 8 | 0x40 << 24 (0 for leaves)
-      word at +0x1C: reference count | first reference << 8 | 0x40 << 24
+      word at +0x0C: child count | first child << 8 (22 bits) | bit 30 (0 for leaves)
+      word at +0x1C: reference count | first reference << 8 (22 bits) | bit 30
+    Same on S3-native World's Edge (211,364 nodes) and Firing Range (one root
+    per shadow environment); 0x26 is the subtree total per node up to the
+    last internal node.
     All static props are included, bounded by their editor copy.
 */
 static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
@@ -319,61 +322,62 @@ static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
     x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
     const Vector3 y = vector3_cross(z, x);
 
-    // visRef_t indices are 16-bit, so they index this table of object ids.
     std::vector<uint32_t> ids;
-    std::vector<Shared::visRef_t> refs;
+    std::vector<MinMax> boxes;
     auto add = [&](uint32_t id, const MinMax &bounds) {
-        if (!bounds.valid() || refs.size() >= 0xFFFF) return;
-        Shared::visRef_t &ref = refs.emplace_back();
-        ref.index = static_cast<uint16_t>(ids.size());
-        ids.push_back(id);
+        if (!bounds.valid()) return;
+        MinMax light;
         for (int corner = 0; corner < 8; corner++) {
             const Vector3 p((corner & 1) ? bounds.maxs.x() : bounds.mins.x(),
                             (corner & 2) ? bounds.maxs.y() : bounds.mins.y(),
                             (corner & 4) ? bounds.maxs.z() : bounds.mins.z());
-            ref.minmax.extend(Vector3(vector3_dot(p, x), vector3_dot(p, y), vector3_dot(p, z)));
+            light.extend(Vector3(vector3_dot(p, x), vector3_dot(p, y), vector3_dot(p, z)));
         }
+        ids.push_back(id);
+        boxes.push_back(light);
     };
     for (std::size_t i = 0; i < shadowMeshBounds.size(); i++) add(static_cast<uint32_t>(i), shadowMeshBounds[i]);
     const uint32_t propBase = ApexLegends::Bsp::levelInfo.empty() ? 0 : static_cast<uint32_t>(ApexLegends::Bsp::levelInfo[0].unk3);
     for (const auto &[propIndex, bounds] : ApexLegends::Bsp::staticPropShadowBounds) add(propBase + propIndex, bounds);
 
-    if (refs.empty()) {
+    if (ids.empty()) {
         ApexLegends::Bsp::csmAABBNodes.push_back({});
-        ApexLegends::Bsp::csmNumObjRefsTotalForAabb.push_back(0);
         return;
     }
-    const Shared::visNode_t root = Shared::MakeVisTree(refs, 1e30f);
+    const ApexLegends::ObjTreeNode root = ApexLegends::BuildObjTree(boxes);
 
-    std::function<void(const Shared::visNode_t &, std::size_t)> emit = [&](const Shared::visNode_t &node, std::size_t index) {
+    std::size_t lastInternal = 0;
+    std::function<void(const ApexLegends::ObjTreeNode &, std::size_t)> emit = [&](const ApexLegends::ObjTreeNode &node, std::size_t index) {
         std::size_t total = 0;
-        std::function<void(const Shared::visNode_t &)> count = [&](const Shared::visNode_t &n) {
+        std::function<void(const ApexLegends::ObjTreeNode &)> count = [&](const ApexLegends::ObjTreeNode &n) {
             total += n.refs.size();
-            for (const Shared::visNode_t &child : n.children) count(child);
+            for (const ApexLegends::ObjTreeNode &child : n.children) count(child);
         };
         count(node);
         const uint32_t firstRef = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
-        for (const Shared::visRef_t &ref : node.refs) ApexLegends::Bsp::csmObjRefsTotal.push_back(ids[ref.index]);
-        if (node.refs.size() > 0xFF || firstRef > 0xFFFF) Error("CSM tree node exceeds its 8-bit count or 16-bit reference offset");
+        for (uint32_t r : node.refs) ApexLegends::Bsp::csmObjRefsTotal.push_back(ids[r]);
+        if (node.refs.size() > 0xFF || firstRef >= ApexLegends::kTreeIndexLimit) Error("CSM tree node exceeds its 8-bit count or 22-bit reference offset");
         {
             CSMAABBNode_t &out = ApexLegends::Bsp::csmAABBNodes[index];
-            out.mins = node.minmax.mins;
-            out.maxs = node.minmax.maxs;
+            out.mins = node.bounds.mins;
+            out.maxs = node.bounds.maxs;
             out.child0 = 0;
             out.child1 = static_cast<uint32_t>(node.refs.size()) | (firstRef << 8) | 0x40000000u;
         }
+        if (ApexLegends::Bsp::csmNumObjRefsTotalForAabb.size() <= index) ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(index + 1);
         ApexLegends::Bsp::csmNumObjRefsTotalForAabb[index] = static_cast<uint32_t>(total);
         if (node.children.empty()) return;
+        lastInternal = std::max(lastInternal, index);
         const std::size_t first = ApexLegends::Bsp::csmAABBNodes.size();
-        if (node.children.size() > 0xFF || first > 0xFFFF) Error("CSM tree exceeds its 8-bit child count or 16-bit child index");
+        if (node.children.size() > 0xFF || first + node.children.size() >= ApexLegends::kTreeIndexLimit) Error("CSM tree exceeds its 8-bit child count or 22-bit child index");
         ApexLegends::Bsp::csmAABBNodes[index].child0 = static_cast<uint32_t>(node.children.size()) | (static_cast<uint32_t>(first) << 8) | 0x40000000u;
         ApexLegends::Bsp::csmAABBNodes.resize(first + node.children.size());
-        ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(first + node.children.size());
         for (std::size_t i = 0; i < node.children.size(); i++) emit(node.children[i], first + i);
     };
     ApexLegends::Bsp::csmAABBNodes.emplace_back();
-    ApexLegends::Bsp::csmNumObjRefsTotalForAabb.emplace_back();
     emit(root, 0);
+    // 0x26 holds subtree totals up to the last internal node (retail S3).
+    ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(lastInternal + 1);
 }
 
 /*

@@ -293,6 +293,17 @@ namespace ApexLegends {
     void        AssignMeshCubemaps();
     void        BuildLightOccluders(const entity_t &world);
 
+    // Object tree shared by the visibility (0x77) and CSM (0x63) trees:
+    // median splits on the longest axis, leaves of at most 64 references,
+    // each reference owned by one node. refs index the caller's box table.
+    struct ObjTreeNode {
+        MinMax                   bounds;
+        std::vector<uint32_t>    refs;
+        std::vector<ObjTreeNode> children;
+    };
+    ObjTreeNode BuildObjTree(const std::vector<MinMax> &boxes);
+    constexpr uint32_t kTreeIndexLimit = 1u << 22;
+
     /*
         vector3_from_angles
         Converts Source engine style angles (pitch, yaw, roll) to a direction vector
@@ -445,15 +456,18 @@ namespace ApexLegends {
     };
 
     // 0x77
+    // Retail S3 (World's Edge: 135,338 nodes, 539,490 references) stores
+    // 22-bit indices; bit 30 is set on internal nodes (word one) and on
+    // most nodes (word two), which reads as 0x40 in the top byte of small maps.
     struct CellAABBNode_t {
         Vector3   mins;
         uint32_t  childCount : 8;
-        uint32_t  firstChild : 16;
-        uint32_t  childFlags : 8;
+        uint32_t  firstChild : 22;
+        uint32_t  childFlags : 2;
         Vector3   maxs;
         uint32_t  objRefCount : 8;
-        uint32_t  objRefOffset : 16;
-        uint32_t  objRefFlags : 8;
+        uint32_t  objRefOffset : 22;
+        uint32_t  objRefFlags : 2;
         
         CellAABBNode_t() : mins(), childCount(0), firstChild(0), childFlags(0),
                           maxs(), objRefCount(0), objRefOffset(0), objRefFlags(0) {}

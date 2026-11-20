@@ -46,29 +46,49 @@
     - one root per cell at node index = cell index (one cell here: node 0);
     - internal nodes first, then leaves; a node's children are contiguous and
       either all internal or all leaves (never mixed);
-    - word at +0x0C: child count | first child << 8 | (0x40 << 24 if internal);
-      word at +0x1C: own reference count | first reference << 8 | 0x40 << 24;
+    - word at +0x0C: child count | first child << 8 (22 bits) | bit 30 if internal;
+      word at +0x1C: own reference count | first reference << 8 (22 bits) | bit 30;
     - references are in depth-first order, so a subtree's references are
-      contiguous from its node's first reference; 0x25[i] is the subtree total;
+      contiguous from its node's first reference; 0x25[i] is node i's subtree
+      total for nodes up to the last internal one (here the internal nodes);
     - 0x27 is 0xFFFF or 0 per node in retail; 0xFFFF is written.
+    Checked on S3-native World's Edge and Firing Range (265 and 25 cells, one
+    root each); internal-first ordering is a choice, retail interleaves.
     Object ids: world meshes by index, static props from the 64-aligned prop
     base (LEVEL_INFO). The fork wrote one +/-50000 root holding every
     reference in an 8-bit count, which drops objects past 255.
 */
-namespace {
-struct VisTreeNode {
-    MinMax bounds;
-    std::vector<uint32_t> refs;          // indices into the id/bounds tables
-    std::vector<VisTreeNode> children;
-};
-
-VisTreeNode ConvertVisNode(const Shared::visNode_t &node) {
-    VisTreeNode out;
-    out.bounds = node.minmax;
-    for (const Shared::visRef_t &ref : node.refs) out.refs.push_back(ref.index);
-    for (const Shared::visNode_t &child : node.children) out.children.push_back(ConvertVisNode(child));
-    return out;
+/*
+    BuildObjTree
+    See apex_legends.h. Each subtree's references are later written
+    contiguously, so the tree needs no duplicated references.
+*/
+ApexLegends::ObjTreeNode ApexLegends::BuildObjTree(const std::vector<MinMax> &boxes) {
+    std::vector<uint32_t> all(boxes.size());
+    for (uint32_t i = 0; i < all.size(); i++) all[i] = i;
+    std::function<ObjTreeNode(std::vector<uint32_t>)> build = [&](std::vector<uint32_t> refs) {
+        ObjTreeNode node;
+        for (uint32_t r : refs) node.bounds.extend(boxes[r]);
+        if (refs.size() <= 64) {
+            node.refs = std::move(refs);
+            return node;
+        }
+        int axis = 0;
+        for (int k = 1; k < 3; k++)
+            if (node.bounds.maxs[k] - node.bounds.mins[k] > node.bounds.maxs[axis] - node.bounds.mins[axis]) axis = k;
+        std::stable_sort(refs.begin(), refs.end(), [&](uint32_t x, uint32_t y) {
+            return boxes[x].mins[axis] + boxes[x].maxs[axis] < boxes[y].mins[axis] + boxes[y].maxs[axis];
+        });
+        const auto middle = refs.begin() + refs.size() / 2;
+        node.children.push_back(build(std::vector<uint32_t>(refs.begin(), middle)));
+        node.children.push_back(build(std::vector<uint32_t>(middle, refs.end())));
+        return node;
+    };
+    return build(std::move(all));
 }
+
+namespace {
+using VisTreeNode = ApexLegends::ObjTreeNode;
 
 bool IsLeafNode(const VisTreeNode &node) { return node.children.empty(); }
 
@@ -99,13 +119,8 @@ void ApexLegends::EmitVisTree() {
     // Object table: world meshes, then static props.
     std::vector<uint32_t> ids;
     std::vector<MinMax> bounds;
-    std::vector<Shared::visRef_t> refs;
     auto add = [&](uint32_t id, const MinMax &box) {
         if (!box.valid()) return;
-        if (refs.size() >= 0xFFFF) Error("More than 65535 visibility objects");
-        Shared::visRef_t &ref = refs.emplace_back();
-        ref.index = static_cast<uint16_t>(ids.size());
-        ref.minmax = box;
         ids.push_back(id);
         bounds.push_back(box);
     };
@@ -119,10 +134,7 @@ void ApexLegends::EmitVisTree() {
     for (const auto &[propIndex, box] : ApexLegends::Bsp::staticPropShadowBounds) add(firstPropObjID + propIndex, box);
 
     VisTreeNode root;
-    if (!refs.empty()) {
-        Shared::visNode_t shared = Shared::MakeVisTree(refs, 1e30f);
-        root = ConvertVisNode(shared);
-    }
+    if (!ids.empty()) root = ApexLegends::BuildObjTree(bounds);
     // The root must be internal so that it sits at node 0 with 0x25[0].
     if (IsLeafNode(root)) {
         VisTreeNode leaf = std::move(root);
@@ -148,7 +160,7 @@ void ApexLegends::EmitVisTree() {
     }
     const std::size_t leafBase = internal.size();
     const std::size_t nodeCount = internal.size() + leaves.size();
-    if (nodeCount > 0xFFFF) Error("Visibility tree has more than 65535 nodes");
+    if (nodeCount >= ApexLegends::kTreeIndexLimit) Error("Visibility tree exceeds its 22-bit node index");
 
     // References depth-first; each node's own references precede its subtree's.
     std::unordered_map<const VisTreeNode *, std::pair<uint32_t, uint32_t>> span;  // first ref, subtree total
@@ -164,7 +176,7 @@ void ApexLegends::EmitVisTree() {
         span[&node] = {first, static_cast<uint32_t>(ApexLegends::Bsp::objReferences.size()) - first};
     };
     order(root);
-    if (ApexLegends::Bsp::objReferences.size() > 0xFFFF) Error("Visibility tree has more than 65535 references");
+    if (ApexLegends::Bsp::objReferences.size() >= ApexLegends::kTreeIndexLimit) Error("Visibility tree exceeds its 22-bit reference index");
 
     ApexLegends::Bsp::cellAABBNodes.resize(nodeCount);
     auto write = [&](const VisTreeNode &node, std::size_t index, bool isInternal, std::size_t internalIndex) {
@@ -174,12 +186,12 @@ void ApexLegends::EmitVisTree() {
         if (node.refs.size() > 0xFF) Error("Visibility node has more than 255 references");
         out.objRefCount = static_cast<uint32_t>(node.refs.size());
         out.objRefOffset = span[&node].first;
-        out.objRefFlags = 0x40;
+        out.objRefFlags = 1;
         if (isInternal) {
             const auto &[start, leafBlock] = firstChild[internalIndex];
             out.childCount = static_cast<uint32_t>(node.children.size());
             out.firstChild = static_cast<uint32_t>(leafBlock ? leafBase + start : start);
-            out.childFlags = 0x40;
+            out.childFlags = 1;
         } else {
             out.childCount = 0;
             out.firstChild = 0;
@@ -233,7 +245,7 @@ int ApexLegends::EmitVisChildrenOfTreeNode(Shared::visNode_t node) {
         bn.mins = n.minmax.mins;
         bn.childCount = n.children.size();
         bn.firstChild = 0;  // Will be set later if there are children
-        bn.childFlags = 0x40;
+        bn.childFlags = 1;
         
         // Initialize objRef fields - must be explicitly zeroed
         bn.objRefCount = 0;
@@ -243,7 +255,7 @@ int ApexLegends::EmitVisChildrenOfTreeNode(Shared::visNode_t node) {
         if (n.refs.size()) {
             bn.objRefOffset = ApexLegends::EmitObjReferences(n);
             bn.objRefCount = n.refs.size();
-            bn.objRefFlags = 0x40;
+            bn.objRefFlags = 1;
         }
     }
 

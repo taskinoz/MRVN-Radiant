@@ -629,6 +629,7 @@ namespace ApexLegends {
         
         // CSM lumps (0x26, 0x63-0x64)
         inline std::vector<CSMAABBNode_t>            csmAABBNodes;           // Lump 0x63
+        inline std::vector<std::pair<uint32_t, MinMax>> staticPropShadowBounds;  // prop index, world bounds (CSM tree)
         inline std::vector<uint32_t>                 csmObjRefsTotal;        // Lump 0x64
         inline std::vector<uint32_t>                 csmNumObjRefsTotalForAabb;  // Lump 0x26 - cumulative obj ref count per node
 

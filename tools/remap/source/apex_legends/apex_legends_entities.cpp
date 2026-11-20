@@ -280,8 +280,9 @@ void ApexLegends::EmitStaticProp(entity_t &e) {
     prop.setDressLevel = 0;           // Default LOD level
 
     // Compute world-space AABB for collision BVH integration
-    // Only register if the prop has collision (solid != 0)
-    if (prop.solid != 0) {
+    // World bounds for every prop (visibility and CSM trees); collision is
+    // registered only for solid props.
+    {
         // Compute local-space AABB from model mesh vertices
         MinMax localBounds;
         localBounds.mins = Vector3( FLT_MAX,  FLT_MAX,  FLT_MAX);
@@ -350,7 +351,8 @@ void ApexLegends::EmitStaticProp(entity_t &e) {
             }
 
             uint32_t propIndex = static_cast<uint32_t>(ApexLegends::Bsp::gameLumpProps.size() - 1);
-            ApexLegends::AddCollisionStaticProp(propIndex, worldBounds);
+            if (prop.solid != 0) ApexLegends::AddCollisionStaticProp(propIndex, worldBounds);
+            ApexLegends::Bsp::staticPropShadowBounds.emplace_back(propIndex, worldBounds);
         }
     }
 }

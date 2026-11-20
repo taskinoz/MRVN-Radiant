@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <functional>
 
 /*
     EmitCubemaps
@@ -297,6 +298,85 @@ float ApexLegends::LocalLightSpot(const WorldLight_t &light, const Vector3 &dirF
 }
 
 /*
+    EmitCsmTree
+    Cascaded shadow object tree (0x63) and its references (0x64), as in
+    retail S3 mp_rr_aqueduct: the references are uint32 and name every
+    shadow mesh by index (83 of 83) plus shadow-casting static props by
+    object id (prop base from LEVEL_INFO + prop index; 1,891 of 5,863 props).
+    Node bounds are in light space: z = -sun, x = normalize(sun.y, -sun.x, 0),
+    y = z cross x (the rotation fitted on retail TF2 CSM trees). Nodes:
+      word at +0x0C: child count | first child << 8 | 0x40 << 24 (0 for leaves)
+      word at +0x1C: reference count | first reference << 8 | 0x40 << 24
+    All static props are included, bounded by their editor copy.
+*/
+static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
+    Vector3 sun(0, 0, -1);
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        if (light.type == emit_skylight) { sun = light.normal; break; }
+    }
+    const Vector3 z = vector3_normalised(sun * -1.0f);
+    Vector3 x(sun.y(), -sun.x(), 0);
+    x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
+    const Vector3 y = vector3_cross(z, x);
+
+    // visRef_t indices are 16-bit, so they index this table of object ids.
+    std::vector<uint32_t> ids;
+    std::vector<Shared::visRef_t> refs;
+    auto add = [&](uint32_t id, const MinMax &bounds) {
+        if (!bounds.valid() || refs.size() >= 0xFFFF) return;
+        Shared::visRef_t &ref = refs.emplace_back();
+        ref.index = static_cast<uint16_t>(ids.size());
+        ids.push_back(id);
+        for (int corner = 0; corner < 8; corner++) {
+            const Vector3 p((corner & 1) ? bounds.maxs.x() : bounds.mins.x(),
+                            (corner & 2) ? bounds.maxs.y() : bounds.mins.y(),
+                            (corner & 4) ? bounds.maxs.z() : bounds.mins.z());
+            ref.minmax.extend(Vector3(vector3_dot(p, x), vector3_dot(p, y), vector3_dot(p, z)));
+        }
+    };
+    for (std::size_t i = 0; i < shadowMeshBounds.size(); i++) add(static_cast<uint32_t>(i), shadowMeshBounds[i]);
+    const uint32_t propBase = ApexLegends::Bsp::levelInfo.empty() ? 0 : static_cast<uint32_t>(ApexLegends::Bsp::levelInfo[0].unk3);
+    for (const auto &[propIndex, bounds] : ApexLegends::Bsp::staticPropShadowBounds) add(propBase + propIndex, bounds);
+
+    if (refs.empty()) {
+        ApexLegends::Bsp::csmAABBNodes.push_back({});
+        ApexLegends::Bsp::csmNumObjRefsTotalForAabb.push_back(0);
+        return;
+    }
+    const Shared::visNode_t root = Shared::MakeVisTree(refs, 1e30f);
+
+    std::function<void(const Shared::visNode_t &, std::size_t)> emit = [&](const Shared::visNode_t &node, std::size_t index) {
+        std::size_t total = 0;
+        std::function<void(const Shared::visNode_t &)> count = [&](const Shared::visNode_t &n) {
+            total += n.refs.size();
+            for (const Shared::visNode_t &child : n.children) count(child);
+        };
+        count(node);
+        const uint32_t firstRef = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
+        for (const Shared::visRef_t &ref : node.refs) ApexLegends::Bsp::csmObjRefsTotal.push_back(ids[ref.index]);
+        if (node.refs.size() > 0xFF || firstRef > 0xFFFF) Error("CSM tree node exceeds its 8-bit count or 16-bit reference offset");
+        {
+            CSMAABBNode_t &out = ApexLegends::Bsp::csmAABBNodes[index];
+            out.mins = node.minmax.mins;
+            out.maxs = node.minmax.maxs;
+            out.child0 = 0;
+            out.child1 = static_cast<uint32_t>(node.refs.size()) | (firstRef << 8) | 0x40000000u;
+        }
+        ApexLegends::Bsp::csmNumObjRefsTotalForAabb[index] = static_cast<uint32_t>(total);
+        if (node.children.empty()) return;
+        const std::size_t first = ApexLegends::Bsp::csmAABBNodes.size();
+        if (node.children.size() > 0xFF || first > 0xFFFF) Error("CSM tree exceeds its 8-bit child count or 16-bit child index");
+        ApexLegends::Bsp::csmAABBNodes[index].child0 = static_cast<uint32_t>(node.children.size()) | (static_cast<uint32_t>(first) << 8) | 0x40000000u;
+        ApexLegends::Bsp::csmAABBNodes.resize(first + node.children.size());
+        ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(first + node.children.size());
+        for (std::size_t i = 0; i < node.children.size(); i++) emit(node.children[i], first + i);
+    };
+    ApexLegends::Bsp::csmAABBNodes.emplace_back();
+    ApexLegends::Bsp::csmNumObjRefsTotalForAabb.emplace_back();
+    emit(root, 0);
+}
+
+/*
     EmitShadowMeshes
     Generates shadow mesh data from the world geometry.
     Shadow meshes are simplified versions of world geometry used for cascaded shadow maps.
@@ -339,6 +419,7 @@ void ApexLegends::EmitShadowMeshes() {
     
     // Calculate world bounds for CSM AABB using MinMax class
     MinMax worldBounds;
+    std::vector<MinMax> shadowMeshBounds;
     
     // Iterate through world meshes and generate shadow geometry
     for (int32_t meshIdx = worldModel.meshIndex; meshIdx < worldModel.meshIndex + worldModel.meshCount; meshIdx++) {
@@ -374,6 +455,7 @@ void ApexLegends::EmitShadowMeshes() {
         
         // Map from original vertex index to shadow vertex index
         std::unordered_map<uint16_t, uint16_t> vertexRemap;
+        MinMax shadowBounds;
         
         // Process indices for this mesh
         uint32_t indexStart = mesh.triOffset;
@@ -445,6 +527,7 @@ void ApexLegends::EmitShadowMeshes() {
                 
                 // Update world bounds
                 worldBounds.extend(pos);
+                shadowBounds.extend(pos);
                 
                 ApexLegends::Bsp::shadowMeshOpaqueVerts.push_back(pos);
                 ApexLegends::Bsp::shadowMeshIndices.push_back(newIdx);
@@ -461,55 +544,15 @@ void ApexLegends::EmitShadowMeshes() {
             shadowMesh.materialSortIdx = 0xFFFF;  // No material
             
             ApexLegends::Bsp::shadowMeshes.push_back(shadowMesh);
+            shadowMeshBounds.push_back(shadowBounds);
             totalTriangles += shadowTriCount;
         }
     }
     
     totalVertices = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size());
     
-    // Create CSM object references - one reference per shadow mesh
-    // The CSM system uses this to know which meshes to render for shadows
-    for (uint32_t i = 0; i < ApexLegends::Bsp::shadowMeshes.size(); i++) {
-        ApexLegends::Bsp::csmObjRefsTotal.push_back(i);
-    }
+    EmitCsmTree(shadowMeshBounds);
 
-    // Force large bounds to disable culling for debugging
-    Vector3 largeMin(-50000.0f, -50000.0f, -50000.0f);
-    Vector3 largeMax(50000.0f, 50000.0f, 50000.0f);
-    
-    // Create a single root CSM AABB node that encompasses all geometry
-    if (!ApexLegends::Bsp::shadowMeshOpaqueVerts.empty()) {
-        // Create root node with world bounds
-        CSMAABBNode_t rootNode = {};
-
-        //TODO: Use actual world bounds once CSM culling is verified working
-        rootNode.mins = largeMin; //worldBounds.mins;
-        rootNode.maxs = largeMax; //worldBounds.maxs;
-        
-        // CSM AABB node format (based on engine decompilation):
-        // child0 (offset 0x0C):
-        //   - Bits 0-7: Number of child nodes (0 for leaf)
-        //   - Bits 8-31: First child node index
-        // child1 (offset 0x1C):
-        //   - Bits 0-7: Object ref count (for leaf nodes when child0 low byte is 0)
-        //   - Bits 8-30: First obj ref index
-        //
-        // For a leaf node: child0 = 0, child1 = (startIndex << 8) | count
-        
-        uint32_t objRefCount = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
-        uint32_t startIndex = 0;
-        
-        rootNode.child0 = 0;  // 0 children (leaf node)
-        rootNode.child1 = (startIndex << 8) | (objRefCount & 0xFF);  // start index in high bits, count in low byte
-        
-        ApexLegends::Bsp::csmAABBNodes.push_back(rootNode);
-        
-        // numObjRefsTotalForAabb is used for internal nodes (when child0 low byte > 0)
-        // For leaf nodes the count comes from child1's low byte, but we still need
-        // an entry in this array for each node
-        ApexLegends::Bsp::csmNumObjRefsTotalForAabb.push_back(objRefCount);
-    }
-    
     Sys_Printf("  %zu shadow meshes (%u tris, %u verts, %zu CSM nodes, %zu CSM refs)\n",
         ApexLegends::Bsp::shadowMeshes.size(), totalTriangles, totalVertices,
         ApexLegends::Bsp::csmAABBNodes.size(), ApexLegends::Bsp::csmObjRefsTotal.size());

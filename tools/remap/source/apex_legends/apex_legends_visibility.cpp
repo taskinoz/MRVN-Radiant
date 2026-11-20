@@ -32,73 +32,169 @@
     - Cell AABB Fade Dists lump (0x27): Fade distances for LOD/streaming
 */
 
+#include <functional>
+#include <unordered_map>
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include "../model.h"
 
 /*
     EmitVisTree
-    Emits the vistree to the bsp file
-    
-    Generates:
-    - cellAABBNodes (lump 0x77): BVH nodes for visibility culling
-    - objReferences (lump 0x78): Object reference indices
-    - objReferenceBounds (lump 0x79): Bounds per object reference
-    - cellAABBNumObjRefsTotal (lump 0x25): Cumulative obj ref count per node
-    - cellAABBFadeDists (lump 0x27): Fade distances for LOD/streaming
+    Object visibility tree: cell AABB nodes (0x77), object references (0x78),
+    their bounds (0x79), per-internal-node subtree totals (0x25) and a u16 per
+    node (0x27). Layout measured from retail S3 mp_rr_aqueduct:
+    - one root per cell at node index = cell index (one cell here: node 0);
+    - internal nodes first, then leaves; a node's children are contiguous and
+      either all internal or all leaves (never mixed);
+    - word at +0x0C: child count | first child << 8 | (0x40 << 24 if internal);
+      word at +0x1C: own reference count | first reference << 8 | 0x40 << 24;
+    - references are in depth-first order, so a subtree's references are
+      contiguous from its node's first reference; 0x25[i] is the subtree total;
+    - 0x27 is 0xFFFF or 0 per node in retail; 0xFFFF is written.
+    Object ids: world meshes by index, static props from the 64-aligned prop
+    base (LEVEL_INFO). The fork wrote one +/-50000 root holding every
+    reference in an 8-bit count, which drops objects past 255.
 */
+namespace {
+struct VisTreeNode {
+    MinMax bounds;
+    std::vector<uint32_t> refs;          // indices into the id/bounds tables
+    std::vector<VisTreeNode> children;
+};
+
+VisTreeNode ConvertVisNode(const Shared::visNode_t &node) {
+    VisTreeNode out;
+    out.bounds = node.minmax;
+    for (const Shared::visRef_t &ref : node.refs) out.refs.push_back(ref.index);
+    for (const Shared::visNode_t &child : node.children) out.children.push_back(ConvertVisNode(child));
+    return out;
+}
+
+bool IsLeafNode(const VisTreeNode &node) { return node.children.empty(); }
+
+// No child block mixes leaves and internal nodes: wrap leaf children of a
+// node that also has internal children in single-child internal nodes.
+void NormaliseVisNode(VisTreeNode &node) {
+    for (VisTreeNode &child : node.children) NormaliseVisNode(child);
+    bool anyInternal = false, anyLeaf = false;
+    for (const VisTreeNode &child : node.children) (IsLeafNode(child) ? anyLeaf : anyInternal) = true;
+    if (!(anyInternal && anyLeaf)) return;
+    for (VisTreeNode &child : node.children) {
+        if (!IsLeafNode(child)) continue;
+        VisTreeNode wrapper;
+        wrapper.bounds = child.bounds;
+        wrapper.children.push_back(std::move(child));
+        child = std::move(wrapper);
+    }
+}
+}
+
 void ApexLegends::EmitVisTree() {
-    Shared::visNode_t &root = Shared::visRoot;
+    ApexLegends::Bsp::cellAABBNodes.clear();
+    ApexLegends::Bsp::objReferences.clear();
+    ApexLegends::Bsp::objReferenceBounds.clear();
+    ApexLegends::Bsp::cellAABBNumObjRefsTotal.clear();
+    ApexLegends::Bsp::cellAABBFadeDists.clear();
 
-    //TODO: Use actual world bounds once culling is verified working
-    // Force large bounds to disable culling for debugging
-    Vector3 largeMin(-50000.0f, -50000.0f, -50000.0f);
-    Vector3 largeMax(50000.0f, 50000.0f, 50000.0f);
-
-    // Compute firstPropObjID: aligned up to 64 from total mesh count
-    uint32_t totalMeshes = static_cast<uint32_t>(Shared::meshes.size());
-    uint32_t firstPropObjID = (totalMeshes + 63) & ~63u;
-    uint32_t numProps = static_cast<uint32_t>(ApexLegends::Bsp::gameLumpProps.size());
-    uint32_t totalObjRefs = static_cast<uint32_t>(Shared::visRefs.size()) + numProps;
-
-    ApexLegends::CellAABBNode_t &bn = ApexLegends::Bsp::cellAABBNodes.emplace_back();
-    bn.maxs = largeMax;
-    bn.mins = largeMin;
-    bn.firstChild = 0;  // No children - put all refs in root
-    bn.childCount = 0;
-    bn.childFlags = 0x40;
-    
-    // Put ALL references (meshes + props) directly in the root node
-    bn.objRefOffset = 0;
-    bn.objRefCount = totalObjRefs;
-    bn.objRefFlags = 0x40;
-    
-    // Emit mesh references with large bounds and fade distances
-    for (Shared::visRef_t &ref : Shared::visRefs) {
-        Titanfall::ObjReferenceBounds_t &rb = ApexLegends::Bsp::objReferenceBounds.emplace_back();
-        rb.maxs = largeMax;
-        rb.mins = largeMin;
-
-        ApexLegends::Bsp::objReferences.emplace_back(ref.index);
-        
-        // Fade distance: 0xFFFF = maximum draw distance (no fade)
-        ApexLegends::Bsp::cellAABBFadeDists.push_back(0xFFFF);
+    // Object table: world meshes, then static props.
+    std::vector<uint32_t> ids;
+    std::vector<MinMax> bounds;
+    std::vector<Shared::visRef_t> refs;
+    auto add = [&](uint32_t id, const MinMax &box) {
+        if (!box.valid()) return;
+        if (refs.size() >= 0xFFFF) Error("More than 65535 visibility objects");
+        Shared::visRef_t &ref = refs.emplace_back();
+        ref.index = static_cast<uint16_t>(ids.size());
+        ref.minmax = box;
+        ids.push_back(id);
+        bounds.push_back(box);
+    };
+    for (std::size_t i = 0; i < Shared::meshes.size(); i++) {
+        MinMax box = Shared::meshes[i].minmax;
+        box.mins -= Vector3(1.0f);
+        box.maxs += Vector3(1.0f);
+        add(static_cast<uint32_t>(i), box);
     }
+    const uint32_t firstPropObjID = (static_cast<uint32_t>(Shared::meshes.size()) + 63) & ~63u;
+    for (const auto &[propIndex, box] : ApexLegends::Bsp::staticPropShadowBounds) add(firstPropObjID + propIndex, box);
 
-    // Emit static prop references
-    for (uint32_t i = 0; i < numProps; i++) {
-        Titanfall::ObjReferenceBounds_t &rb = ApexLegends::Bsp::objReferenceBounds.emplace_back();
-        rb.maxs = largeMax;
-        rb.mins = largeMin;
-
-        ApexLegends::Bsp::objReferences.emplace_back(firstPropObjID + i);
-
-        ApexLegends::Bsp::cellAABBFadeDists.push_back(0xFFFF);
+    VisTreeNode root;
+    if (!refs.empty()) {
+        Shared::visNode_t shared = Shared::MakeVisTree(refs, 1e30f);
+        root = ConvertVisNode(shared);
     }
-    
-    // Emit cumulative obj ref count for each AABB node
-    // For a single root node, this is just the total count
-    ApexLegends::Bsp::cellAABBNumObjRefsTotal.push_back(totalObjRefs);
+    // The root must be internal so that it sits at node 0 with 0x25[0].
+    if (IsLeafNode(root)) {
+        VisTreeNode leaf = std::move(root);
+        root = VisTreeNode();
+        root.bounds = leaf.bounds;
+        root.children.push_back(std::move(leaf));
+    }
+    if (!root.bounds.valid()) {
+        root.bounds.extend(Vector3(-1, -1, -1));
+        root.bounds.extend(Vector3(1, 1, 1));
+    }
+    NormaliseVisNode(root);
+
+    // Node indices: internal nodes breadth-first from the root, then leaf
+    // blocks in the order their parents were visited.
+    std::vector<const VisTreeNode *> internal{&root}, leaves;
+    std::vector<std::pair<std::size_t, bool>> firstChild;  // per internal node: block start, leaf block?
+    for (std::size_t i = 0; i < internal.size(); i++) {
+        const VisTreeNode &node = *internal[i];
+        const bool leafBlock = IsLeafNode(node.children.front());
+        firstChild.emplace_back(leafBlock ? leaves.size() : internal.size(), leafBlock);
+        for (const VisTreeNode &child : node.children) (leafBlock ? leaves : internal).push_back(&child);
+    }
+    const std::size_t leafBase = internal.size();
+    const std::size_t nodeCount = internal.size() + leaves.size();
+    if (nodeCount > 0xFFFF) Error("Visibility tree has more than 65535 nodes");
+
+    // References depth-first; each node's own references precede its subtree's.
+    std::unordered_map<const VisTreeNode *, std::pair<uint32_t, uint32_t>> span;  // first ref, subtree total
+    std::function<void(const VisTreeNode &)> order = [&](const VisTreeNode &node) {
+        const uint32_t first = static_cast<uint32_t>(ApexLegends::Bsp::objReferences.size());
+        for (uint32_t r : node.refs) {
+            ApexLegends::Bsp::objReferences.push_back(static_cast<int32_t>(ids[r]));
+            Titanfall::ObjReferenceBounds_t &rb = ApexLegends::Bsp::objReferenceBounds.emplace_back();
+            rb.mins = bounds[r].mins;
+            rb.maxs = bounds[r].maxs;
+        }
+        for (const VisTreeNode &child : node.children) order(child);
+        span[&node] = {first, static_cast<uint32_t>(ApexLegends::Bsp::objReferences.size()) - first};
+    };
+    order(root);
+    if (ApexLegends::Bsp::objReferences.size() > 0xFFFF) Error("Visibility tree has more than 65535 references");
+
+    ApexLegends::Bsp::cellAABBNodes.resize(nodeCount);
+    auto write = [&](const VisTreeNode &node, std::size_t index, bool isInternal, std::size_t internalIndex) {
+        ApexLegends::CellAABBNode_t &out = ApexLegends::Bsp::cellAABBNodes[index];
+        out.mins = node.bounds.mins;
+        out.maxs = node.bounds.maxs;
+        if (node.refs.size() > 0xFF) Error("Visibility node has more than 255 references");
+        out.objRefCount = static_cast<uint32_t>(node.refs.size());
+        out.objRefOffset = span[&node].first;
+        out.objRefFlags = 0x40;
+        if (isInternal) {
+            const auto &[start, leafBlock] = firstChild[internalIndex];
+            out.childCount = static_cast<uint32_t>(node.children.size());
+            out.firstChild = static_cast<uint32_t>(leafBlock ? leafBase + start : start);
+            out.childFlags = 0x40;
+        } else {
+            out.childCount = 0;
+            out.firstChild = 0;
+            out.childFlags = 0;
+        }
+    };
+    for (std::size_t i = 0; i < internal.size(); i++) {
+        write(*internal[i], i, true, i);
+        ApexLegends::Bsp::cellAABBNumObjRefsTotal.push_back(span[internal[i]].second);
+    }
+    for (std::size_t i = 0; i < leaves.size(); i++) write(*leaves[i], leafBase + i, false, 0);
+    ApexLegends::Bsp::cellAABBFadeDists.assign(nodeCount, 0xFFFF);
+
+    Sys_Printf("  vis tree: %zu nodes (%zu internal), %zu object references\n",
+               nodeCount, internal.size(), ApexLegends::Bsp::objReferences.size());
 }
 
 /*

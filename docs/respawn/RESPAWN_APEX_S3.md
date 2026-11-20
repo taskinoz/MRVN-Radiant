@@ -107,27 +107,49 @@ and loads and renders. So one output should suit all four seasons. That is
 an inference from matching layouts. S0–S2 have no harness here and are
 **not** natively tested.
 
+## Lighting, shadows and visibility (21 November 2026)
+
+Measured on retail S3 `mp_rr_aqueduct` (S0 Canyonlands where noted),
+cross-checked against the R5 SDK's `dlightprobe_t`, and tested in R5Reloaded.
+The fork had each of these wrong in ways the engine tolerated without
+crashing; what was fixed is listed with its in-game evidence.
+
+| Data | Retail encoding | Fork | In game now |
+| --- | --- | --- | --- |
+| World lights (0x36) | Linear `_light` × brightness/255 (×100000 for `_pbr_falloff 1`); attenuation 1 + b·d + c·d² through (0,1), (d50,0.5), (d0,0), radius d0; flags 0x04 non-PBR, 0x20 PBR, 0x08 realtime, 0x10 no realtime shadows, 0x40 `realtime_shadows 2`, 0x80 `script_tweakable` (also sets 0x08); order ambient, sun, tweakable, realtime shadowed, realtime, static spots, static points. All 359 retail records match. | VRAD attenuation, 0x04 read as "PBR", 0x18 on every light | Matches retail |
+| Mesh records (0x50) | After `triCount`: first vertex, last local vertex, vertex pool \| cubemap << 8, 0, 0, lightmap texel origin x, y, 0 (TF2's layout) | u32 offset, u32 count, type in the wrong field | A vertex count of 0 had made static lights wash the room white |
+| Lightmaps (0x62) | Plane A RGBM `rgb·(a/255·3.984375+0.015625)`, baked static light + ambient fill, no sun; plane B bent sky direction × cbrt(sky visibility), alpha = sun visibility | RGBE in both planes | Coloured static lights with falloff; sun patch and pillar shadow through a sky opening |
+| RTL (0x69, 0x7A), all seasons | Per page: u32 slot plane (four 6-bit slots, page byte), two BC5 visibility textures (slots 0/1, 2/3), one BC4 plane (zero); external sidecars omit the BC4 plane. Pages: 63 u16 hardware indices (world − ambients); 99.96% of retail slot lights lie within range under this reading | Not written | A realtime spot lights the floor with a realtime pillar shadow |
+| Probes (0x65) | 12 SH values, sky vector, sun visibility, 4 weights at +0x20, 4 hardware indices at +0x24 | Indices at +0x18, `0x96` as first index | Format matches; character lighting not yet checked in third person |
+| Visibility (0x77–0x79, 0x25, 0x27) | One root per cell; internal nodes before leaves; unmixed child blocks; depth-first references; 0x25 subtree totals per internal node; 0x27 u16 per node | One ±50000 root, 8-bit count of every reference | 320 barrels all draw (the fork dropped objects past 255) |
+| CSM (0x63, 0x64) | u32 refs: every shadow mesh plus shadow-casting props by object id; light-space node bounds | Shadow meshes only | Barrels cast sun shadows |
+
+Static lights are baked into plane A and probe SH; RTL slots and probe light
+references are used for realtime lights only, as in Titanfall 2. Retail also
+lists static lights in RTL pages and probe references; giving static lights
+only RTL slots did not light surfaces with their colour or falloff, so that
+part of retail behaviour is not reproduced.
+
+Lump 0x61 (S3 only, header flag `0x08`) is a BC7 copy of the two lightmap
+planes, two textures per page; S3 reads the uncompressed form without it.
+
+Lightmap shadow rays use `Respawn::Bake::Occluders` built from opaque world
+brushes (sky brushes let rays out), replacing a scan of every triangle per
+ray. Props and patches do not yet occlude baked light.
+
 ## Open work, in order
 
-1. **Real-time light data (0x69, 0x7A).** Every retail season has it; we
-   write none. S3 loads without it, but lights marked `realtime` probably
-   will not shade lightmapped surfaces correctly. Retail S3 Aqueduct
-   (pages 1024×896 and 1024×904) fits a **per-page planar** layout exactly:
-   for each page, plane A at 4 bytes/texel, B at 2 bytes, C at half a byte
-   (6.5 in total, consuming all 11,980,800 bytes). Plane A matches TF2's RTL
-   A: four 6-bit slots (63 = unused) and a page byte, `0x00ffffff` when no
-   light reaches the texel. B and C hold repeating 3-bit patterns
-   (`0x4924`, `0x2492`, `0x9249`; bytes 7, 36, 73, 146) not yet decoded.
-   Lump 0x7A holds 16-bit light indices (756 bytes). The TF2 baker in
-   `respawn/lightbake.h` already computes slots and visibility and is the
-   starting point.
-2. **Lights in game.** Check point/spot light baking visually and compare
-   with retail intensities.
+1. **Character lighting.** Check probe lighting on a player in third person
+   near static and realtime lights.
+2. **Lightmap quality.** Patch and prop occlusion, bounce light, and filtering
+   of the 32-ray sky term (jagged bands show on some walls).
 3. **Brush entities.** `func_brush`, doors and other movers through the
    `*coll` entity collision path.
-4. **Visibility.** Measure culling with the fork's cells and portals on a
-   large map; the vis tree must stay within its 8-bit reference counts.
-5. **S3 lightmap extension (0x61).** Optional; identify it before emitting.
+4. **Cells and portals.** The object tree is retail-shaped with one cell;
+   measure culling with several cells on a large map. Trees are limited to
+   65,535 nodes and references.
+5. **S3 lightmap extension (0x61).** Optional BC7 copy of the lightmap
+   planes; emit it if a later build needs it.
 6. **S0–S2.** Find a way to run custom maps in those builds, or document
    that the shared layout is the only evidence.
 7. **Navigation.** R5 maps use separate navmesh files; none are generated.

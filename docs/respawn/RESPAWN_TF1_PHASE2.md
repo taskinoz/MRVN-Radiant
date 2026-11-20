@@ -140,6 +140,14 @@ manifest, install notes and zips (see
 folders load in both runtimes. This closes the packaging tool gap; deciding
 what assets a given map may redistribute stays with its author.
 
+## 20 November: crate physics on z=0 floors
+
+The unresolved TFO crate-height result was a compiler defect. Negative-zero
+IVP coordinates on a z=0 floor made crates bounce and wedge into it. The same
+fixture now rests 8 of 8 sequential crate drops upright, as retail Angel City
+does. Drops within about 50 units of the world origin still wedge; see
+[VPhysics](RESPAWN_TF1_LUMPS.md#vphysics-physics_collide) for the controls.
+
 ## Compiler parity inventory
 
 The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique

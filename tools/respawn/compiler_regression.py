@@ -797,6 +797,10 @@ def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
         offset += 4 + solid_size
         if solid[:4] != b"VPHY" or solid[72:76] != b"IVPS":
             raise RuntimeError("VPhysics solid lacks VPHY/IVPS markers")
+        # IVP mishandles -0.0: a z=0 floor stored as y=-0.0 made crates bounce
+        # and wedge into it in TFO. No float in the solid may be negative zero.
+        if any(solid[i:i + 4] == b"\x00\x00\x00\x80" for i in range(28, len(solid) - 3, 4)):
+            raise RuntimeError("VPhysics solid stores a negative-zero float")
         surface = 28
         if struct.unpack_from("<I", solid, surface + 28)[0] >> 8 != solid_size - 28:
             raise RuntimeError("compact surface byte_size does not match the solid")

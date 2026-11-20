@@ -381,6 +381,24 @@ In TFO, grenades dropped on five E1M1 floors came to rest 1.3 units above them
 off and came to rest at 49. `compiler_regression.py` checks that every brush
 becomes a closed ledge with outward triangles and twinned edges.
 
+**Negative zero (fixed 20 November 2026).** IVP mishandles `-0.0`. The
+`(x, -z, y)` conversion turned every point at world z=0 into y=-0.0. Crates
+dropped on such a floor bounced for about three seconds, then froze with their
+real PHY hull 4.7–7.5 units inside it (0 of 8 positions correct). Retail Angel
+City rests the same crate on its floor at every drop height tried. Changing
+only those four coordinates to +0.0 made every crate rest upright at z=0.5;
+the rebuilt compiler gives 8 of 8 correct rests at the same positions. The
+writer now stores every IVP float zero as +0.0, and the compiler regression
+rejects negative zeros in any VPhysics solid. Controls that ruled out other
+causes: world contents set to retail's 33570819 (no change), the TF1 content
+mods enabled (no change), and the floor moved down 4 or 32 units (clean rests).
+
+**Still open:** crates dropped within about 50 units of the world origin still
+wedge into the z=0 floor (3 of 3), while drops 160 units away and on the patch
+rest correctly. Moving the world solid's mass centre from the origin to its
+volume centroid, as retail stores it, did not fix this and made patch drops
+fail, so it was reverted. Evidence: `.local/respawn/phase2-crate-*-20261120/`.
+
 ## Portals
 
 TF1 shares TF2's cell and portal layouts and generator (see

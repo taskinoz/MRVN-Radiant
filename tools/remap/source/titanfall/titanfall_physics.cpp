@@ -43,6 +43,7 @@
 #include <map>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -71,7 +72,15 @@ struct Ledge {
 struct Writer {
     std::vector<uint8_t> bytes;
     std::size_t Reserve(std::size_t n) { const std::size_t at = bytes.size(); bytes.resize(at + n, 0); return at; }
-    template <typename T> void Put(std::size_t at, T value) { std::memcpy(bytes.data() + at, &value, sizeof(T)); }
+    // IVP mishandles negative zero. (x, -z, y) turns every point at world z=0
+    // into y=-0.0; a crate dropped on a z=0 floor then bounced for seconds and
+    // came to rest wedged 7 units into it in TFO, while the same BSP with only
+    // those four coordinates made +0.0 rested upright at z=0.5, as on retail.
+    template <typename T> void Put(std::size_t at, T value) {
+        if constexpr (std::is_floating_point_v<T>)
+            if (value == T(0)) value = T(0);
+        std::memcpy(bytes.data() + at, &value, sizeof(T));
+    }
 };
 
 /* Surface properties. Triangle material indices name entries of the keydata's

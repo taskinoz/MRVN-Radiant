@@ -610,6 +610,15 @@ int BSPMain( Args& args ){
 		while ( args.takeArg( "-tempname" ) ) {
 			strcpy( tempSource, args.takeNext() );
 		}
+		while ( args.takeArg( "-nolightmaps" ) ) {
+			noLightmaps = true;
+		}
+		while ( args.takeArg( "-nolightprobes" ) ) {
+			noLightProbes = true;
+		}
+		while ( args.takeArg( "-singlelightprobe" ) ) {
+			singleLightProbe = true;
+		}
 		while ( args.takeArg( "-nowater" ) ) {
 			Sys_Printf( "Disabling water\n" );
 			nowater = true;
@@ -894,8 +903,8 @@ int BSPMain( Args& args ){
 	/* process in game advertisements */
 	//ProcessAdvertisements();
 
-	/* finish and write bsp */
-	{
+	/* finish and write bsp, unless the game's compile function already did */
+	if ( !g_compileHandledEndBSP ) {
 		REMAP_STAGE( "EndBSPFile" );
 		EndBSPFile( true );
 	}

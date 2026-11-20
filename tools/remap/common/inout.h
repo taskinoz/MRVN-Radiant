@@ -47,6 +47,17 @@ void Sys_Printf( const char *text, ... ) PRINTF_LIKE(1, 2);
 void Sys_FPrintf( int flag, const char *text, ... ) PRINTF_LIKE(2, 3);
 void Sys_Warning( const char *format, ... ) PRINTF_LIKE(1, 2);;
 [[ noreturn ]] void Error( const char *error, ... ) PRINTF_LIKE(1, 2);;
+
+/* Phase and progress reporting used by the Apex Legends compile path.
+   Plain line output; the call signatures follow r5valkyrie/MRVN-Radiant so
+   its compile code can be used unchanged. */
+void Sys_ConsoleInit( const char *mapName, int totalPhases, const char *phaseNames[] );
+void Sys_ConsoleShutdown( double totalSeconds );
+void Sys_PhaseBegin( int phase );   /* 0-based phase index */
+void Sys_PhaseEnd();
+void Sys_ProgressBegin( const char *label, int total );
+void Sys_ProgressUpdate( int current );
+void Sys_ProgressEnd();
 #define ENSURE( condition ) \
 	(void) \
 	( (!!( condition )) || \

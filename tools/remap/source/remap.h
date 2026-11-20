@@ -620,6 +620,8 @@ struct brush_t {
     shaderInfo_t        *contentShader;
     shaderInfo_t        *celShader;            /* :) */
 
+    bool                 noCollision = false;  /* render-only brush (entity key _nocollision) */
+
     /* ydnar: gs mods */
     int                  lightmapSampleSize;   /* jal : entity based _lightmapsamplesize */
     float                lightmapScale;
@@ -1586,6 +1588,7 @@ inline int           numShaderInfo;
 
 inline String512     mapName;  /* ydnar: per-map custom shaders for larger lightmaps */
 inline CopiedString  mapShaderFile;
+inline bool  g_compileHandledEndBSP;  /* the game's compile function already wrote the BSP */
 
 /* can't code */
 inline bool  doingBSP;
@@ -1731,6 +1734,8 @@ inline bool   noStyles;
 // inline int minSampleSize = DEFAULT_LIGHTMAP_MIN_SAMPLE_SIZE;
 inline float  noVertexLighting;
 inline bool   noLightmaps;
+inline bool   noLightProbes;
+inline bool   singleLightProbe;
 inline bool   noGridLighting;
 
 inline bool  noTrace;

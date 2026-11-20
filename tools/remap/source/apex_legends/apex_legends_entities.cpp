@@ -158,14 +158,42 @@ void ApexLegends::EmitEntity(const entity_t &e) {
     Static props are compiled into the GameLump section of the BSP.
     Each prop references a model path and has position/rotation data.
 */
+/*
+    LoadEditorModel()
+    Game models (mdl/....rmdl) cannot be read directly. Try the name as given,
+    then an editor copy under models/ and with an .obj extension, e.g.
+    "mdl/containers/barrel.rmdl" -> "models/mdl/containers/barrel.obj".
+    The game lump still records the name from the entity.
+*/
+static std::vector<const AssMeshWalker*> LoadEditorModel(const char *model) {
+    const std::string name(model);
+    std::vector<std::string> candidates{name, "models/" + name};
+    const std::size_t dot = name.find_last_of('.');
+    const std::size_t slash = name.find_last_of("/\\");
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+        const std::string obj = name.substr(0, dot) + ".obj";
+        candidates.push_back(obj);
+        candidates.push_back("models/" + obj);
+    }
+    for (const std::string &candidate : candidates) {
+        std::vector<const AssMeshWalker*> meshes = LoadModelWalker(candidate.c_str(), 0);
+        if (!meshes.empty()) {
+            if (candidate != name)
+                Sys_FPrintf(SYS_VRB, "  Using editor copy %s for %s\n", candidate.c_str(), model);
+            return meshes;
+        }
+    }
+    return {};
+}
+
 void ApexLegends::EmitStaticProp(entity_t &e) {
     const char *model = e.valueForKey("model");
     int16_t pathIdx = -1;
     MinMax minmax;
 
-    std::vector<const AssMeshWalker*> meshes = LoadModelWalker( model, 0 );
+    std::vector<const AssMeshWalker*> meshes = LoadEditorModel( model );
     if(meshes.empty()) {
-        Sys_Warning("Failed to load model: %s\n", model);
+        Sys_Warning("Failed to load model: %s (no editor copy found)\n", model);
         return;
     }
 

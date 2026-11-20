@@ -112,7 +112,7 @@ def prepare(remap, output):
     rows = stations()
     checks = {'drops': [list(r[0]) for r in rows], 'drop_models': [MODEL] * len(rows),
               'drop_velocities': [list(r[1]) for r in rows], 'drop_angles': [list(r[2]) for r in rows],
-              'drop_wait': 15, 'drop_samples': True,
+              'drop_wait': 25, 'drop_samples': True,
               'labels': [r[6] for r in rows],
               'expect': {'drop_z': [[i, *r[3]] for i, r in enumerate(rows)],
                          'drop_x': [[i, *r[4]] for i, r in enumerate(rows)],

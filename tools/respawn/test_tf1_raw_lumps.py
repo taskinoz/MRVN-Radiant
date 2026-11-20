@@ -1,8 +1,12 @@
 """Original synthetic v29 raw-lump framing and texture name tests."""
+import io
 import struct
 import unittest
+import zipfile
 
-from validate_records import check_tf1_physics, check_tf1_texture_strings
+from game_lump import TF1_PROP
+from validate_records import (check_tf1_game_lump, check_tf1_pakfile, check_tf1_physics,
+                              check_tf1_rtl, check_tf1_texture_strings)
 
 TERMINAL = struct.pack('<4i', -1, -1, 0, 0)
 TETRA = ((0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3))
@@ -93,6 +97,123 @@ class Tf1RawLumpTests(unittest.TestCase):
             self.assertIn(message, str(check_tf1_texture_strings(data, offsets, [])))
         self.assertIn('name index outside', str(check_tf1_texture_strings(b'a\0', [(0,)], textures)))
         self.assertIn('name index outside', str(check_tf1_texture_strings(b'a\0', [(0,)], [(0,0,0,-1)])))
+
+
+BASE = 4096
+
+
+def placement(model=0, origin=(1., 2., 3.), scale=1.):
+    """A retail-shaped v12 placement, keeping its stale u16 pair and lighting origin."""
+    return TF1_PROP.pack(*origin, 0., 90., 0., model, 725, 5008, 6, 4, 0, 0, -1., -1.,
+                         float('nan'), 0., 0., 1., 0, 0, 0, 0, 255, 255, 255, 255,
+                         92959488, scale, 0, 0)
+
+
+def sprp(props=(), names=(b'models/a.mdl',), header=None, leaves=()):
+    body = struct.pack('<I', len(names)) + b''.join(n.ljust(128, b'\0') for n in names)
+    body += struct.pack(f'<I{len(leaves)}H', len(leaves), *leaves)
+    body += struct.pack('<3I', *(header or (len(props),) * 3))
+    return body + b''.join(props)
+
+
+def game_lump(body, version=12, flags=0, ident=b'prps'):
+    return struct.pack('<I4sHHII', 1, ident, flags, version, BASE + 20, len(body)) + body
+
+
+def records(props=0, probes=()):
+    return {123: [(0, 0, 0, props, 0., 0., 0.)], 102: list(probes)}
+
+
+class Tf1GameLumpTests(unittest.TestCase):
+    def test_retail_shape_and_empty_baseline(self):
+        lump = game_lump(sprp([placement(), placement()], header=(2, 1, 1)))
+        self.assertEqual(check_tf1_game_lump(lump, BASE, records(2, [(0,), (1,)])), ([], 2))
+        self.assertEqual(check_tf1_game_lump(game_lump(sprp(names=())), BASE, records()), ([], 0))
+        self.assertEqual(check_tf1_game_lump(b'', BASE, {}), ([], 0))
+
+    def test_framing_version_and_directory(self):
+        for lump in (game_lump(sprp() + b'x'), game_lump(sprp(), version=13),
+                     game_lump(sprp(), flags=1), game_lump(sprp(), ident=b'dprp'),
+                     game_lump(sprp(leaves=(1, 2))[:-4]), struct.pack('<I', 9)):
+            issues, count = check_tf1_game_lump(lump, BASE, records())
+            self.assertTrue(issues)
+            self.assertIsNone(count)
+
+    def test_three_word_header_with_trailing_word_is_rejected(self):
+        # Same length as v12, but the first origin lands in the header.
+        body = struct.pack('<I', 1) + b'models/a.mdl'.ljust(128, b'\0')
+        body += struct.pack('<3I', 0, 1, 1) + placement(origin=(64., 0., 0.)) + struct.pack('<I', 0)
+        self.assertIn('header counts', str(check_tf1_game_lump(game_lump(body), BASE, records(1))))
+
+    def test_names_models_and_placement_values(self):
+        for body, message in ((sprp(names=(b'',)), 'empty or unterminated'),
+                              (sprp(names=(b'm' * 128,)), 'empty or unterminated'),
+                              (sprp([placement(model=1)]), 'model index'),
+                              (sprp([placement(origin=(float('inf'), 0., 0.))]), 'nonfinite'),
+                              (sprp([placement(scale=0.)]), 'scale'),
+                              (sprp([placement(scale=float('nan'))]), 'scale')):
+            self.assertIn(message, str(check_tf1_game_lump(game_lump(body), BASE, {})[0]))
+
+    def test_level_info_and_probe_counts_must_match(self):
+        lump = game_lump(sprp([placement()]))
+        self.assertEqual(check_tf1_game_lump(lump, BASE, records(1))[0], [])
+        self.assertIn('LEVEL_INFO', str(check_tf1_game_lump(lump, BASE, records(2))))
+        self.assertIn('probe count', str(check_tf1_game_lump(lump, BASE, records(1, [(0,), (0,)]))))
+
+
+def stored_zip(files):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w', zipfile.ZIP_STORED) as archive:
+        for name, data in files:
+            archive.writestr(name, data)
+        archive.comment = b'XZP1 0'
+    return stream.getvalue()
+
+
+class Tf1PakfileTests(unittest.TestCase):
+    def test_stored_zip_and_empty_lump(self):
+        self.assertEqual(check_tf1_pakfile(stored_zip([('materials/a.vmt', b'x' * 9), ('b.vtf', b'')])), [])
+        self.assertEqual(check_tf1_pakfile(b''), [])
+
+    def test_compressed_unsafe_and_duplicate_entries(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('a.vmt', b'a' * 100)
+        self.assertIn('compressed', str(check_tf1_pakfile(stream.getvalue())))
+        for names, message in ((['../a'], 'unsafe'), (['/a'], 'unsafe'), (['a', 'A'], 'duplicate')):
+            self.assertIn(message, str(check_tf1_pakfile(stored_zip([(name, b'1') for name in names]))))
+
+    def test_truncation_crc_and_directory_ranges(self):
+        data = stored_zip([('a.vmt', b'hello')])
+        self.assertIn('end-of-central-directory', str(check_tf1_pakfile(data[:-1])))
+        self.assertIn('end-of-central-directory', str(check_tf1_pakfile(data + b'pad')))
+        corrupt = bytearray(data)
+        corrupt[corrupt.index(b'hello')] ^= 1
+        self.assertIn('CRC', str(check_tf1_pakfile(bytes(corrupt))))
+        moved = bytearray(data)
+        struct.pack_into('<I', moved, data.rindex(b'PK\x05\x06') + 16, len(data))
+        self.assertIn('central directory outside', str(check_tf1_pakfile(bytes(moved))))
+        local = bytearray(data)
+        local[0] = 0
+        self.assertIn('local header', str(check_tf1_pakfile(bytes(local))))
+
+
+class Tf1RealtimeLightTests(unittest.TestCase):
+    # Retail order: sky ambient, sun, then realtime point (1) and spot (2) lights.
+    LIGHTS = [(0.,) * 12 + (0, kind, 0) for kind in (5, 3, 1, 2)]
+
+    def test_ordered_slots_name_point_or_spot_lights(self):
+        texels = bytes([1, 2, 255, 255, 255, 255, 255, 255, 2, 1, 2, 1])
+        self.assertEqual(check_tf1_rtl(texels, self.LIGHTS), [])
+        self.assertEqual(check_tf1_rtl(b'', []), [])
+        self.assertEqual(check_tf1_rtl(b'\xff' * 8, []), [])
+
+    def test_slot_gaps_unknown_and_non_realtime_lights(self):
+        self.assertIn('after an unused', str(check_tf1_rtl(bytes([255, 1, 255, 255]), self.LIGHTS)))
+        self.assertIn('names no WORLD_LIGHTS', str(check_tf1_rtl(bytes([3, 255, 255, 255]), self.LIGHTS)))
+        self.assertIn('not point or spot', str(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS)))
+        # Without a leading sky ambient the hardware numbering is not assumed.
+        self.assertEqual(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS[1:]), [])
 
 
 if __name__ == '__main__':

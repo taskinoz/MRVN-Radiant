@@ -29,6 +29,7 @@ class AuditTests(unittest.TestCase):
             row = next(row for row in result['lumps'] if row['index'] == 40)
             self.assertTrue(row['writer'])
             self.assertFalse(row['record_schema'])
+            self.assertEqual(row['raw_checks'], 'stored zip')
             self.assertEqual(row['semantic_parity'], 'unverified')
             self.assertEqual(row['observations'][0]['bytes'], 100)
 

@@ -14,7 +14,7 @@ def fixture():
     records[36] = [(64., 0., 0)]
     records[83] = [(0, 2, 2)]
     records[101] = [(0,)]
-    records[102] = [(0,), (0xffff,)]
+    records[102] = [(0,), (0xffffffff,)]
     records[104] = [(0., 0., 0., 0)]
     inventory = {'lumps': [{'length': 0, 'external_files': []} for _ in range(128)]}
     inventory['lumps'][98]['length'] = 32
@@ -184,6 +184,34 @@ class Tf1AuxiliaryTests(unittest.TestCase):
                     load_records(path, inspect(path))
             write(37, 112, 3)
             self.assertNotIn(54, load_records(path, inspect(path)))
+
+
+    def test_v29_tangent_words_index_vertex_normals(self):
+        records, inventory = fixture()
+        records[3], records[30] = [(0., 0., 0.)], [(0., 0., 1.), (1., 0., 0.)]
+        records[73] = [(0, 0, 0., 0., 0, 0, 0, 0, 0., 0., 0., 0., 1, 0)]
+        records[74] = [(0, 0, 0., 0., 0, 0, 0, 0, 0, 1)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        records[73] = [(0, 0, 0., 0., 0, 0, 0, 0, 0., 0., 0., 0., 2, 0)]
+        records[74] = [(0, 0, 0., 0., 0, 0, 0, 0, 0, 0x80000001)]
+        self.assertEqual([issue['lump'] for issue in check_tf1_records(records, inventory)], [73, 74])
+
+    def test_blinn_phong_references_and_values(self):
+        records, inventory = fixture()
+        records[3], records[30] = [(0., 0., 0.)], [(0., 0., 1.)]
+        vertex = (0, 0, 0., 0., 0, 0, 0, 0, 0., 0., 0., 0., 0., 1.)
+        records[75] = [vertex]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        for field, value, message in ((0, 1, 'position or normal'), (1, 1, 'position or normal'),
+                                      (2, float('nan'), 'nonfinite'), (13, float('inf'), 'nonfinite')):
+            bad = list(vertex)
+            bad[field] = value
+            records[75] = [tuple(bad)]
+            self.assertIn(message, str(check_tf1_records(records, inventory)))
+
+    def test_blinn_phong_and_probe_strides(self):
+        self.assertEqual(struct.calcsize('<' + TF1_SCHEMAS[75][0]), 44)
+        self.assertEqual(struct.calcsize('<' + TF1_SCHEMAS[102][0]), 4)
 
 
 if __name__ == '__main__':

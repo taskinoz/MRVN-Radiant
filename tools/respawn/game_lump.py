@@ -101,6 +101,39 @@ def decode_sprp_v13(data, include_props=False):
     return result
 
 
+TF1_PROP = struct.Struct("<6f3H2B2h6f4b4Bif2I")
+
+
+def decode_sprp_v12(data):
+    """Frame a TF1 (v29) sprp v12 payload; field meanings stay with the caller.
+
+    Layout from retail: model names, a u32-counted u16 leaf table (empty in every
+    retail map), three u32 words (placements and two unknown counts), then
+    84-byte placements whose model index directly follows the angles.
+    """
+    if len(data) < 4:
+        raise FormatError("sprp lacks model count")
+    model_count, = struct.unpack_from("<I", data)
+    cursor = 4 + 128 * model_count
+    if cursor + 4 > len(data):
+        raise FormatError("sprp model-name table exceeds payload")
+    names = [data[4 + 128 * i:4 + 128 * (i + 1)] for i in range(model_count)]
+    leaf_count, = struct.unpack_from("<I", data, cursor)
+    cursor += 4
+    if cursor + 2 * leaf_count + 12 > len(data):
+        raise FormatError("sprp leaf table exceeds payload")
+    leaves = struct.unpack_from(f"<{leaf_count}H", data, cursor)
+    cursor += 2 * leaf_count
+    count, first_unknown, second_unknown = struct.unpack_from("<3I", data, cursor)
+    cursor += 12
+    if cursor + count * TF1_PROP.size != len(data):
+        raise FormatError("sprp v12 placement count disagrees with payload length")
+    return {"model_names": names, "leaves": leaves, "placement_count": count,
+            "unknown_header_counts": (first_unknown, second_unknown),
+            "placements": [TF1_PROP.unpack_from(data, cursor + i * TF1_PROP.size)
+                           for i in range(count)]}
+
+
 def inspect_blob(data, base, include_props=False):
     entries = parse_directory(data, base)
     for entry in entries:

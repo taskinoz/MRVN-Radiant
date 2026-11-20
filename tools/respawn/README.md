@@ -163,7 +163,10 @@ sidecars separately. Neither command extracts or bundles retail assets.
 partitions with `entity_text.py`. Duplicate output keys survive parsing. The
 default partition-table sidecar takes precedence; invalid syntax, unsafe names,
 case aliases and missing/linked/oversized files fail. Entity counts describe
-syntax coverage, not spawn or objective correctness.
+syntax coverage, not spawn or objective correctness. For v29 it also checks the
+sprp v12 static props, the stored-zip PAKFILE and realtime-light texel slots
+(retail facts in `docs/respawn/RESPAWN_TF1_LUMPS.md`). Retail differences the
+engine tolerates go to the report's `warnings` and do not fail validation.
 
 `prepare_tf1_triggers.py --remap PATH --output NEW_DIR` compiles an original
 floor, pilot spawns and axis-aligned/rotated trigger brushes, then writes shared

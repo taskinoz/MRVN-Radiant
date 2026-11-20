@@ -56,7 +56,9 @@ void Titanfall::EmitEntity(const entity_t &e) {
     #define ENT_STARTS(x)      striEqualPrefix(classname, x)
     #define EDITORCLASS(x, y)  if (ENT_IS(y)) { e2.setKeyValue("classname", x); e2.setKeyValue("editorclass", y); }
     // env
-    if (ENT_IS("env_fog_controler")
+    // Retail spells it env_fog_controller; the old misspelling is still accepted.
+    if (ENT_IS("env_fog_controller")
+     || ENT_IS("env_fog_controler")
      || ENT_IS("sky_camera")) {
         dest = ENT_ENV;
     // fx
@@ -88,8 +90,9 @@ void Titanfall::EmitEntity(const entity_t &e) {
     } else if (ENT_IS("ambient_generic")) {
         dest = ENT_SND;
     // spawn
+    // Every retail TF1 map keeps its CTF flag spawns in the BSP entity lump.
     } else if (ENT_IS("info_frontline")
-            || ENT_STARTS("info_spawnpoint_")) {
+            || (ENT_STARTS("info_spawnpoint_") && !ENT_IS("info_spawnpoint_flag"))) {
         dest = ENT_SPAWN;
     // TODO: filter out editor only entities *just* before this else
     // e.g. prop_static, env_cubemap, info_lightprobe, light (static worldlights), etc.

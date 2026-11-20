@@ -134,6 +134,31 @@ client-side and removed on the server in TFO's code
 (`sv_pushaway_clientside_size` 30, volume test at 0x1cfb7e), which is why
 `crate.mdl` and other small models never spawn from the harness.
 
+## Release packages
+
+`build_tf1_package.py` turns a compiled map into installable packages:
+
+```powershell
+python tools/respawn/build_tf1_package.py --maps BUILD/maps --map mp_name --name Author.MapName --version 1.0.0 --output NEW_DIR [--assets DIR] [--shader-vpk DIR] [--strict]
+```
+
+- `tfo/<Name>/` is a Titanfall Online mod (`mod.json`, `mod/maps/`).
+- `r1delta/<Name>/` is an R1Delta addon (`maps/`), listed in `r1/addonlist.txt`.
+- Both get the `.bsp`, its `.bsp_lump` and `_*.ent` sidecars and an optional
+  `graphs/<map>.ain`, plus anything under `--assets` (`materials/`, `models/`,
+  `sound/`, `scripts/`, `resource/`, `particles/`, `cfg/`).
+- `vpk/` holds an optional shader-only map VPK from `pack_tf1_shaders.py`
+  (Water); it installs into the game's `vpk/` folder.
+- The map must pass `validate_records.py`. `manifest.json` lists file hashes
+  and every BSP material and static-prop model as shipped or expected from the
+  base game; `--strict` fails if anything is not shipped. `INSTALL.md` and one
+  zip per runtime are written too.
+
+The packaged level folders of a test room load and finish without errors in
+TFO and R1Delta (`run-pkg-{tfo,r1}` under
+`.local/respawn/tfo-light-isolation-20261120/`). This checks package contents;
+installing through the TFO launcher was not exercised.
+
 ## Materials
 
 TF1 uses VMT/VTF materials, not RPaks. Texture names are written as

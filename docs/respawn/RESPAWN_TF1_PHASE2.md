@@ -131,6 +131,15 @@ control is black in TFO. A new `tf1-realtime-lights` compiler regression checks
 flags, order and slot contents. This replaces the "RTL channel decoding" item
 in follow-up task 1.
 
+## 20 November: release packager
+
+`build_tf1_package.py` builds a TFO mod and an R1Delta addon from a validated
+compiled map, with dependency reporting, an optional shader VPK, a hashed
+manifest, install notes and zips (see
+[release packages](RESPAWN_TF1_LUMPS.md#release-packages)). Packaged level
+folders load in both runtimes. This closes the packaging tool gap; deciding
+what assets a given map may redistribute stays with its author.
+
 ## Compiler parity inventory
 
 The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique

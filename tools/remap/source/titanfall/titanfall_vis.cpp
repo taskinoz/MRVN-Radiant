@@ -701,6 +701,7 @@ void Titanfall::EmitStaticProp(entity_t &e) {
     }
 
     Titanfall::Bsp::gameLumpPropHeader.numProps++;
+    Titanfall::Bsp::gameLumpPropHeader.unk0++;
     Titanfall::Bsp::gameLumpPropHeader.unk1++;
     Titanfall::GameLumpProp_t &prop = Titanfall::Bsp::gameLumpProps.emplace_back();
     Vector3 origin;
@@ -722,16 +723,14 @@ void Titanfall::EmitStaticProp(entity_t &e) {
     prop.modelName = pathIdx;
     prop.solid = 6;
     prop.flags = 4;
-    prop.envCubemap = -1;
-    prop.forcedFadeScale = -1.0f;
-    prop.cpuLevel[0] = -1.0f;
-    prop.cpuLevel[1] = -1.0f;
-    prop.gpuLevel[0] = -1.0f;
-    prop.gpuLevel[1] = -1.0f;
-    prop.lightingOrigin.x() = 1.0f;
-    prop.lightingOrigin.y() = 1.0f;
-    prop.lightingOrigin.z() = 1.0f;
-    prop.disableX360 = -1;
+    // Defaults every Angel City placement uses: fades -1, no CPU/GPU level
+    // limits, white diffuse modulation, forced fade scale 1, cubemap 0.
+    prop.fadeMinDist = -1.0f;
+    prop.fadeMaxDist = -1.0f;
+    prop.envCubemap = 0;
+    prop.forcedFadeScale = 1.0f;
+    prop.diffuseModulation = -1;
+    prop.lightingOrigin = origin;
 
     for ( const auto mesh : meshes )
     {

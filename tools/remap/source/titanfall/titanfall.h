@@ -130,18 +130,23 @@ namespace Titanfall {
         char path[128];
     };
 
+    // sprp v12 after the name table: a u32-counted u16 leaf table (empty in
+    // every retail map, so no leaves follow), then placements and two unknown
+    // counts with unk1 <= unk0 <= numProps. Retail has no trailing word.
     struct GameLumpPropHeader_t {
-        uint32_t unk0;
+        uint32_t leafCount;
         uint32_t numProps;
+        uint32_t unk0;
         uint32_t unk1;
     };
 
+    // Retail v12 placements put the model index straight after the angles.
     struct GameLumpProp_t {
         Vector3 origin;
         Vector3 angles;
+        int16_t modelName;
         int16_t firstLeaf;
         int16_t numLeaves;
-        int16_t modelName;
         int8_t  solid;
         int8_t  flags;
         int16_t skin;
@@ -158,10 +163,7 @@ namespace Titanfall {
         int32_t collisionFlagsAdd;
         int32_t collisionFlagsRemove;
     };
-
-    struct GameLumpUnknownHeader_t {
-        uint32_t unknown;
-    };
+    static_assert(sizeof(GameLumpProp_t) == 84, "TF1 sprp v12 placements are 84 bytes");
 
     // 0x42
     struct TricollTriangle_t{
@@ -426,7 +428,6 @@ namespace Titanfall {
         inline std::vector<GameLumpPath_t>        gameLumpPaths;
         inline GameLumpPropHeader_t               gameLumpPropHeader;
         inline std::vector<GameLumpProp_t>        gameLumpProps;
-        inline GameLumpUnknownHeader_t            gameLumpUnknownHeader;
         inline std::vector<char>                  textureDataData;
         inline std::vector<uint32_t>              textureDataTable;
         inline std::vector<TricollTriangle_t>     tricollTriangles;

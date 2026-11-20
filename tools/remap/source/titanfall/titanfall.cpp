@@ -148,6 +148,9 @@ void WriteR1BSPFile(const char *filename) {
             probeReferences.insert(probeReferences.end(), bytes, bytes + 16);
         }
     }
+    // Retail entity text ends with exactly one NUL.
+    if (Titanfall::Bsp::entities.empty() || Titanfall::Bsp::entities.back() != char(0))
+        Titanfall::Bsp::entities.push_back(char(0));
     AddLump(file, header.lumps[R1_LUMP_ENTITIES],          Titanfall::Bsp::entities);
     AddLump(file, header.lumps[R1_LUMP_PLANES],            Titanfall::Bsp::planes);
     AddLump(file, header.lumps[R1_LUMP_TEXTURE_DATA],      Titanfall::Bsp::textureData);
@@ -164,22 +167,19 @@ void WriteR1BSPFile(const char *filename) {
                                                + sizeof(Titanfall::GameLumpPathHeader_t)
                                                + sizeof(Titanfall::GameLumpPath_t) * Titanfall::Bsp::gameLumpPathHeader.numPaths
                                                + sizeof(Titanfall::GameLumpPropHeader_t)
-                                               + sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpPropHeader.numProps
-                                               + sizeof(Titanfall::GameLumpUnknownHeader_t);
+                                               + sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpPropHeader.numProps;
 
         Titanfall::Bsp::gameLumpHeader.offset = ftell(file) + sizeof(Titanfall::GameLumpHeader_t);
         Titanfall::Bsp::gameLumpHeader.length = sizeof(Titanfall::GameLumpPathHeader_t)
                                                + sizeof(Titanfall::GameLumpPath_t) * Titanfall::Bsp::gameLumpPathHeader.numPaths
                                                + sizeof(Titanfall::GameLumpPropHeader_t)
-                                               + sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpPropHeader.numProps
-                                               + sizeof(Titanfall::GameLumpUnknownHeader_t);
+                                               + sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpPropHeader.numProps;
 
         SafeWrite(file, &Titanfall::Bsp::gameLumpHeader, sizeof(Titanfall::GameLumpHeader_t));
         SafeWrite(file, &Titanfall::Bsp::gameLumpPathHeader, sizeof(Titanfall::GameLumpPathHeader_t));
         SafeWrite(file, Titanfall::Bsp::gameLumpPaths.data(), sizeof(Titanfall::GameLumpPath_t) * Titanfall::Bsp::gameLumpPaths.size());
         SafeWrite(file, &Titanfall::Bsp::gameLumpPropHeader, sizeof(Titanfall::GameLumpPropHeader_t));
         SafeWrite(file, Titanfall::Bsp::gameLumpProps.data(), sizeof(Titanfall::GameLumpProp_t) * Titanfall::Bsp::gameLumpProps.size());
-        SafeWrite(file, &Titanfall::Bsp::gameLumpUnknownHeader, sizeof(Titanfall::GameLumpUnknownHeader_t));
     }
     AddLump(file, header.lumps[R1_LUMP_PAKFILE],                     Titanfall2::Bsp::pakfile);
     AddLump(file, header.lumps[R1_LUMP_CUBEMAPS],                    Titanfall2::Bsp::cubemaps);
@@ -569,6 +569,10 @@ void Titanfall::EmitStubs() {
             0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
         };
         Titanfall::Bsp::physicsCollide_stub = { data.begin(), data.end() };
+        // The stub's six ledges carried a retail map's CM brush indices (0..5);
+        // a map that needs the stub has no such brushes, so clear them.
+        for (std::size_t ledge = 0; ledge < 6; ++ledge)
+            std::fill_n(Titanfall::Bsp::physicsCollide_stub.begin() + 100 + 208 * ledge, 4, uint8_t(0));
     }
     {  // World lights
         constexpr std::array<uint8_t, 200> data = {

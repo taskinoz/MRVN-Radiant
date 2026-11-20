@@ -441,6 +441,7 @@ namespace Titanfall {
         inline std::vector<VertexBlinnPhong_t>    vertexBlinnPhongVertices;
         inline std::vector<uint16_t>              meshIndices;
         inline std::vector<Mesh_t>                meshes;
+        inline std::vector<int>                   meshCompileFlags;
         inline std::vector<MeshBounds_t>          meshBounds;
         inline std::vector<MaterialSort_t>        materialSorts;
         inline std::vector<CMGrid_t>              cmGrid;

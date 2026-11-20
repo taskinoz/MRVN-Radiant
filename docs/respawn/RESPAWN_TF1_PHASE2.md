@@ -14,6 +14,111 @@ pillar/node fixtures route in both runtimes; live R1/TFO CRC observations agree
 with the changed fixture's offline result. Broader AI and full release gates
 remain open.
 
+## 20 November: v29 sun shadow output
+
+A prop-free sunlit fixture exposed inverted bounds in the generated v29 CSM
+root. The compiler now emits a zero-size root with no references in this case,
+without changing the v37 placeholder. The shared lighting pass now reads the
+original compile flags for each mesh rather than looking up serialized material
+names. Alpha-tested casters go only into the alpha stream; compile-only sky
+stays drawable but contributes to neither shadow stream.
+
+Native follow-up: the spawned `mp_tf1_shadow_mount` variant uses mounted TF1
+materials for the floor, alpha-cutout grate and compile-only sky stand-in.
+Its BSP validated with 24 opaque and 12 alpha-tested shadow triangles and no
+sky triangles in either stream. R1Delta loaded it, passed both floor and roof
+traces, and produced three engine captures. The cutout and sky stand-in render;
+this is not a controlled image comparison of their projected shadows.
+
+TFO reached `PROGRESS_LEVELINIT` on one launch but never reached the harness
+spawn checks. Other launches, including the same geometry with point-only
+lighting, ended with a stack overflow in `nvwgf2umx.dll`. The known-good
+`mp_tf1_baseline` control passed after a startup retry. This leaves the TFO
+lighting result inconclusive; it does not isolate a shadow-lump defect.
+Reports, source fixtures and captures are under
+`.local/respawn/tf1-shadow-native-20261120/`. Broader water, physics, gameplay
+and clean packaging remain release gates.
+
+### Matched TFO baseline and v29 mesh validation
+
+Two variants of the known-good `mp_tf1_baseline` keep the same geometry, materials,
+spawns, map name and six collision checks. The point-lit variant passed all six
+checks. The first sunlit run reached level initialization but did not reach
+the spawn checks within its 50-second launch budget. The full-budget follow-up
+below shows that this short run did not establish a shadow-mesh stall.
+
+The sunlit BSP with only its four shadow mesh streams (lumps 124–127) removed
+also spawned and passed all six checks after a startup retry. The v29
+compiler exposes the same opt-out as `"_remap_no_shadow_meshes" "1"` in
+worldspawn. It keeps baked lighting, world lights and the CSM tree, but omits
+dynamic world-geometry shadow meshes. The default keeps the meshes enabled;
+the opt-out is not required to load the tested TFO baseline.
+Compiler regressions confirm byte-identical lighting planes with the option
+enabled. The compiler-generated opt-out also passes record validation, but its
+three TFO launch attempts failed before loading the map with startup stack
+overflows. The native pass applies to the binary-stripped control, not a
+successful launch of the compiler-generated variant.
+
+`validate_records.py` now checks the v29 native mesh vertex-type byte against
+its vertex pool flags and recomputes the inclusive unsigned vertex span for each
+used material sort. These checks pass on six TF1 and seventeen TFO BSPs, as well
+as the compiler fixtures. The run artifacts are in
+`.local/respawn/tfo-light-isolation-20261120/`.
+
+### Retail v29 sun and shadow-prop metadata
+
+Across the six TF1 and seventeen TFO reference BSPs, the `LEVEL_INFO` direction
+matches a type-3 world light normal within 0.000001, and all 115,633 CSM object
+references fit the static-prop range starting at the first sky mesh rounded up
+to a multiple of 64. The compiler now writes the gameplay sun direction and
+converts the visibility prop index to that aligned CSM range without changing
+the visibility index. Regression fixtures cover both conventions.
+
+### Full-budget TFO retest with shadow meshes enabled
+
+The 50-second runs stopped at different points in sign-on. The bounded-root
+control reached `PROGRESS_ENDLOAD` with about two seconds left, less than the
+delay before the spawn checks. A single valid shadow triangle and a control
+using the retail lobby's opaque shadow stream also returned no probes with
+that short budget. Those tests do not distinguish a hang from slow startup.
+
+Using the harness's normal 300-second launch budget, the **unchanged** rebuilt
+sunlit baseline (`sun-native-metadata`, 20 generated opaque shadow triangles)
+finished loading about 92 seconds after launch. It passed both ray traces and
+all four hull checks. The same BSP with only directory entries 124–127 cleared
+passed the same checks. Matched free-camera captures show the raised platform
+casting a shadow on the floor with the generated streams present; the shadow
+disappears in the stripped control, which leaves the baked lighting unchanged.
+The reports and paired views are in `run-full-sun-native-metadata/` and
+`run-full-sun-native-metadata-stripped/` under
+`.local/respawn/tfo-light-isolation-20261120/`.
+
+No BSP changes or shadow opt-out were needed. Use the normal launch budget for
+native tests, and distinguish a pre-map NVIDIA stack overflow from a map that
+fails after sign-on. This confirms opaque world shadow rendering in TFO on the
+baseline, not full TF1/TFO release parity.
+
+The rebuilt cutout fixture also passed both traces with 24 opaque and 12
+alpha-stream triangles enabled. Removing only the alpha vertices, indices and
+mesh row removed the grate's projected silhouette in the matched overhead
+view. However, the silhouette looked solid with the stream enabled: these
+captures verify that TFO renders the alpha stream, not that it reproduces
+the grate's texture cutouts. See `run-full-cutout-alpha/` and
+`run-full-cutout-alpha-stripped/` in the same artifact directory.
+
+**Cutout shadows verified.** The solid silhouette came from that fixture, not
+from the compiler or the engine. Its UVs sampled the opaque border of
+`metal_grate_roundholes`: only 8% of that region is transparent, against 42%
+of the whole texture. The remaining holes were about 8 units across, which the
+soft shadow filter blurs away. The `cutout-visible` fixture uses a 2-unit-thick
+192×192 grate with the texture offset into the hole field and scaled 2×, so
+holes are about 40 units across. In TFO, with the normal launch budget, it
+passed both traces. The overhead view shows round lit holes in the shadow,
+and the angled view shows them matching the alpha-tested grate (`run-cutout-visible/`).
+v29 alpha shadow streams therefore reproduce texture cutouts in TFO. Very
+small holes still fall below the cascade's resolution, as expected for any
+shadow map.
+
 ## Compiler parity inventory
 
 The [per-lump checklist](RESPAWN_TF1_LUMP_CHECKLIST.md) inventories every unique
@@ -667,8 +772,9 @@ Six more v29 geometry schemas cover occlusion vertices/indices, opaque and
 alpha shadow vertices, shadow indices and 12-byte shadow meshes. Checks reject
 nonfinite positions/UVs, incomplete occlusion triangles, invalid opaque selectors,
 material references and out-of-pool mesh-local shadow indices. Cumulative shadow
-triangle ranges must consume the index stream. CSM object IDs remain opaque;
-these checks do not prove cascade or shadow appearance semantics.
+triangle ranges must consume the index stream. The later v29 CSM range check
+bounds prop IDs against `LEVEL_INFO`; these checks do not prove cascade or
+shadow appearance semantics.
 
 A seventh schema covers texture string-table offsets. Validation rejects
 out-of-range/interior/empty/unterminated names and texture-data name indices

@@ -430,7 +430,8 @@ LIT_FIXTURE = (
     # its own unit test in lightbake_tests.cpp.
     '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
     + box((-512, -512, -16), (512, 512, 0), "bump") + "\n"
-    + box((-512, -512, 256), (0, 512, 272), "bump") + "\n}\n"
+    + box((-512, -512, 256), (0, 512, 272), "bump") + "\n"
+    + box((-512, -512, 768), (512, 512, 800), "sky_shell") + "\n}\n"
     + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",
              _light="255 240 220 600", _ambient="150 180 255 100")
     + entity(classname="light_spot", origin="0 384 200", pitch="-90", angles="90 0 0",
@@ -502,6 +503,106 @@ def tangent_checks(bsp, titanfall1=False):
         raise RuntimeError("no bump-lit triangles to check")
 
 
+def tf1_shadow_fixture(folder, command, reports, game):
+    path = folder / 'tf1-shadow-casters.map'
+    path.write_text('{\n"classname" "worldspawn"\n"_bouncescale" "0"\n' +
+                    box((-256, -256, -16), (256, 256, 0), 'bump') + '\n' +
+                    box((-128, -128, 64), (0, 128, 80), 'bump') + '\n' +
+                    box((64, -64, 128), (128, 64, 144), 'alpha_caster') + '\n' +
+                    box((-256, -256, 256), (256, 256, 272), 'sky_alpha') + '\n}\n' +
+                    entity(classname='light_environment', origin='0 0 192', pitch='-90',
+                           _light='255 255 255 600', _ambient='150 180 255 100'), encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    issues = validate(bsp)['issues']
+    if issues:
+        raise RuntimeError(f'v29 shadow fixture: {issues}')
+    inventory = inspect(bsp)
+    records = load_records(bsp, inventory)
+    sun_directions = [light[6:9] for light in records[54] if light[13] == 3]
+    if sun_directions != [records[123][0][4:7]]:
+        raise RuntimeError('v29 LEVEL_INFO must agree with the gameplay sun direction')
+    draw_heights = set()
+    for mesh in records[80]:
+        if mesh[-1] & 4 or mesh[-1] & 0x600 != 0x200:
+            continue
+        start, triangles = mesh[:2]
+        base = records[82][mesh[-2]][-1]
+        for (index,) in records[79][start:start + 3 * triangles]:
+            position = records[73][base + index][0]
+            height = records[3][position][2]
+            draw_heights.add(height)
+            if height <= 80:
+                texture_flags = records[2][records[82][mesh[-2]][0]][-1]
+                if (mesh[-1] | texture_flags) & 0x800:
+                    raise RuntimeError('v29 opaque caster received an alpha-test flag')
+    if 256 not in draw_heights:
+        raise RuntimeError('v29 compile-only sky is missing from drawable mesh geometry')
+    if records[100] or records[99] != [(0,) * 11]:
+        raise RuntimeError('v29 prop-free CSM tree must have one bounded empty node')
+    for lump, expected in ((124, 80), (125, 144)):
+        heights = {vertex[2] for vertex in records[lump]}
+        if expected not in heights or any(height >= 256 for height in heights):
+            raise RuntimeError(f'v29 shadow vertex pool {lump} lost real casters or includes sky')
+    if any(vertex[2] in (128, 144) for vertex in records[124]):
+        raise RuntimeError('v29 alpha caster was also emitted as an opaque caster')
+    alpha_rows = [row for row in records[127] if row[2] == 0]
+    if len(alpha_rows) != 1:
+        raise RuntimeError(f'expected one v29 alpha mesh, found {alpha_rows}')
+    alpha_sort = alpha_rows[0][3]
+    alpha_texture_index = records[82][alpha_sort][0]
+    alpha_texture = records[2][alpha_texture_index]
+    alpha_meshes = [mesh for mesh in records[80] if records[82][mesh[-2]][0] == alpha_texture_index]
+    if (not alpha_meshes or any(not mesh[-1] & 0x800 for mesh in alpha_meshes)
+            or not alpha_texture[-1] & 0x800):
+        raise RuntimeError('v29 alpha caster is missing the runtime alpha-test flag')
+    if alpha_texture[4:8] != (128, 256, 128, 256):
+        raise RuntimeError(f'v29 alpha caster lost its native VTF dimensions: {alpha_texture}')
+    alpha_uv = {vertex[3:] for vertex in records[125] if vertex[2] == 144}
+    if not {(0.5, 0.25), (1.0, -0.25)} <= alpha_uv:
+        raise RuntimeError(f'v29 alpha caster did not use native UV scaling: {alpha_uv}')
+    reports.append({'game': game, 'fixture': 'tf1-shadow-casters', 'issues': []})
+    control = folder / 'tf1-no-shadow-meshes.map'
+    control.write_text(path.read_text(encoding='utf-8').replace(
+        '"_bouncescale" "0"', '"_bouncescale" "0"\n"_remap_no_shadow_meshes" "1"', 1), encoding='utf-8')
+    with control.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(control)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    control_bsp = control.with_suffix('.bsp')
+    control_inventory = inspect(control_bsp)
+    control_records = load_records(control_bsp, control_inventory)
+    def lighting_planes(path, header):
+        with path.open('rb') as stream:
+            planes = []
+            for lump in (98, 105):
+                entry = header['lumps'][lump]
+                stream.seek(entry['offset'])
+                planes.append(stream.read(entry['length']))
+            return planes
+    if (validate(control_bsp)['issues'] or any(control_records[lump] for lump in range(124, 128)) or
+            any(control_records[lump] != records[lump] for lump in (54, 83, 99, 100, 101)) or
+            lighting_planes(control_bsp, control_inventory) != lighting_planes(bsp, inventory)):
+        raise RuntimeError('v29 shadow-mesh opt-out changed sun, atlas or CSM metadata')
+    reports.append({'game': game, 'fixture': 'tf1-no-shadow-meshes', 'issues': []})
+    models = folder.parent / 'assets/models/compat'
+    models.mkdir(parents=True, exist_ok=True)
+    model = models / 'shadow_prop.obj'
+    model.write_text('v 0 0 0\nv 8 0 0\nv 0 0 4\nf 1 2 3\n', encoding='ascii')
+    prop = folder / 'tf1-shadow-prop.map'
+    prop.write_text(path.read_text(encoding='utf-8') + entity(
+        classname='prop_static', model='models/compat/shadow_prop.obj', origin='100 100 32'), encoding='utf-8')
+    with prop.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(prop)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    prop_bsp = prop.with_suffix('.bsp')
+    prop_records = load_records(prop_bsp, inspect(prop_bsp))
+    world_meshes = prop_records[14][0][7]
+    prop_base = (prop_records[123][0][2] + 63) & ~63
+    if (validate(prop_bsp)['issues'] or prop_base == world_meshes or
+            prop_records[100] != [(prop_base,)] or (world_meshes,) not in prop_records[120]):
+        raise RuntimeError('v29 shadow prop ID must be aligned independently of its visibility ID')
+    reports.append({'game': game, 'fixture': 'tf1-shadow-prop-id', 'issues': []})
+
+
 def lit_fixture_checks(bsp):
     """Structural and shadow checks on the lit Titanfall 2 fixture."""
     with bsp.open("rb") as stream:
@@ -521,6 +622,11 @@ def lit_fixture_checks(bsp):
         probes = list(struct.iter_unpack("<16h4B4hI", lump(0x65)))
         tree = list(struct.iter_unpack("<2I", lump(0x67)))
         references = list(struct.iter_unpack("<3fIi", lump(0x68)))
+        shadow_positions = list(struct.iter_unpack("<3f", lump(0x7C)))
+    if not any(p[2] == 768 for p in positions):
+        raise RuntimeError("Compile-only sky shell missing from render geometry")
+    if any(p[2] >= 768 for p in shadow_positions) or not any(p[2] == 272 for p in shadow_positions):
+        raise RuntimeError("Shadow meshes must keep the opaque roof and exclude the compile-only sky shell")
     if parents != [(0, 0, len(probes), 0, len(references), 0, len(tree))] or not probes:
         raise RuntimeError(f"light probe parent info {parents} does not match the probe lumps")
     if sorted(r[3] for r in references) != list(range(len(probes))):
@@ -859,6 +965,9 @@ def main():
             stream.write(f'\ntextures/compat/{kind}\n{{\n $shadertype LitBumpGeneric\n'
                          f' $contentflag nonsolid\n $compileflag nodraw\n $compileflag {kind}\n}}\n')
     with (shaders / 'compat.shader').open('a',encoding='utf-8') as stream:
+        stream.write('\ntextures/compat/sky_shell\n{\n $shadertype LitBumpGeneric\n $compileflag sky\n}\n')
+        stream.write('\ntextures/compat/alpha_caster\n{\n $shadertype LitBumpGeneric\n $compileflag alphashadow\n}\n')
+        stream.write('\ntextures/compat/sky_alpha\n{\n $shadertype LitBumpGeneric\n $compileflag sky\n $compileflag alphashadow\n}\n')
         stream.write('\ntextures/compat/playerclip\n{\n $shadertype LitBumpGeneric\n $contentflag playerclip\n}\n')
         stream.write('\ntextures/compat/bulletclip\n{\n $shadertype LitBumpGeneric\n $contentflag bulletclip\n $contentflag blocklosclip\n}\n')
         for i in range(128):
@@ -876,6 +985,15 @@ def main():
     (vmts / 'vmt_no_replace.vmt').write_text('Patch { include "materials/compat/vmt_empty.vmt" replace { "$surfaceprop" "wrong" } }')
     (vmts / 'vmt_cycle.vmt').write_text('Patch { include "materials/compat/vmt_cycle.vmt" insert { "$surfaceprop" "wrong" } }')
     (vmts / 'vmt_proxy.vmt').write_text('LightmappedGeneric { Proxies { Test { "$surfaceprop" "wrong" } } "$surfaceprop" "dirt" }')
+    (vmts / 'alpha_caster.vmt').write_text(
+        'Patch { include "materials/compat/alpha_base.vmt" replace { "$basetexture" "compat\\alpha_image" } }')
+    (vmts / 'alpha_base.vmt').write_text('LightmappedGeneric { "$basetexture" "compat/missing" "$alphatest" "1" }')
+    vtf = bytearray(80 + 128 * 256 * 4)
+    struct.pack_into('<4sIIIHH', vtf, 0, b'VTF\0', 7, 2, 80, 128, 256)
+    struct.pack_into('<H', vtf, 24, 1)
+    struct.pack_into('<BI', vtf, 56, 1, 0xffffffff)
+    struct.pack_into('<H', vtf, 63, 1)
+    (vmts / 'alpha_image.vtf').write_bytes(vtf)
     geometry = '{\n"classname" "worldspawn"\n' + "\n".join([
         brush(0, True, ["bump"] * 6),
         brush(128, False, ["flat", "bump", "unlit", "ts", "flat", "bump"]),
@@ -1210,6 +1328,8 @@ def main():
             reports.append({'game':game,'fixture':'collapsed-patch-normals','issues':[]})
             portal_boundary_fixtures(folder, command, reports, game)
             portal_budget_fixture(folder, command, reports, game)
+        if game == 'titanfallonline':
+            tf1_shadow_fixture(folder, command, reports, game)
         if game == "titanfall2":
             lightmap_split_fixture(folder, command, reports, game)
             submodel_path = folder / 'submodel-bounds.map'
@@ -1226,7 +1346,7 @@ def main():
                 raise RuntimeError(f'Submodel inherited world bounds: {submodels}')
             reports.append({'game':game,'fixture':'submodel-bounds','issues':[]})
             models = root / "assets/models/compat"
-            models.mkdir(parents=True)
+            models.mkdir(parents=True, exist_ok=True)
             (models / "prop.obj").write_text("v 0 0 0\nv 8 0 0\nv 0 0 4\nf 1 2 3\n", encoding="ascii")
             prop_path = folder / "static-prop.map"
             prop_path.write_text(geometry + entity(classname="prop_static", model="models/compat/prop.obj",

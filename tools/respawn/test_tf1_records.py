@@ -5,12 +5,12 @@ import struct
 import tempfile
 
 from inspect_bsp import HEADER_SIZE, FormatError, inspect
-from validate_records import TF1_SCHEMAS, check_tf1_records, load_records
+from validate_records import TF1_SCHEMAS, check_tf1_mesh_metadata, check_tf1_records, load_records
 
 
 def fixture():
     records = {index: [] for index in TF1_SCHEMAS}
-    records.update({2: [(0,) * 9], 82: [(0, 0, 0, 0, 0)], 107: [(0, 0, 1, 0)]})
+    records.update({2: [(0,) * 9], 80: [], 82: [(0, 0, 0, 0, 0)], 107: [(0, 0, 1, 0)]})
     records[36] = [(64., 0., 0)]
     records[83] = [(0, 2, 2)]
     records[101] = [(0,)]
@@ -23,6 +23,17 @@ def fixture():
 
 
 class Tf1AuxiliaryTests(unittest.TestCase):
+    def test_mesh_metadata_uses_inclusive_unsigned_sort_span(self):
+        records, _ = fixture()
+        records[80] = [(0, 2, 0, 4, 3, *([0] * 8), 0, 0x600),
+                       (6, 2, 65530, 5, 3, *([0] * 8), 0, 0x600)]
+        records[82] = [(0, 0, 0, -1, 0)]
+        self.assertEqual(check_tf1_mesh_metadata(records), [])
+        mesh = records[80][0]
+        records[80][0] = (*mesh[:4], 2, *mesh[5:])
+        records[82][0] = (0, 0, 0, -2, 0)
+        self.assertEqual([issue['lump'] for issue in check_tf1_mesh_metadata(records)], [80, 82])
+
     def test_shadow_mesh_local_indices_and_pool_selection(self):
         records, inventory = fixture()
         records[124] = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)]
@@ -71,7 +82,7 @@ class Tf1AuxiliaryTests(unittest.TestCase):
         records, inventory = fixture()
         records[99], records[100] = [root, leaf], [(60000,)]
         self.assertEqual(check_tf1_records(records, inventory), [])
-        # Object IDs are intentionally opaque; only the reference slice is checked.
+        # Without LEVEL_INFO, only the reference slice can be checked.
         for field, value, message in ((0, float('nan'), 'bounds'), (6, -1., 'bounds'),
                                       (9, 2, 'child range'), (5, 2, 'reference range'),
                                       (4, 2, 'reference range')):
@@ -79,6 +90,15 @@ class Tf1AuxiliaryTests(unittest.TestCase):
             bad[field] = value
             records[99] = [tuple(bad), leaf]
             self.assertIn(message, str(check_tf1_records(records, inventory)))
+
+    def test_csm_prop_ids_use_aligned_level_info_range(self):
+        records, inventory = fixture()
+        records[123] = [(0, 0, 5, 2, 0., 0., 0.)]
+        records[99] = [(0., 0., 0., 0, 2, 2, 1., 1., 1., 0, 0)]
+        records[100] = [(64,), (65,)]
+        self.assertEqual(check_tf1_records(records, inventory), [])
+        records[100] = [(5,), (66,)]
+        self.assertEqual([issue['lump'] for issue in check_tf1_records(records, inventory)], [100, 100])
 
     def test_csm_cycles_are_rejected(self):
         records, inventory = fixture()

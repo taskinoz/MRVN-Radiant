@@ -352,8 +352,15 @@ void CompileR1BSPFile() {
     // Emit level info
     Titanfall::EmitLevelInfo();
 
-    if (Shared::lightmapsEnabled && world)
+    if (Shared::lightmapsEnabled && world) {
         Titanfall2::EmitLighting(*world);
+        if (world->intForKey("_remap_no_shadow_meshes")) {
+            Titanfall2::Bsp::shadowMeshVertices.clear();
+            Titanfall2::Bsp::shadowMeshAlphaVertices.clear();
+            Titanfall2::Bsp::shadowMeshIndices.clear();
+            Titanfall2::Bsp::shadowMeshes.clear();
+        }
+    }
 
     // Emit lumps we dont generate yet, but need for the map to load
     Titanfall::EmitStubs();

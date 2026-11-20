@@ -314,8 +314,22 @@ meshes, then that environment's sun normal. Coliseum has two empty CSM roots
   copies of the world model's opaque meshes, with mesh-local uint16 indices.
 - **Other environments** own none.
 
+Sky meshes never cast these shadows. Ported sky domes can have the compiler's
+`sky` flag without the runtime sky surface flag; they remain visible but are
+excluded from the shadow meshes. Otherwise the dome can cast a hard shadow
+across the playable map, as seen on Surf Beginner.
+
 Without these records, the menu stage's characters cast shadows into gameplay
 in-game. That was not fixed by moving the stage.
+
+For Titanfall 1 and Titanfall Online (v29), mark cutout casters with
+`$compileflag alphashadow`. The compiler emits a separate UV-bearing shadow
+stream and sets the runtime alpha-test bit on the mesh and material. If no
+preview image is available, expose the native material and its `$basetexture`
+under the compiler's mounted `materials/` tree (VMT and VTF, including any
+VMT Patch includes). The compiler reads the VTF dimensions to scale the UVs
+and populate texture metadata. It does not decode VTF alpha for baked lighting
+or package the assets for the runtime.
 
 ### Bounce lighting
 

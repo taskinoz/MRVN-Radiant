@@ -60,20 +60,18 @@ struct VmtProperty {
     bool present = false;
     std::string value;
 };
-struct VmtSurfaceInfo {
+struct VmtPropertyInfo {
     bool patch = false;
     std::string include;
     VmtProperty direct, insert, replace;
 };
 
-// Only root properties and direct children of insert/replace affect the
-// material's surface property; proxy parameters are not material properties.
-inline bool parseVmtSurfaceInfo(const std::string &text, VmtSurfaceInfo &out) {
+inline bool parseVmtPropertyInfo(const std::string &text, const char *propertyName, VmtPropertyInfo &out) {
     VmtTokens tokens(text);
     std::string key, value, section;
     bool syntax = false;
     if (!tokens.next(key, syntax) || syntax) return false;
-    VmtSurfaceInfo parsed;
+    VmtPropertyInfo parsed;
     parsed.patch = vmtLower(key) == "patch";
     if (!tokens.next(value, syntax) || !syntax || value != "{") return false;
     unsigned depth = 1;
@@ -94,7 +92,7 @@ inline bool parseVmtSurfaceInfo(const std::string &text, VmtSurfaceInfo &out) {
             continue;
         }
         if (depth == 1 && folded == "include" && parsed.include.empty()) parsed.include = value;
-        if (folded != "$surfaceprop") continue;
+        if (folded != propertyName) continue;
         VmtProperty *property = nullptr;
         if (depth == 1) property = &parsed.direct;
         else if (depth == 2 && section == "insert") property = &parsed.insert;
@@ -107,15 +105,15 @@ inline bool parseVmtSurfaceInfo(const std::string &text, VmtSurfaceInfo &out) {
 }
 
 inline bool vmtSurfaceProp(const std::string &text, std::string &result) {
-    VmtSurfaceInfo info;
-    if (!parseVmtSurfaceInfo(text, info) || info.patch || !info.direct.present || info.direct.value.empty()) return false;
+    VmtPropertyInfo info;
+    if (!parseVmtPropertyInfo(text, "$surfaceprop", info) || info.patch || !info.direct.present || info.direct.value.empty()) return false;
     result = info.direct.value;
     return true;
 }
 
 // Includes name a VFS file under materials/. Reject absolute paths and parent
 // traversal; fold case for cycle detection while preserving the VFS lookup case.
-inline bool vmtMaterialPath(std::string input, std::string &out) {
+inline bool vmtAssetPath(std::string input, const char *extension, std::string &out) {
     std::replace(input.begin(), input.end(), '\\', '/');
     if (input.empty() || input[0] == '/' || input.find(':') != std::string::npos || input.find('\0') != std::string::npos)
         return false;
@@ -130,23 +128,23 @@ inline bool vmtMaterialPath(std::string input, std::string &out) {
     }
     const std::string folded = vmtLower(path);
     if (folded.compare(0, 10, "materials/") != 0 || folded.size() <= 14 ||
-        folded.compare(folded.size() - 4, 4, ".vmt") != 0) return false;
+        folded.compare(folded.size() - 4, 4, extension) != 0) return false;
     out = path;
     return true;
 }
 
 template <typename Loader>
-bool resolveVmtSurfaceProp(const std::string &path, Loader &&load, VmtProperty &result) {
+bool resolveVmtProperty(const std::string &path, const char *propertyName, Loader &&load, VmtProperty &result) {
     std::vector<std::string> visited;
     auto resolve = [&](auto &&self, const std::string &input, VmtProperty &property) -> bool {
         std::string normalized;
-        if (!vmtMaterialPath(input, normalized) || visited.size() >= 16) return false;
+        if (!vmtAssetPath(input, ".vmt", normalized) || visited.size() >= 16) return false;
         const std::string identity = vmtLower(normalized);
         if (std::find(visited.begin(), visited.end(), identity) != visited.end()) return false;
         visited.push_back(identity);
         std::string text;
-        VmtSurfaceInfo info;
-        if (!load(normalized, text) || !parseVmtSurfaceInfo(text, info)) return false;
+        VmtPropertyInfo info;
+        if (!load(normalized, text) || !parseVmtPropertyInfo(text, propertyName, info)) return false;
         if (!info.patch) { property = info.direct; return true; }
         if (info.include.empty() || !self(self, info.include, property)) return false;
         // Source SDK patch semantics: insert sets the key, replace needs it to exist.
@@ -158,5 +156,10 @@ bool resolveVmtSurfaceProp(const std::string &path, Loader &&load, VmtProperty &
     if (!resolve(resolve, path, resolved)) return false;
     result = std::move(resolved);
     return true;
+}
+
+template <typename Loader>
+bool resolveVmtSurfaceProp(const std::string &path, Loader &&load, VmtProperty &result) {
+    return resolveVmtProperty(path, "$surfaceprop", std::forward<Loader>(load), result);
 }
 } // namespace Respawn

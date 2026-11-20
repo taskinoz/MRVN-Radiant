@@ -64,13 +64,18 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
     td.name_index = Titanfall::Bsp::textureDataTable.size() - 1;
     td.sizeX = shader.shaderImage->width;
     td.sizeY = shader.shaderImage->height;
-    td.visibleX = shader.shaderImage->width;
-    td.visibleY = shader.shaderImage->height;
+    td.visibleX = td.sizeX;
+    td.visibleY = td.sizeY;
     td.flags = shader.surfaceFlags;
     // v29 keeps above/underwater draw participation on MESHES, not the material
     // flags in TEXTURE_DATA. All 1,485 surveyed retail TF1 materials omit them.
-    if (g_game->bspVersion == 29)
+    if (g_game->bspVersion == 29) {
         td.flags &= ~(S_MESH_UNKNOWN | S_TF1_UNDERWATER_DRAW);
+        if (shader.compileFlags & C_ALPHASHADOW)
+            td.flags |= S_TF1_ALPHA_TEST;
+        td.sizeX = td.visibleX = shader.shaderWidth;
+        td.sizeY = td.visibleY = shader.shaderHeight;
+    }
     // Retail v29 stores each texture's mean linear colour here (431 of 433 Angel
     // City records are nonzero); retail v37 leaves it zero. Average per pixel in
     // linear space, as Source's vrad does. Credit: r3muxd's R1 patch. A missing
@@ -477,8 +482,11 @@ void Titanfall::EmitMeshes(const entity_t &e) {
         if (mesh.vertices.empty() || mesh.vertices.size() > 65536 || mesh.triangles.size() / 3 > 65535)
             Error("Mesh vertex or triangle count exceeds its 16-bit field");
         Titanfall::Mesh_t &m = Titanfall::Bsp::meshes.emplace_back();
+        Titanfall::Bsp::meshCompileFlags.push_back(mesh.shaderInfo->compileFlags);
         m.const0 = 4294967040;  // :)
         m.flags = mesh.shaderInfo->surfaceFlags;
+        if (g_game->bspVersion == 29 && (mesh.shaderInfo->compileFlags & C_ALPHASHADOW))
+            m.flags |= S_TF1_ALPHA_TEST;
         // Engine surface/decal queries iterate through this index inclusively.
         m.vertexCount = mesh.vertices.size() - 1;
         m.triOffset = Titanfall::Bsp::meshIndices.size();

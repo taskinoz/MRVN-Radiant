@@ -315,19 +315,21 @@ static void EmitCsmNode(const Shared::visNode_t &node, std::size_t index) {
 
 static bool EmitCsmTree(const Vector3 &sun) {
     if (Titanfall::Bsp::levelInfo.empty()) return false;
-    // TF2 reserves 64-entry blocks of object ids for world meshes; TF1 numbers
-    // static props straight after them.
-    const uint32_t propBase = g_game->bspVersion == 29 ? Titanfall::Bsp::models.at(0).meshCount
-                            : (Titanfall::Bsp::levelInfo.at(0).firstSkyMeshIndex + 63u) & ~63u;
+    const uint32_t shadowPropBase = (Titanfall::Bsp::levelInfo.at(0).firstSkyMeshIndex + 63u) & ~63u;
+    const uint32_t visibilityPropBase = g_game->bspVersion == 29 ? Titanfall::Bsp::models.at(0).meshCount
+                                                               : shadowPropBase;
     const Vector3 z = vector3_normalised(-sun);
     Vector3 x(sun.y(), -sun.x(), 0);
     x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
     const Vector3 y = vector3_cross(z, x);
     std::vector<Shared::visRef_t> refs;
     for (const Shared::visRef_t &ref : Shared::visRefs) {
-        if (ref.index < propBase) continue;
+        if (ref.index < visibilityPropBase) continue;
+        const uint32_t shadowIndex = shadowPropBase + (ref.index - visibilityPropBase);
+        if (shadowIndex > std::numeric_limits<uint16_t>::max())
+            Error("Cascaded shadow prop reference exceeds 16 bits");
         Shared::visRef_t &light = refs.emplace_back();
-        light.index = ref.index;
+        light.index = static_cast<uint16_t>(shadowIndex);
         for (int corner = 0; corner < 8; ++corner) {
             const Vector3 p((corner & 1) ? ref.minmax.maxs.x() : ref.minmax.mins.x(),
                             (corner & 2) ? ref.minmax.maxs.y() : ref.minmax.mins.y(),
@@ -346,6 +348,12 @@ static bool EmitCsmTree(const Vector3 &sun) {
 }
 
 
+static bool IsSkyMesh(std::size_t index) {
+    return (Titanfall::Bsp::meshes.at(index).flags & S_SKY) ||
+           (Titanfall::Bsp::meshCompileFlags.at(index) & C_SKY);
+}
+
+
 /*
     EmitShadowEnvironments()
     One shadow environment per light environment. Environment 0 owns opaque and
@@ -360,6 +368,11 @@ static void EmitShadowEnvironments() {
             suns.emplace(bakeLightEnvironments[i], Titanfall2::Bsp::worldLights[i].normal);
     if (suns.empty())
         return;
+    if (g_game->bspVersion == 29 && !Titanfall::Bsp::levelInfo.empty()) {
+        const auto gameplaySun = suns.find(0);
+        if (gameplaySun != suns.end())
+            Titanfall::Bsp::levelInfo.front().unk2 = gameplaySun->second;
+    }
 
     // Shadow meshes from the world model's opaque meshes (before decals,
     // translucent and sky), position-only with mesh-local 16-bit indices.
@@ -371,7 +384,8 @@ static void EmitShadowEnvironments() {
     auto flush = [&]() { current = nullptr; lookup.clear(); };
     for (uint32_t m = world.firstMesh; m < world.firstMesh + opaqueEnd; m++) {
         const Titanfall::Mesh_t &mesh = Titanfall::Bsp::meshes.at(m);
-        if (mesh.flags & (S_SKY | S_TRANSLUCENT))
+        if (IsSkyMesh(m) || (mesh.flags & S_TRANSLUCENT) ||
+            (Titanfall::Bsp::meshCompileFlags.at(m) & C_ALPHASHADOW))
             continue;
         const int32_t base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
         for (uint32_t t = 0; t < mesh.triCount; t++) {
@@ -408,12 +422,9 @@ static void EmitShadowEnvironments() {
     std::map<uint16_t, std::vector<uint32_t>> alphaMeshes;  // material sort -> meshes
     for (uint32_t m = world.firstMesh; m < world.firstMesh + world.meshCount; m++) {
         const Titanfall::Mesh_t &mesh = Titanfall::Bsp::meshes.at(m);
-        if (mesh.flags & S_SKY)
+        if (IsSkyMesh(m))
             continue;
-        const int16_t texture = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).textureData;
-        const uint32_t name = Titanfall::Bsp::textureData.at(texture).name_index;
-        const shaderInfo_t *shader = ShaderInfoForShaderNull(&Titanfall::Bsp::textureDataData.at(Titanfall::Bsp::textureDataTable.at(name)));
-        if (shader && (shader->compileFlags & C_ALPHASHADOW))
+        if (Titanfall::Bsp::meshCompileFlags.at(m) & C_ALPHASHADOW)
             alphaMeshes[mesh.materialOffset].push_back(m);
     }
     for (const auto &[sort, meshes] : alphaMeshes) {
@@ -466,8 +477,9 @@ static void EmitShadowEnvironments() {
         if (!gameplay || !EmitCsmTree(normal)) {
             Titanfall::CellAABBNode_t &root = Titanfall2::Bsp::csmAABBNodes.emplace_back();
             root = {};
-            root.mins = Vector3(big, big, big);
-            root.maxs = Vector3(-big, -big, -big);
+            const float extent = g_game->bspVersion == 29 ? 0.0f : big;
+            root.mins = Vector3(extent, extent, extent);
+            root.maxs = Vector3(-extent, -extent, -extent);
         }
         Titanfall2::Bsp::shadowEnvironments.push_back({firstNode, firstRef, gameplay ? 0 : meshCount,
                                                        static_cast<int32_t>(Titanfall2::Bsp::csmAABBNodes.size()),
@@ -647,13 +659,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
             : std::min(model.meshCount, Titanfall::Bsp::levelInfo[0].firstDecalMeshIndex);
         for (uint32_t m = model.firstMesh; m < model.firstMesh + opaqueEnd; ++m) {
             const auto &mesh = Titanfall::Bsp::meshes.at(m);
-            if (mesh.flags & (S_SKY | S_TRANSLUCENT)) continue;
-            {
-                const int16_t texture = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).textureData;
-                const uint32_t name = Titanfall::Bsp::textureData.at(texture).name_index;
-                const shaderInfo_t *shader = ShaderInfoForShaderNull(&Titanfall::Bsp::textureDataData.at(Titanfall::Bsp::textureDataTable.at(name)));
-                if (shader && (shader->compileFlags & (C_ALPHASHADOW | C_TRANSLUCENT))) continue;
-            }
+            if (IsSkyMesh(m) || (mesh.flags & S_TRANSLUCENT)) continue;
+            if (Titanfall::Bsp::meshCompileFlags.at(m) & (C_ALPHASHADOW | C_TRANSLUCENT)) continue;
             const auto base = Titanfall::Bsp::materialSorts.at(mesh.materialOffset).vertexOffset;
             for (uint32_t t = 0; t < mesh.triCount; ++t) {
                 V3 points[3];

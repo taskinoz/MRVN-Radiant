@@ -240,12 +240,20 @@ def check_records(records):
 
 
 def check_tf1_csm_records(records):
-    """Check v29 CSM tree structure, without assigning meanings to shadow IDs."""
+    """Check the v29 CSM tree and its aligned static-prop references."""
     issues = []
     nodes, references = records[99], records[100]
     graph = {}
     def error(index, message):
         issues.append({'severity': 'error', 'lump': 99, 'record': index, 'message': message})
+    level = records.get(123, [])
+    if len(level) == 1:
+        first_sky, prop_count = level[0][2:4]
+        prop_base = (first_sky + 63) & ~63
+        for index, (reference,) in enumerate(references):
+            if not prop_base <= reference < prop_base + prop_count:
+                issues.append({'severity': 'error', 'lump': 100, 'record': index,
+                               'message': 'CSM reference outside aligned v29 static-prop range'})
     for index, node in enumerate(nodes):
         mins, maxs = node[:3], node[6:9]
         children, local_count, total_count, first_child, first_ref = node[3:6] + node[9:11]
@@ -433,9 +441,33 @@ def check_tf1_shadow_records(records):
     return issues
 
 
+def check_tf1_mesh_metadata(records):
+    issues = []
+    spans = {}
+    sorts = records[82]
+    vertex_types = {0: 1, 0x200: 2, 0x400: 0, 0x600: 3}
+    for index, mesh in enumerate(records[80]):
+        material, flags = mesh[-2:]
+        if mesh[4] & 0xff != vertex_types[flags & 0x600]:
+            issues.append({'severity': 'error', 'lump': 80, 'record': index,
+                           'message': 'v29 mesh vertex type disagrees with its vertex pool flags'})
+        if not 0 <= material < len(sorts):
+            continue
+        first = mesh[2]
+        last = first + mesh[3]
+        low, high = spans.get(material, (first, last))
+        spans[material] = min(low, first), max(high, last)
+    for material, (first, last) in spans.items():
+        if sorts[material][3] & 0xffff != last - first:
+            issues.append({'severity': 'error', 'lump': 82, 'record': material,
+                           'message': 'v29 material sort span disagrees with its mesh vertex ranges'})
+    return issues
+
+
 def check_tf1_records(records, inventory):
     """Known v29 auxiliary layouts; no claim about RTL channel meanings."""
-    issues = check_tf1_csm_records(records) + check_tf1_shadow_records(records)
+    issues = (check_tf1_csm_records(records) + check_tf1_shadow_records(records)
+              + check_tf1_mesh_metadata(records))
     def error(lump, index, message):
         issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
     for i, (surface, bottom, texture) in enumerate(records[36]):

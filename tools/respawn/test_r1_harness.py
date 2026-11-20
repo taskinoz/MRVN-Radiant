@@ -123,6 +123,17 @@ class R1HarnessTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 r1_harness.validate_checks(bad)
 
+    def test_drop_velocities_and_angles_match_drops(self):
+        checks = r1_harness.validate_checks({'drops': [[0, 0, 10], [0, 0, 50]],
+                                             'drop_velocities': [[0, 0, 0], [300, 0, 0]],
+                                             'drop_angles': [[0, 0, 90], [0, 45, 0]]})
+        self.assertEqual(checks['drop_velocities'][1], [300, 0, 0])
+        for bad in ({'drops': [[0, 0, 0]], 'drop_velocities': [[0, 0, 0], [1, 1, 1]]},
+                    {'drops': [[0, 0, 0]], 'drop_angles': [[0, 0]]},
+                    {'drops': [[0, 0, 0]], 'drop_velocities': [[0, 0, float('nan')]]}):
+            with self.assertRaises(ValueError):
+                r1_harness.validate_checks(bad)
+
     def test_trace_script_matches_tfo_event_format(self):
         script = r1_harness.trace_script([[1, 2, 3, 4, 5, 6, -1, -1, -1, 1, 1, 1]], 7, True)
         self.assertIn('TraceHull( Vector( 1.0000, 2.0000, 3.0000 )', script)

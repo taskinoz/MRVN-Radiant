@@ -14,7 +14,8 @@ GPL-2.0-or-later.
 checks.json uses the TFO harness schema (tools/respawn/tfo_harness.py):
   traces [[x,y,z,ex,ey,ez]], hulls [[x,y,z,ex,ey,ez,minx,miny,minz,maxx,maxy,maxz]],
   views [[x,y,z,pitch,yaw]], drops [[x,y,z]], drop_models, drop_wait,
-  drop_samples, expect {trace_z, hull_z, drop_z}. Events and report.json match
+  drop_samples, drop_velocities [[vx,vy,vz]], drop_angles [[pitch,yaw,roll]],
+  expect {trace_z, hull_z, drop_z, drop_x, drop_y, drop_speed}. Events and report.json match
   that harness, so results from both engines compare line for line.
 """
 import argparse
@@ -86,6 +87,11 @@ def validate_checks(checks):
     wait = checks.get('drop_wait', 4)
     if type(wait) not in (int, float) or not math.isfinite(wait) or not 0 < wait <= 120:
         raise ValueError('drop_wait must be a positive duration of at most 120 seconds')
+    for key in ('drop_velocities', 'drop_angles'):
+        rows = finite_rows(checks.get(key, []), 3, key)
+        if rows and len(rows) != len(result['drops']):
+            raise ValueError(f'{key} must match drops')
+        result[key] = rows
     result.update(drop_models=models, drop_wait=float(wait), drop_samples=checks.get('drop_samples', False) is True,
                   expect=checks.get('expect', {}))
     height_expectations(result['expect'])  # reject malformed expectations before launching
@@ -364,9 +370,12 @@ def run_checks(control, checks, pid, output, events, screenshots):
                  f'::MRVN_DropToken <- "{token}"', '::MRVN_Drops <- []']
         for model in sorted(set(models)):
             spawn.append(f'PrecacheModel( "{model}" )')
-        for d, model in zip(drops, models):
+        for i, (d, model) in enumerate(zip(drops, models)):
+            angles = f'p.SetAngles( {vec(checks["drop_angles"][i])} ); ' if checks['drop_angles'] else ''
+            # Velocity is set after spawn, once the VPhysics object exists.
+            velocity = f'p.SetVelocity( {vec(checks["drop_velocities"][i])} ); ' if checks['drop_velocities'] else ''
             spawn.append(f'{{ local p = CreateEntity( "prop_physics" ); p.kv.model = "{model}"; p.kv.minhealthdmg = 9999; '
-                         f'p.SetOrigin( {vec(d)} ); DispatchSpawn( p, false ); ::MRVN_Drops.append( p ) }}')
+                         f'p.SetOrigin( {vec(d)} ); {angles}DispatchSpawn( p, false ); {velocity}::MRVN_Drops.append( p ) }}')
         spawn.append('}')
         spawn.append('foreach ( i, p in ::MRVN_Drops ) printl( "[MRVN] SPAWNED " + i + " valid=" + IsValid( p ) )')
         spawned = control.squirrel('\n'.join(spawn))
@@ -377,7 +386,7 @@ def run_checks(control, checks, pid, output, events, screenshots):
             raise RuntimeError(f'drops {invalid} did not spawn as physics props in R1Delta (models {names}); '
                                'on a compiled map, stage the model files with --model-files')
         report = ('foreach ( i, p in ::MRVN_Drops ) { if ( IsValid( p ) ) printl( "[MRVN] %s " + i + %s" origin=" + '
-                  'p.GetOrigin() + " velocity=" + p.GetVelocity() ); else printl( "[MRVN] %s " + i + " z=gone" ) }')
+                  'p.GetOrigin() + " velocity=" + p.GetVelocity() + " angles=" + p.GetAngles() ); else printl( "[MRVN] %s " + i + " z=gone" ) }')
         start = time.monotonic()
         while checks['drop_samples'] and time.monotonic() - start < checks['drop_wait']:
             t = round(time.monotonic() - start, 2)

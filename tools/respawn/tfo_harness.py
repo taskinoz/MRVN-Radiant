@@ -57,11 +57,23 @@ def game_crashed(text, exit_code):
     return 'A CRASH HAS BEEN CAPTURED' in text or exit_code not in (None, 0)
 
 
+EXPECT_KINDS = (('trace_z', 'TRACE'), ('hull_z', 'HULL'), ('drop_z', 'DROP'),
+                ('drop_x', 'DROP_X'), ('drop_y', 'DROP_Y'), ('drop_settle', 'DROP_SETTLE'))
+NUMBER = r'(-?[\d.]+(?:e[-+]?\d+)?|-?nan|-?inf)'
+DROP_VECTOR = rf'\(vector : \({NUMBER}, {NUMBER}, {NUMBER}\)\)'
+
+
 def height_expectations(expect):
-    if not isinstance(expect, dict) or set(expect) - {'trace_z', 'hull_z', 'drop_z'}:
-        raise ValueError('expect must contain only trace_z, hull_z and drop_z lists')
+    """[(kind, index, low, high)] from expect.{trace_z, hull_z, drop_z, drop_x,
+    drop_y, drop_settle}. drop_x/drop_y read a final DROP event's origin;
+    drop_settle is how far the prop moved in the last SETTLE_SECONDS of its
+    SAMPLE events (drop_samples), since R1Delta's GetVelocity reports only the
+    velocity a prop was given."""
+    keys = {key for key, _ in EXPECT_KINDS}
+    if not isinstance(expect, dict) or set(expect) - keys:
+        raise ValueError('expect must contain only ' + ', '.join(sorted(keys)) + ' lists')
     result = []
-    for key, kind in (('trace_z', 'TRACE'), ('hull_z', 'HULL'), ('drop_z', 'DROP')):
+    for key, kind in EXPECT_KINDS:
         rows = expect.get(key, [])
         if not isinstance(rows, list):
             raise ValueError(f'{key} must be a list')
@@ -73,17 +85,48 @@ def height_expectations(expect):
     return result
 
 
+SETTLE_SECONDS = 2.0
+
+
+def drop_origin(event):
+    vector = re.search(r' origin=' + DROP_VECTOR, event)
+    return tuple(float(v) for v in vector.groups()) if vector else None
+
+
+def drop_values(events, index, kind):
+    """The final-drop quantities an expectation of this kind tests, as text."""
+    finals = [e for e in events if re.match(rf'^DROP {index} z=', e)]
+    if kind == 'DROP':
+        return [re.search(r'^DROP \d+ z=(\S+)', e).group(1) for e in finals]
+    if kind in ('DROP_X', 'DROP_Y'):
+        return [str(o[0 if kind == 'DROP_X' else 1]) if (o := drop_origin(e)) else 'gone' for e in finals]
+    samples = [(float(m.group(1)), drop_origin(e)) for e in events
+               if (m := re.match(rf'^SAMPLE {index} t=(\S+) ', e))]
+    samples = [(t, o) for t, o in samples if o]
+    if not finals or not samples or not (end := drop_origin(finals[-1])):
+        return ['no samples' if finals else 'gone'] if finals else []
+    last = samples[-1][0]
+    if last < SETTLE_SECONDS:
+        return ['too few samples']
+    window = [o for t, o in samples if t >= last - SETTLE_SECONDS] + [end]
+    return [str(max(math.dist(window[0], o) for o in window))]
+
+
 def expectation_errors(events, expect):
     errors = []
     for kind, index, low, high in height_expectations(expect):
-        pattern = rf'^{kind} {index} fraction=\S+ end=(\S+)' if kind in ('TRACE', 'HULL') else rf'^DROP {index} z=(\S+)'
-        matches = [match.group(1) for event in events if (match := re.search(pattern, event))]
+        if kind in ('TRACE', 'HULL'):
+            matches = [m.group(1) for e in events if (m := re.search(rf'^{kind} {index} fraction=\S+ end=(\S+)', e))]
+        else:
+            matches = drop_values(events, index, kind)
         try:
             values = [float(value) for value in matches]
         except ValueError:
             values = []
+        label = {'DROP_X': 'X', 'DROP_Y': 'Y', 'DROP_SETTLE': 'settling movement'}.get(kind, 'Z')
+        name = 'DROP' if kind.startswith('DROP') else kind
         if not values or any(not math.isfinite(value) or not low <= value <= high for value in values):
-            errors.append(f'{kind} {index}: expected Z in [{low}, {high}], observed {matches or "no result"}')
+            errors.append(f'{name} {index}: expected {label} in [{low}, {high}], observed {matches or "no result"}')
     return errors
 
 

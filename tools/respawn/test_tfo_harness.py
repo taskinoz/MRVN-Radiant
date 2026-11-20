@@ -91,6 +91,22 @@ class TfoHarnessTests(unittest.TestCase):
         self.assertTrue(expectation_errors(['DROP 0 z=nan'], {'drop_z': [[0, 65, 66]]}))
         self.assertTrue(expectation_errors([], {'drop_z': [[0, 65, 66]]}))
 
+    def test_drop_position_and_settle_expectations(self):
+        def sample(t, x):
+            return f'SAMPLE 0 t={t} origin=(vector : ({x}, 659.25, 15.5)) velocity=(vector : (300, 0, 0))'
+        final = ('DROP 0 z=15.5 origin=(vector : (-406.4, 659.25, 15.5)) '
+                 'velocity=(vector : (300.000000, 0.000000, 0.000000)) angles=(vector : (0, 90, 90))')
+        events = [sample(0, 0), sample(1, -300), sample(2, -406), sample(3.5, -406.4), final]
+        ok = {'drop_x': [[0, -410, -400]], 'drop_y': [[0, 659, 660]], 'drop_settle': [[0, 0, 1]]}
+        self.assertEqual(expectation_errors(events, ok), [])
+        # Still rolling within the last two seconds: 106 units of movement.
+        errors = expectation_errors(events[:2] + [sample(2, -300), sample(3.5, -406.4), final],
+                                    {'drop_x': [[0, 0, 1]], 'drop_settle': [[0, 0, 1]]})
+        self.assertEqual(len(errors), 2)
+        self.assertIn('expected settling movement in [0, 1]', errors[1])
+        self.assertTrue(expectation_errors([final], {'drop_settle': [[0, 0, 1]]}))  # no samples
+        self.assertTrue(expectation_errors(['DROP 0 z=gone'], {'drop_x': [[0, 0, 1]]}))
+
     def test_expectations_reject_invalid_ranges(self):
         for expect in ({'unknown': []}, {'trace_z': [[0, 5, 4]]}, {'drop_z': [[-1, 0, 1]]},
                        {'drop_z': [[0, 0, float('inf')]]}, {'drop_z': [[True, 0, 1]]}):

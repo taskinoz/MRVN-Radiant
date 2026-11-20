@@ -110,8 +110,17 @@ an inference from matching layouts. S0–S2 have no harness here and are
 ## Open work, in order
 
 1. **Real-time light data (0x69, 0x7A).** Every retail season has it; we
-   write none. S3 loads without it, but real-time lights probably will not
-   shade lightmapped surfaces correctly.
+   write none. S3 loads without it, but lights marked `realtime` probably
+   will not shade lightmapped surfaces correctly. Retail S3 Aqueduct
+   (pages 1024×896 and 1024×904) fits a **per-page planar** layout exactly:
+   for each page, plane A at 4 bytes/texel, B at 2 bytes, C at half a byte
+   (6.5 in total, consuming all 11,980,800 bytes). Plane A matches TF2's RTL
+   A: four 6-bit slots (63 = unused) and a page byte, `0x00ffffff` when no
+   light reaches the texel. B and C hold repeating 3-bit patterns
+   (`0x4924`, `0x2492`, `0x9249`; bytes 7, 36, 73, 146) not yet decoded.
+   Lump 0x7A holds 16-bit light indices (756 bytes). The TF2 baker in
+   `respawn/lightbake.h` already computes slots and visibility and is the
+   starting point.
 2. **Lights in game.** Check point/spot light baking visually and compare
    with retail intensities.
 3. **Brush entities.** `func_brush`, doors and other movers through the

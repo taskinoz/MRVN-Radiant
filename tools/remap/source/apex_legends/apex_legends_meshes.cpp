@@ -117,7 +117,7 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
             if (CHECK_FLAG(m.flags, S_VERTEX_LIT_BUMP)) {
                 // Get lightmap UV for this vertex
                 Vector2 lightmapUV(0, 0);
-                ApexLegends::GetLightmapUV(meshIndex, vertex.xyz, lightmapUV);
+                ApexLegends::GetLightmapUV(meshIndex, static_cast<int>(i), vertex.xyz, lightmapUV);
                 ApexLegends::EmitVertexLitBump(vertex, lightmapUV);
             } else if (CHECK_FLAG(m.flags, S_VERTEX_UNLIT)) {
                 ApexLegends::EmitVertexUnlit(vertex);

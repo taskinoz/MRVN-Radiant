@@ -176,6 +176,10 @@ static std::vector<const AssMeshWalker*> LoadEditorModel(const char *model) {
         candidates.push_back("models/" + obj);
     }
     for (const std::string &candidate : candidates) {
+        // Skip missing candidates quietly; the importer reports each failed open.
+        if (vfsGetFileCount(candidate.c_str()) == 0) {
+            continue;
+        }
         std::vector<const AssMeshWalker*> meshes = LoadModelWalker(candidate.c_str(), 0);
         if (!meshes.empty()) {
             if (candidate != name)

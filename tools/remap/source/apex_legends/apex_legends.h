@@ -290,7 +290,7 @@ namespace ApexLegends {
     
     // Lightmap UV lookup - returns UV in [0,1] range for the lightmap atlas
     // Returns false if mesh has no lightmap allocation
-    bool        GetLightmapUV(int meshIndex, const Vector3 &worldPos, Vector2 &outUV);
+    bool        GetLightmapUV(int meshIndex, int vertexIndex, const Vector3 &worldPos, Vector2 &outUV);
 
     // Get the lightmap page index for a mesh
     // Returns 0 (default page) for non-lit meshes - all meshes have a valid lightmap index

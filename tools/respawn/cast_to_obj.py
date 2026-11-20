@@ -103,7 +103,6 @@ def cast_to_obj(source, target):
         material = mesh.properties.get("m")
         name = materials.get(material[0] if isinstance(material, list) else material, f"mesh_{index}")
         lines.append(f"g {name}")
-        lines.append(f"usemtl {name}")
         lines.extend(f"v {x:.6f} {z:.6f} {-y:.6f}" for x, y, z in positions)
         has_uv = len(uvs) == len(positions)
         if has_uv:

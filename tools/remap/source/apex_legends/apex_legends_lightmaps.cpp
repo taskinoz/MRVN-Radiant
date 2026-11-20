@@ -43,6 +43,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
+#include <map>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <array>
@@ -133,9 +136,14 @@ static int BuildSoftSunRays(const Vector3 &sunDir, float angularExtent, const Ve
     return count;
 }
 
-// Maximum lightmap page dimensions
-constexpr uint16_t MAX_LIGHTMAP_WIDTH = 4096;
-constexpr uint16_t MAX_LIGHTMAP_HEIGHT = 4096;
+// Maximum lightmap page dimensions. Retail S0-S3 pages are 1024 texels wide
+// with heights trimmed to the used rows (e.g. 1024x968, 1024x896), so pages
+// are packed at 1024x1024 and trimmed by TrimLightmapPages().
+constexpr uint16_t MAX_LIGHTMAP_WIDTH = 1024;
+constexpr uint16_t MAX_LIGHTMAP_HEIGHT = 1024;
+// Trimmed page heights are rounded up to this many rows (retail heights are
+// multiples of 8).
+constexpr int LIGHTMAP_HEIGHT_ALIGN = 8;
 
 // Lightmap texel density (units per texel)
 constexpr float LIGHTMAP_SAMPLE_SIZE = 16.0f;
@@ -326,6 +334,7 @@ struct SurfaceLightmap_t {
 namespace LightmapBuild {
     std::vector<SurfaceLightmap_t> surfaces;
     std::vector<std::vector<bool>> atlasUsed;  // Per-page usage bitmap
+    std::vector<std::vector<int>> vertexSurface;  // Per mesh: vertex index -> surfaces index (-1: none)
     int currentPage = 0;
     int pageRowHeight = 0;      // Current row height for simple packing
     int pageCursorX = 0;        // Current X position in row
@@ -467,106 +476,287 @@ static void ComputeSurfaceBasis(const Plane3f &plane, Vector3 &tangent, Vector3 
 
 
 /*
+    Lightmap charts
+    Shared::MakeMeshes merges every face with the same material into one mesh,
+    so a mesh is usually many faces facing different ways. Each chart is a set
+    of triangles that is mapped by one planar projection:
+      1. triangles sharing a vertex index are one component (a brush winding,
+         or a whole patch);
+      2. coplanar components that touch are merged into one chart;
+      3. a non-planar component (a curved patch) keeps one chart, projected
+         along its area-weighted normal.
+    Every vertex belongs to exactly one chart.
+*/
+struct LightmapChart_t {
+    std::vector<uint32_t> vertices;
+    MinMax  bounds;
+    Plane3f plane;
+    Vector3 origin, tangent, bitangent;
+    float   uMin, uMax, vMin, vMax;
+};
+
+namespace {
+struct DisjointSet {
+    std::vector<uint32_t> parent;
+    explicit DisjointSet(std::size_t n) : parent(n) { for (std::size_t i = 0; i < n; i++) parent[i] = static_cast<uint32_t>(i); }
+    uint32_t find(uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+    void join(uint32_t a, uint32_t b) { a = find(a); b = find(b); if (a != b) parent[b] = a; }
+};
+
+int64_t QuantizeLM(float value, float step) {
+    return static_cast<int64_t>(std::llround(value / step));
+}
+}
+
+static std::vector<LightmapChart_t> BuildLightmapCharts(const Shared::Mesh_t &mesh) {
+    const std::size_t triangleCount = mesh.triangles.size() / 3;
+    DisjointSet components(triangleCount);
+    {
+        std::vector<int64_t> firstTriangle(mesh.vertices.size(), -1);
+        for (std::size_t t = 0; t < triangleCount; t++) {
+            for (int k = 0; k < 3; k++) {
+                const uint16_t v = mesh.triangles[t * 3 + k];
+                if (firstTriangle[v] < 0) firstTriangle[v] = static_cast<int64_t>(t);
+                else components.join(static_cast<uint32_t>(firstTriangle[v]), static_cast<uint32_t>(t));
+            }
+        }
+    }
+
+    // Per component: area-weighted normal and planarity.
+    struct Component { Vector3 normal{0, 0, 0}; Vector3 firstNormal{0, 0, 0}; Vector3 point{0, 0, 0}; bool planar = true; bool seeded = false; };
+    std::map<uint32_t, Component> info;
+    for (std::size_t t = 0; t < triangleCount; t++) {
+        const Vector3 &a = mesh.vertices[mesh.triangles[t * 3 + 0]].xyz;
+        const Vector3 &b = mesh.vertices[mesh.triangles[t * 3 + 1]].xyz;
+        const Vector3 &c = mesh.vertices[mesh.triangles[t * 3 + 2]].xyz;
+        const Vector3 cross = vector3_cross(b - a, c - a);
+        const float length = vector3_length(cross);
+        Component &comp = info[components.find(static_cast<uint32_t>(t))];
+        if (length < 1e-6f) continue;
+        const Vector3 n = cross / length;
+        comp.normal += cross;
+        if (!comp.seeded) {
+            comp.firstNormal = n;
+            comp.point = a;
+            comp.seeded = true;
+        } else if (vector3_dot(n, comp.firstNormal) < 0.9995f
+                || std::fabs(vector3_dot(comp.firstNormal, a - comp.point)) > 0.25f) {
+            comp.planar = false;
+        }
+    }
+
+    // Merge coplanar components that share a vertex position.
+    DisjointSet charts(triangleCount);
+    for (std::size_t t = 0; t < triangleCount; t++) charts.join(components.find(static_cast<uint32_t>(t)), static_cast<uint32_t>(t));
+    std::map<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>, uint32_t> touching;
+    for (std::size_t t = 0; t < triangleCount; t++) {
+        const uint32_t root = components.find(static_cast<uint32_t>(t));
+        const Component &comp = info[root];
+        if (!comp.planar || !comp.seeded) continue;
+        const Vector3 n = comp.firstNormal;
+        const int64_t nx = QuantizeLM(n.x(), 1e-3f), ny = QuantizeLM(n.y(), 1e-3f), nz = QuantizeLM(n.z(), 1e-3f);
+        const int64_t d = QuantizeLM(vector3_dot(n, comp.point), 0.25f);
+        for (int k = 0; k < 3; k++) {
+            const Vector3 &p = mesh.vertices[mesh.triangles[t * 3 + k]].xyz;
+            const auto key = std::make_tuple(nx, ny, nz, d,
+                QuantizeLM(p.x(), 0.125f), QuantizeLM(p.y(), 0.125f), QuantizeLM(p.z(), 0.125f));
+            auto [it, inserted] = touching.emplace(key, root);
+            if (!inserted) charts.join(it->second, root);
+        }
+    }
+
+    // Gather triangles per chart.
+    std::map<uint32_t, std::vector<uint32_t>> chartTriangles;
+    for (std::size_t t = 0; t < triangleCount; t++)
+        chartTriangles[charts.find(static_cast<uint32_t>(t))].push_back(static_cast<uint32_t>(t));
+
+    std::vector<LightmapChart_t> result;
+    std::set<uint32_t> countedComponents;
+    for (const auto &[root, triangles] : chartTriangles) {
+        LightmapChart_t chart;
+        Vector3 normal(0, 0, 0);
+        countedComponents.clear();
+        std::vector<bool> seen(mesh.vertices.size(), false);
+        for (uint32_t t : triangles) {
+            const uint32_t component = components.find(t);
+            if (countedComponents.insert(component).second) normal += info[component].normal;
+            for (int k = 0; k < 3; k++) {
+                const uint16_t v = mesh.triangles[t * 3 + k];
+                if (!seen[v]) { seen[v] = true; chart.vertices.push_back(v); chart.bounds.extend(mesh.vertices[v].xyz); }
+            }
+        }
+        if (vector3_length(normal) < 1e-6f) normal = Vector3(0, 0, 1);
+        normal = vector3_normalised(normal);
+        // Plane through the chart's centroid (exact for planar charts).
+        Vector3 centroid(0, 0, 0);
+        for (uint32_t v : chart.vertices) centroid += mesh.vertices[v].xyz;
+        centroid /= static_cast<float>(chart.vertices.size());
+        chart.plane = Plane3f(normal, vector3_dot(normal, centroid));
+        ComputeSurfaceBasis(chart.plane, chart.tangent, chart.bitangent);
+        chart.origin = chart.bounds.mins - normal * (vector3_dot(normal, chart.bounds.mins) - chart.plane.dist());
+        chart.uMin = chart.vMin = FLT_MAX;
+        chart.uMax = chart.vMax = -FLT_MAX;
+        for (uint32_t v : chart.vertices) {
+            const Vector3 local = mesh.vertices[v].xyz - chart.origin;
+            const float u = vector3_dot(local, chart.tangent), w = vector3_dot(local, chart.bitangent);
+            chart.uMin = std::min(chart.uMin, u); chart.uMax = std::max(chart.uMax, u);
+            chart.vMin = std::min(chart.vMin, w); chart.vMax = std::max(chart.vMax, w);
+        }
+        result.push_back(std::move(chart));
+    }
+    return result;
+}
+
+/*
+    Row-packer dry runs used to keep all of a mesh's charts on one page.
+*/
+static bool ChartsFit(const std::vector<std::pair<int, int>> &sizes, int x, int y, int rowHeight) {
+    for (const auto &[width, height] : sizes) {
+        if (width > MAX_LIGHTMAP_WIDTH || height > MAX_LIGHTMAP_HEIGHT) return false;
+        if (x + width <= MAX_LIGHTMAP_WIDTH && y + height <= MAX_LIGHTMAP_HEIGHT) {
+            x += width;
+            rowHeight = std::max(rowHeight, height);
+        } else if (y + rowHeight + height <= MAX_LIGHTMAP_HEIGHT) {
+            y += rowHeight;
+            x = width;
+            rowHeight = height;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ChartsFitCurrentPage(const std::vector<std::pair<int, int>> &sizes) {
+    if (ApexLegends::Bsp::lightmapPages.empty()) return false;
+    return ChartsFit(sizes, LightmapBuild::pageCursorX, LightmapBuild::pageCursorY, LightmapBuild::pageRowHeight);
+}
+
+static bool ChartsFitEmptyPage(const std::vector<std::pair<int, int>> &sizes) {
+    return ChartsFit(sizes, 0, 0, 0);
+}
+
+
+/*
+    TrimLightmapPages
+    Cut each page down to the rows its surfaces use, rounded up to
+    LIGHTMAP_HEIGHT_ALIGN. Must run before any lightmap UV is computed,
+    since UVs are normalized by the final page size.
+*/
+static void TrimLightmapPages() {
+    std::vector<int> usedHeight(ApexLegends::Bsp::lightmapPages.size(), 0);
+    for (const SurfaceLightmap_t &surf : LightmapBuild::surfaces) {
+        int &height = usedHeight[surf.rect.pageIndex];
+        height = std::max(height, surf.rect.y + surf.rect.height);
+    }
+    for (size_t i = 0; i < ApexLegends::Bsp::lightmapPages.size(); i++) {
+        ApexLegends::LightmapPage_t &page = ApexLegends::Bsp::lightmapPages[i];
+        int height = std::max(usedHeight[i], LIGHTMAP_HEIGHT_ALIGN);
+        height = (height + LIGHTMAP_HEIGHT_ALIGN - 1) / LIGHTMAP_HEIGHT_ALIGN * LIGHTMAP_HEIGHT_ALIGN;
+        height = std::min(height, (int)page.height);
+        page.height = static_cast<uint16_t>(height);
+        page.pixels.resize((size_t)page.width * page.height * 8);
+        LightmapBuild::atlasUsed[i].resize((size_t)page.width * page.height);
+    }
+}
+
+
+/*
     SetupSurfaceLightmaps
     Allocate lightmap space for each lit surface and compute UV mappings
 */
 void ApexLegends::SetupSurfaceLightmaps() {
     LightmapBuild::surfaces.clear();
     LightmapBuild::atlasUsed.clear();
+    LightmapBuild::vertexSurface.assign(Shared::meshes.size(), {});
     ApexLegends::Bsp::lightmapPages.clear();
     LightmapBuild::currentPage = 0;
     LightmapBuild::pageCursorX = 0;
     LightmapBuild::pageCursorY = 0;
     LightmapBuild::pageRowHeight = 0;
-    
-    int meshIndex = 0;
+
     int litSurfaces = 0;
-    
-    for (const Shared::Mesh_t &mesh : Shared::meshes) {
+    int reducedMeshes = 0;
+
+    for (std::size_t meshIndex = 0; meshIndex < Shared::meshes.size(); meshIndex++) {
+        const Shared::Mesh_t &mesh = Shared::meshes[meshIndex];
         // Only process lit surfaces (LIT_BUMP vertex type)
-        if (!CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_LIT_BUMP)) {
-            meshIndex++;
+        if (!CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_LIT_BUMP) || mesh.triangles.size() < 3) {
             continue;
         }
-        
-        // Compute surface bounds
-        MinMax bounds;
-        for (const Shared::Vertex_t &vert : mesh.vertices) {
-            bounds.extend(vert.xyz);
-        }
-        
-        // Compute surface plane from first triangle
-        if (mesh.triangles.size() < 3) {
-            meshIndex++;
+
+        const std::vector<LightmapChart_t> charts = BuildLightmapCharts(mesh);
+        if (charts.empty()) {
             continue;
         }
-        
-        const Vector3 &v0 = mesh.vertices[mesh.triangles[0]].xyz;
-        const Vector3 &v1 = mesh.vertices[mesh.triangles[1]].xyz;
-        const Vector3 &v2 = mesh.vertices[mesh.triangles[2]].xyz;
-        
-        Vector3 edge1 = v1 - v0;
-        Vector3 edge2 = v2 - v0;
-        Vector3 normal = vector3_normalised(vector3_cross(edge1, edge2));
-        float dist = vector3_dot(normal, v0);
-        Plane3f plane(normal, dist);
-        
-        // Compute tangent basis
-        Vector3 tangent, bitangent;
-        ComputeSurfaceBasis(plane, tangent, bitangent);
-        
-        // Calculate lightmap size based on surface area in tangent space
-        // Track both min and max to properly handle surfaces where vertices
-        // can be on the negative side of the tangent/bitangent from bounds.mins
-        float uMin = FLT_MAX, uMax = -FLT_MAX;
-        float vMin = FLT_MAX, vMax = -FLT_MAX;
-        for (const Shared::Vertex_t &vert : mesh.vertices) {
-            Vector3 localPos = vert.xyz - bounds.mins;
-            float u = vector3_dot(localPos, tangent);
-            float v = vector3_dot(localPos, bitangent);
-            uMin = std::min(uMin, u);
-            uMax = std::max(uMax, u);
-            vMin = std::min(vMin, v);
-            vMax = std::max(vMax, v);
+
+        // A mesh record has one lightmap page, so all of its charts must be
+        // packed onto the same page. Halve the density until they fit.
+        float sampleSize = LIGHTMAP_SAMPLE_SIZE;
+        std::vector<std::pair<int, int>> sizes;
+        for (int attempt = 0; ; attempt++) {
+            sizes.clear();
+            for (const LightmapChart_t &chart : charts) {
+                sizes.emplace_back(
+                    std::max(MIN_LIGHTMAP_WIDTH,  (int)std::ceil((chart.uMax - chart.uMin) / sampleSize) + 1),
+                    std::max(MIN_LIGHTMAP_HEIGHT, (int)std::ceil((chart.vMax - chart.vMin) / sampleSize) + 1));
+            }
+            if (ChartsFitCurrentPage(sizes)) {
+                break;
+            }
+            if (ChartsFitEmptyPage(sizes)) {
+                if (!ApexLegends::Bsp::lightmapPages.empty()) {
+                    LightmapBuild::currentPage++;
+                }
+                InitLightmapAtlas();
+                break;
+            }
+            sampleSize *= 2.0f;
+            if (attempt == 0) {
+                reducedMeshes++;
+            }
         }
-        
-        float uExtent = uMax - uMin;
-        float vExtent = vMax - vMin;
-        
-        int lmWidth = std::max(MIN_LIGHTMAP_WIDTH, (int)std::ceil(uExtent / LIGHTMAP_SAMPLE_SIZE) + 1);
-        int lmHeight = std::max(MIN_LIGHTMAP_HEIGHT, (int)std::ceil(vExtent / LIGHTMAP_SAMPLE_SIZE) + 1);
-        
-        // Allocate rectangle
-        LightmapRect_t rect;
-        if (!AllocateLightmapRect(lmWidth, lmHeight, rect)) {
-            Sys_Warning("Failed to allocate lightmap for mesh %d\n", meshIndex);
-            meshIndex++;
-            continue;
+
+        LightmapBuild::vertexSurface[meshIndex].assign(mesh.vertices.size(), -1);
+        for (std::size_t c = 0; c < charts.size(); c++) {
+            const LightmapChart_t &chart = charts[c];
+            LightmapRect_t rect;
+            AllocateLightmapRect(sizes[c].first, sizes[c].second, rect);
+
+            SurfaceLightmap_t surfLM;
+            surfLM.meshIndex = static_cast<int>(meshIndex);
+            surfLM.rect = rect;
+            // worldBounds.mins is the projection origin used to map texels back
+            // to world space, so it must lie on the chart's plane.
+            surfLM.worldBounds = chart.bounds;
+            surfLM.worldBounds.mins = chart.origin;
+            surfLM.plane = chart.plane;
+            surfLM.tangent = chart.tangent;
+            surfLM.bitangent = chart.bitangent;
+            surfLM.uMin = chart.uMin;
+            surfLM.uMax = chart.uMax;
+            surfLM.vMin = chart.vMin;
+            surfLM.vMax = chart.vMax;
+            surfLM.luxels.resize(rect.width * rect.height, Vector3(0, 0, 0));
+            surfLM.indirectLuxels.resize(rect.width * rect.height, Vector3(0, 0, 0));
+
+            const int surfaceIndex = static_cast<int>(LightmapBuild::surfaces.size());
+            for (uint32_t vertex : chart.vertices) {
+                LightmapBuild::vertexSurface[meshIndex][vertex] = surfaceIndex;
+            }
+            LightmapBuild::surfaces.push_back(std::move(surfLM));
+            litSurfaces++;
         }
-        
-        // Create surface lightmap entry
-        SurfaceLightmap_t surfLM;
-        surfLM.meshIndex = meshIndex;
-        surfLM.rect = rect;
-        surfLM.worldBounds = bounds;
-        surfLM.plane = plane;
-        surfLM.tangent = tangent;
-        surfLM.bitangent = bitangent;
-        surfLM.uMin = uMin;
-        surfLM.uMax = uMax;
-        surfLM.vMin = vMin;
-        surfLM.vMax = vMax;
-        surfLM.luxels.resize(rect.width * rect.height, Vector3(0, 0, 0));
-        surfLM.indirectLuxels.resize(rect.width * rect.height, Vector3(0, 0, 0));
-        
-        LightmapBuild::surfaces.push_back(surfLM);
-        litSurfaces++;
-        meshIndex++;
     }
-    
+
+    TrimLightmapPages();
+
     if (litSurfaces > 0) {
-        Sys_Printf("  %d lit surfaces\n", litSurfaces);
+        Sys_Printf("  %d lit surfaces (lightmap charts)\n", litSurfaces);
         Sys_Printf("  %d lightmap pages\n", (int)ApexLegends::Bsp::lightmapPages.size());
+        if (reducedMeshes > 0) {
+            Sys_Printf("  %d meshes used a coarser lightmap density to fit one page\n", reducedMeshes);
+        }
     }
 }
 
@@ -1840,10 +2030,16 @@ void ApexLegends::EmitLightmaps()
     Look up the lightmap UV for a vertex position in a specific mesh
     Returns UV in [0,1] range normalized to the lightmap page
 */
-bool ApexLegends::GetLightmapUV(int meshIndex, const Vector3 &worldPos, Vector2 &outUV) {
-    // Find the surface lightmap for this mesh
-    for (const SurfaceLightmap_t &surf : LightmapBuild::surfaces) {
-        if (surf.meshIndex == meshIndex) {
+bool ApexLegends::GetLightmapUV(int meshIndex, int vertexIndex, const Vector3 &worldPos, Vector2 &outUV) {
+    // Find the lightmap chart this vertex belongs to
+    int surfaceIndex = -1;
+    if (meshIndex >= 0 && meshIndex < static_cast<int>(LightmapBuild::vertexSurface.size())) {
+        const std::vector<int> &map = LightmapBuild::vertexSurface[meshIndex];
+        if (vertexIndex >= 0 && vertexIndex < static_cast<int>(map.size())) surfaceIndex = map[vertexIndex];
+    }
+    if (surfaceIndex >= 0) {
+        {
+            const SurfaceLightmap_t &surf = LightmapBuild::surfaces[surfaceIndex];
             // Calculate local position relative to surface bounds
             Vector3 localPos = worldPos - surf.worldBounds.mins;
             
@@ -1866,8 +2062,9 @@ bool ApexLegends::GetLightmapUV(int meshIndex, const Vector3 &worldPos, Vector2 
             float texelV = normalizedV * (surf.rect.height - 1);
             
             // Add offset for rect position in atlas and normalize to [0,1]
-            float atlasU = (surf.rect.x + texelU + 0.5f) / MAX_LIGHTMAP_WIDTH;
-            float atlasV = (surf.rect.y + texelV + 0.5f) / MAX_LIGHTMAP_HEIGHT;
+            const ApexLegends::LightmapPage_t &page = ApexLegends::Bsp::lightmapPages[surf.rect.pageIndex];
+            float atlasU = (surf.rect.x + texelU + 0.5f) / page.width;
+            float atlasV = (surf.rect.y + texelV + 0.5f) / page.height;
             
             // Clamp to valid range
             outUV.x() = std::max(0.0f, std::min(1.0f, atlasU));

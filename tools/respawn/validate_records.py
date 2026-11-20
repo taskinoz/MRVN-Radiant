@@ -190,7 +190,7 @@ def check_records(records):
     meshes, bounds, sorts, indices = (records[i] for i in (80, 81, 82, 79))
     if len(meshes) != len(bounds):
         error(81, None, "mesh bounds and meshes have different counts")
-    for i, model in enumerate(records[14]):
+    for i, model in enumerate(records.get(14, [])):
         if model[6] + model[7] > len(meshes):
             error(14, i, "mesh slice outside MESHES")
     for i, sort in enumerate(sorts):
@@ -741,6 +741,11 @@ def check_tf1_records(records, inventory):
               + check_tf1_mesh_metadata(records) + check_tf1_vertex_references(records))
     def error(lump, index, message):
         issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
+    for i, model in enumerate(records.get(14, [])):
+        # The engine rejects a brush model whose mins exceed its maxs
+        # ("backwards mins/maxs"); a nodraw-only entity used to get one.
+        if any(not math.isfinite(v) for v in model[:6]) or any(model[a] > model[a + 3] for a in range(3)):
+            error(14, i, 'model bounds are inverted or nonfinite')
     for i, (surface, bottom, texture) in enumerate(records[36]):
         if not math.isfinite(surface) or not math.isfinite(bottom) or bottom > surface:
             error(36, i, 'invalid water height range')

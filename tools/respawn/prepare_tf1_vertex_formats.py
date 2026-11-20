@@ -47,7 +47,12 @@ def prepare(remap, output, asset_source=None):
                      '"ignoreGamemode" "1"\n"gamemode_tdm" "1"\n}\n'
                      for team in (2, 3) for kind in ('info_spawnpoint_human', 'info_spawnpoint_human_start'))
     path = maps / 'mp_tf1_vertex_formats.map'
-    path.write_text('{\n"classname" "worldspawn"\n' + '\n'.join(world) + '\n}\n' + spawns, encoding='utf-8')
+    # Lit formats draw black without lighting, so add a sun and a fill light.
+    lights = ('{\n"classname" "light_environment"\n"origin" "0 0 600"\n"pitch" "-50"\n"angles" "50 60 0"\n'
+              '"_light" "255 245 230 400"\n"_ambient" "160 170 190 60"\n}\n'
+              '{\n"classname" "light"\n"origin" "0 0 200"\n"_light" "255 255 255 200"\n"_distance" "600"\n}\n')
+    path.write_text('{\n"classname" "worldspawn"\n' + '\n'.join(world) + '\n}\n' + spawns + lights,
+                    encoding='utf-8')
     command = [str(remap.resolve()), '-game', 'titanfallonline', '-fs_basepath', str(output.resolve()),
                '-bsp', str(path.resolve())]
     with (output / 'compile.log').open('wb') as log:
@@ -59,7 +64,7 @@ def prepare(remap, output, asset_source=None):
         copy_files(found, output / 'addon-assets')
     # Downward rays onto each panel's top (z=192).
     traces = [[-288 + 256 * i, 272, 400, -288 + 256 * i, 272, -32] for i in range(len(FORMATS))]
-    checks = {'traces': traces, 'views': [[0, -300, 120, 5, 90]],
+    checks = {'traces': traces, 'views': [[0, -700, 140, 5, 90]],
               'expect': {'trace_z': [[i, 191.9, 192.1] for i in range(len(FORMATS))]}}
     (output / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
     manifest = {'command': command, 'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),

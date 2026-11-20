@@ -211,7 +211,12 @@ void Titanfall::EmitTriggerBrushPlaneKeyValues(entity_t &e) {
     BeginModel()
     Creates a new model entry
 */
+namespace {
+const entity_t *modelEntity = nullptr;  // the entity between BeginModel and EndModel
+}
+
 void Titanfall::BeginModel(entity_t &entity) {
+    modelEntity = &entity;
     Sys_FPrintf( SYS_VRB, "   BeginModel: \"%s\"\n", entity.classname() );
 
     Titanfall::Model_t &model = Titanfall::Bsp::models.emplace_back();
@@ -239,6 +244,18 @@ void Titanfall::EndModel() {
         model.minmax.extend(meshBounds.origin - meshBounds.extents);
         model.minmax.extend(meshBounds.origin + meshBounds.extents);
     }
+    // A brush entity with no drawn surface (a nodraw trigger) still needs real
+    // bounds: the engine rejects the inverted empty box ("backwards mins/maxs").
+    if (!model.meshCount && modelEntity) {
+        for (const brush_t &brush : modelEntity->brushes)
+            if (brush.minmax.mins.x() <= brush.minmax.maxs.x()) model.minmax.extend(brush.minmax);
+        for (const parseMesh_t *patch = modelEntity->patches; patch; patch = patch->next)
+            for (int i = 0; i < patch->mesh.width * patch->mesh.height; ++i)
+                model.minmax.extend(patch->mesh.verts[i].xyz);
+    }
+    if (model.minmax.mins.x() > model.minmax.maxs.x())  // nothing at all: a point, not an inverted box
+        model.minmax.extend(Vector3(0, 0, 0));
+    modelEntity = nullptr;
 
     // R1Delta refuses TF1 maps past the Source coordinate limit ("Map coordinate
     // extents are too large!!"); TFO loads them. Retail stays inside it.

@@ -52,6 +52,10 @@ def prepare(remap, output):
               brush((512, -320, 0), (528, 320, 192)), brush((1008, -320, 0), (1024, 320, 192)),
               brush((528, -320, 0), (1008, -304, 192)), brush((528, -8, 0), (1008, 8, 192))]
     world.append(brush((-800, -32, 0), (-736, 32, 64)))  # block under the spotlight
+    # Roofed, three-walled stall around the spotlight so the sun cannot wash out its pool.
+    world += [brush((-1100, -300, 400), (-436, 300, 416)),
+              brush((-1100, -300, 0), (-1084, 300, 400)), brush((-452, -300, 0), (-436, 300, 400)),
+              brush((-1084, 284, 0), (-452, 300, 400))]
     lights = (entity(classname='light_environment', origin='0 0 900', pitch='-50', angles='50 40 0',
                      _light='255 240 220 400', _ambient='150 170 200 40') +
               entity(classname='light', origin='768 -160 120', _light='255 180 120 300', _distance='320',

@@ -117,7 +117,10 @@ def prepare(remap, output):
               'expect': {'drop_z': [[i, *r[3]] for i, r in enumerate(rows)],
                          'drop_x': [[i, *r[4]] for i, r in enumerate(rows)],
                          'drop_y': [[i, *r[5]] for i, r in enumerate(rows)],
-                         'drop_settle': [[i, 0, SETTLE] for i in range(len(rows))]}}
+                         # The tumbling throw lands on its side and keeps rolling:
+                         # VPhysics barrels have almost no rolling resistance.
+                         'drop_settle': [[i, 0, SETTLE] for i, r in enumerate(rows)
+                                         if r[6] != 'thrown down tumbling']}}
     (output / 'checks.json').write_text(json.dumps(checks, indent=2) + '\n', encoding='utf-8')
     manifest = {'command': command, 'remap_sha256': hashlib.sha256(remap.read_bytes()).hexdigest(),
                 'bsp_sha256': hashlib.sha256(path.with_suffix('.bsp').read_bytes()).hexdigest(),

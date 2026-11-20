@@ -90,298 +90,210 @@ void ApexLegends::EmitCubemaps() {
 
 /*
     EmitWorldLights
-    Emits world lights from entities into the BSP worldlights lump
-    
-    Light ordering is critical for the engine:
-    1. emit_skyambient lights must be at the beginning
-    2. emit_skylight lights must follow directly after emit_skyambient lights
-    3. Other lights (spotlight, point) come after
-    
-    Each light_environment entity creates TWO lights:
-    - One emit_skyambient (ambient sky lighting)
-    - One emit_skylight (directional sun lighting)
+    Writes lump 0x36 (and the tweak list 0x55) the way retail S0-S3 maps do.
+    Measured from retail mp_rr_aqueduct (359 records matched to their
+    _env.ent entities):
+
+    - order: emit_skyambient, emit_skylight, then local lights grouped as
+      tweakable, realtime with shadows, realtime without shadows, static
+      spots, static points (entity order within a group);
+    - intensity = (c/255)^2.2 * brightness/255 per channel, x100000 when
+      "_pbr_falloff" "1";
+    - attenuation = 1 + linear*d + quadratic*d^2 through (0,1),
+      (_fifty_percent_distance, 0.5) and (_zero_percent_distance, 0);
+      radius = _zero_percent_distance;
+    - stopdot/stopdot2 = cos(_inner_cone)/cos(_cone);
+    - flags: 0x04 non-PBR or 0x20 PBR; 0x08 realtime (also set for
+      script_tweakable); 0x10 realtime without shadows; 0x40 realtime_shadows
+      "2"; 0x80 script_tweakable;
+    - shadow_upres / shadow_filter_size are stored only for realtime lights
+      with shadows; the sun uses flags 0x18 and the ambient 0.
 */
+namespace {
+Vector3 LinearLightColour(const char *value, float defaultBrightness) {
+    float r = 255.0f, g = 255.0f, b = 255.0f, brightness = defaultBrightness;
+    if (value && sscanf(value, "%f %f %f %f", &r, &g, &b, &brightness) < 3) {
+        r = g = b = 255.0f;
+    }
+    const float scale = brightness / 255.0f;
+    return Vector3(std::pow(r / 255.0f, 2.2f) * scale,
+                   std::pow(g / 255.0f, 2.2f) * scale,
+                   std::pow(b / 255.0f, 2.2f) * scale);
+}
+
+float FloatKey(const entity_t &e, const char *key, float fallback) {
+    const char *value = e.valueForKey(key);
+    return (value && value[0]) ? static_cast<float>(atof(value)) : fallback;
+}
+
+Vector3 LightDirection(const entity_t &e) {
+    Vector3 angles = e.vectorForKey("angles");
+    if (e.valueForKey("pitch")[0]) {
+        angles[0] = -e.floatForKey("pitch");  // "pitch" is stored negated
+    }
+    return ApexLegends::vector3_from_angles(angles);
+}
+
+// Order key for local lights; lower sorts first.
+int LightGroup(const WorldLight_t &light) {
+    if (light.flags & WORLDLIGHT_FLAG_TWEAK) return 0;
+    if (light.flags & WORLDLIGHT_FLAG_REALTIME) return (light.flags & WORLDLIGHT_FLAG_NO_RT_SHADOWS) ? 2 : 1;
+    return light.type == emit_spotlight ? 3 : 4;
+}
+}
+
 void ApexLegends::EmitWorldLights() {
     Sys_FPrintf(SYS_VRB, "--- EmitWorldLights ---\n");
     ApexLegends::Bsp::worldLights.clear();
+    ApexLegends::Bsp::tweakLights.clear();
 
-    // Separate lists for proper ordering
-    std::vector<WorldLight_t> skyAmbientLights;
-    std::vector<WorldLight_t> skyLights;
-    std::vector<WorldLight_t> otherLights;
+    std::vector<WorldLight_t> ambients, suns;
+    std::vector<std::pair<int, WorldLight_t>> locals;  // (group, light), stable-sorted by group
 
-    for (const entity_t& e : entities) {
-        const char* classname = e.classname();
+    for (const entity_t &e : entities) {
+        const char *classname = e.classname();
+        if (striEqual(classname, "light_environment")) {
+            WorldLight_t ambient = {};
+            ambient.origin = e.vectorForKey("origin");
+            ambient.intensity = LinearLightColour(e.valueForKey("_ambient"), 255.0f);
+            ambient.type = emit_skyambient;
+            ambients.push_back(ambient);
 
-        // Check for light entities
-        bool isLightEnvironment = false;
-        emittype_t type = emit_surface;
-
-        if (striEqual(classname, "light")) {
-            const char* spawnflags = e.valueForKey("spawnflags");
-            if (spawnflags && atoi(spawnflags) & 1) {
-                type = emit_spotlight;
-            } else {
-                type = emit_point;
-            }
-        } else if (striEqual(classname, "light_spotlight") || striEqual(classname, "light_spot")) {
-            type = emit_spotlight;
-        } else if (striEqual(classname, "light_environment")) {
-            isLightEnvironment = true;
-        } else {
+            WorldLight_t sun = {};
+            sun.origin = ambient.origin;
+            sun.intensity = LinearLightColour(e.valueForKey("_light"), 255.0f);
+            sun.normal = LightDirection(e);
+            sun.type = emit_skylight;
+            sun.flags = 0x18;
+            sun.sun_highlight_size_or_vfog_boost = FloatKey(e, "sun_highlight_size", 0.0f);
+            suns.push_back(sun);
             continue;
         }
 
-        // Get common light properties
-        Vector3 origin = e.vectorForKey("origin");
-
-        // Get angles for normal/direction
-        // light_environment uses "angles" key with format "pitch yaw roll"
-        // or separate "pitch" key. The pitch key seems to be the primary one.
-        Vector3 angles = e.vectorForKey("angles");
-        float pitch = e.floatForKey("pitch", "0");
-        // If pitch key exists, it takes precedence (and is often the negative)
-        if (e.valueForKey("pitch")) {
-            angles[0] = -pitch;  // pitch key is negative of the actual pitch
-        }
-        Vector3 normal = ApexLegends::vector3_from_angles(angles);
-
-        // Light color/intensity - format is "R G B brightness" (4 values)
-        // VRAD LightForString: intensity = pow(c/255, 2.2)*255 for each channel,
-        // then scaled by (brightness / 255.0) if 4th component present.
-        // Final intensity = linearRGB * (brightness / 255)
-        Vector3 intensity(1.0f, 1.0f, 1.0f);
-        const char* lightVal = e.valueForKey("_light");
-        if (lightVal) {
-            float r, g, b, brightness = 255.0f;
-            if (sscanf(lightVal, "%f %f %f %f", &r, &g, &b, &brightness) >= 3) {
-                // sRGB to linear conversion (VRAD g_bConvertLightsourceGamma)
-                float lr = std::pow(r / 255.0f, 2.2f) * 255.0f;
-                float lg = std::pow(g / 255.0f, 2.2f) * 255.0f;
-                float lb = std::pow(b / 255.0f, 2.2f) * 255.0f;
-                // VRAD LightForString: scale by brightness/255
-                // Then /255 for ExportDirectLightsToWorldLights (worldlight scale)
-                intensity = Vector3(lr, lg, lb) * (brightness / (255.0f * 255.0f));
-            }
+        const bool spot = striEqual(classname, "light_spot") || striEqual(classname, "light_spotlight");
+        if (!spot && !striEqual(classname, "light")) {
+            continue;
         }
 
-        if (isLightEnvironment) {
-            // light_environment creates TWO lights: emit_skyambient and emit_skylight
-            
-            // Get ambient color - format is "R G B brightness" (4 values)
-            Vector3 ambientIntensity = intensity * 0.5f;  // Default to 50% of sun (VRAD behavior)
-            const char* ambientVal = e.valueForKey("_ambient");
-            if (ambientVal) {
-                float r, g, b, brightness = 255.0f;
-                if (sscanf(ambientVal, "%f %f %f %f", &r, &g, &b, &brightness) >= 3) {
-                    // sRGB to linear conversion (VRAD LightForString)
-                    float lr = std::pow(r / 255.0f, 2.2f) * 255.0f;
-                    float lg = std::pow(g / 255.0f, 2.2f) * 255.0f;
-                    float lb = std::pow(b / 255.0f, 2.2f) * 255.0f;
-                    // LightForString * brightness/255, then /255 for worldlight scale
-                    ambientIntensity = Vector3(lr, lg, lb) * (brightness / (255.0f * 255.0f));
-                }
-            }
+        WorldLight_t light = {};
+        light.origin = e.vectorForKey("origin");
+        light.type = spot ? emit_spotlight : emit_point;
+        light.style = e.intForKey("style");
+        light.normal = spot ? LightDirection(e) : Vector3(1.0f, 0.0f, 0.0f);
 
-            // Sun highlight size for skylight
-            float sunHighlightSize = e.floatForKey("SunSpreadAngle", "0");
+        const bool pbr = FloatKey(e, "_pbr_falloff", 0.0f) != 0.0f;
+        const bool tweakable = FloatKey(e, "script_tweakable", FloatKey(e, "tweakable", 0.0f)) != 0.0f;
+        const bool realtime = FloatKey(e, "realtime", 0.0f) != 0.0f;
+        const int realtimeShadows = static_cast<int>(FloatKey(e, "realtime_shadows", 0.0f));
 
-            // 1. Create emit_skyambient light (ambient sky lighting)
-            WorldLight_t ambientLight = {};
-            ambientLight.origin = origin;
-            ambientLight.intensity = ambientIntensity;
-            ambientLight.normal = Vector3(0.0f, 0.0f, 0.0f);
-            ambientLight.shadowUpresFactor = 0;
-            ambientLight.shadowFilterSize = 0;
-            ambientLight.shadowBias = 0.0f;
-            ambientLight.bounceBoost = 0.0f;
-            ambientLight.type = emit_skyambient;
-            ambientLight.style = 0;
-            ambientLight.stopdot = 0.0f;
-            ambientLight.stopdot2 = 0.0f;
-            ambientLight.exponent = 0.0f;
-            ambientLight.radius = 0.0f;
-            ambientLight.constant_attn = 0.0f;
-            ambientLight.linear_attn = 0.0f;
-            ambientLight.quadratic_attn = 0.0f;
-            ambientLight.flags = 0;
-            ambientLight.texdata = 0;
-            ambientLight.owner = 0;
-            ambientLight.emitter_radius = 0.0f;
-            ambientLight.sun_highlight_size_or_vfog_boost = 0.0f;
-            ambientLight.specular_intensity = 0.0f;
-            skyAmbientLights.push_back(ambientLight);
+        light.intensity = LinearLightColour(e.valueForKey("_light"), 255.0f) * (pbr ? 100000.0f : 1.0f);
 
-            // 2. Create emit_skylight (directional sun lighting)
-            WorldLight_t sunLight = {};
-            sunLight.origin = origin;
-            sunLight.intensity = intensity;
-            sunLight.normal = normal;  // Sun direction
-            sunLight.shadowUpresFactor = 0;
-            sunLight.shadowFilterSize = 0;
-            sunLight.shadowBias = 0.0f;
-            sunLight.bounceBoost = 0.0f;
-            sunLight.type = emit_skylight;
-            sunLight.style = 0;
-            sunLight.stopdot = 0.0f;
-            sunLight.stopdot2 = 0.0f;
-            sunLight.exponent = 0.0f;
-            sunLight.radius = 0.0f;
-            sunLight.constant_attn = 0.0f;
-            sunLight.linear_attn = 0.0f;
-            sunLight.quadratic_attn = 0.0f;
-            sunLight.flags = 0x18;  // skylight uses flags 0x18
-            sunLight.texdata = 0;
-            sunLight.owner = 0;
-            sunLight.emitter_radius = 0.0f;
-            sunLight.sun_highlight_size_or_vfog_boost = sunHighlightSize;
-            sunLight.specular_intensity = 0.0f; 
-            skyLights.push_back(sunLight);
+        // Falloff: zero at d0, half at d50 (default 0.3 * d0, as retail's
+        // "_half_bright_fraction"). "_distance" is the editor's radius key.
+        float d0 = FloatKey(e, "_zero_percent_distance", FloatKey(e, "_distance", 512.0f));
+        float d50 = FloatKey(e, "_fifty_percent_distance", FloatKey(e, "_half_bright_fraction", 0.3f) * d0);
+        if (d0 <= 1.0f) d0 = 512.0f;
+        if (d50 <= 0.0f || d50 >= d0) d50 = 0.3f * d0;
+        const float det = d50 * d0 * d0 - d0 * d50 * d50;
+        light.constant_attn = 1.0f;
+        light.linear_attn = (-0.5f * d0 * d0 + d50 * d50) / det;
+        light.quadratic_attn = (-d50 + 0.5f * d0) / det;
+        light.radius = d0;
 
-        } else {
-            // Regular light (point, spotlight)
-            // Parse shadow parameters
-            int shadowUpres = e.intForKey("shadow_upres");
-            int shadowFilterSize = e.intForKey("shadow_filter_size");
-            float shadowBias = e.floatForKey("shadow_bias");
-            
-            // Parse light parameters
-            float emitterRadius = e.floatForKey("_emitter_radius");
-            float specularIntensity = e.floatForKey("_specular_intensity");
-            if (specularIntensity == 0.0f && !e.valueForKey("_specular_intensity")) {
-                specularIntensity = 1.0f;  // Default to 1.0 if not specified
-            }
-            float exponent = e.floatForKey("_exponent");
-            if (exponent == 0.0f && !e.valueForKey("_exponent")) {
-                exponent = 1.0f;  // Default to 1.0 if not specified
-            }
-            int style = e.intForKey("style");
-            
-            // Parse distance/attenuation - Apex uses distance-based falloff
-            float distance = e.floatForKey("_distance");
-            float fiftyPercent = e.floatForKey("_fifty_percent_distance");
-            float zeroPercent = e.floatForKey("_zero_percent_distance");
-            
-            // Calculate attenuation from distance parameters if provided
-            // Otherwise use explicit attenuation values
-            float constantAttn = e.floatForKey("_constant_attn");
-            float linearAttn = e.floatForKey("_linear_attn");
-            float quadraticAttn = e.floatForKey("_quadratic_attn");
-            
-            // If distance-based falloff is specified, convert to attenuation coefficients
-            // At d50, brightness = 50%: 1/(c + q*d50²) = 0.5 → with c=1: q = 1/d50²
-            if (fiftyPercent > 0 && zeroPercent > 0) {
-                distance = zeroPercent;
-                constantAttn = 1.0f;
-                linearAttn = 0.0f;
-                quadraticAttn = 1.0f / (fiftyPercent * fiftyPercent);
-            } else {
-                // Explicit attenuation path (VRAD SetLightFalloffParams)
-                // Clamp near-zero values
-                if (constantAttn < 1e-6f) constantAttn = 0.0f;
-                if (linearAttn < 1e-6f) linearAttn = 0.0f;
-                if (quadraticAttn < 1e-6f) quadraticAttn = 0.0f;
-                
-                // If no attenuation specified at all, default to constant=1 (VRAD behavior)
-                if (constantAttn == 0.0f && linearAttn == 0.0f && quadraticAttn == 0.0f) {
-                    constantAttn = 1.0f;
-                }
-                
-                // VRAD pre-scales intensity so that the brightness value represents
-                // what you see at 100 units distance. This is critical for lights
-                // with quadratic_attn=1 (otherwise they'd be nearly invisible).
-                float ratio = constantAttn + 100.0f * linearAttn + 10000.0f * quadraticAttn;
-                if (ratio > 0) {
-                    intensity = intensity * ratio;
-                }
-            }
-            
-            // Parse flags from entity properties
-            int flags = 0;
-            bool isRealtime = e.intForKey("realtime") != 0;
-            bool hasRealtimeShadows = e.intForKey("realtime_shadows") != 0;
-            bool isPbrFalloff = e.intForKey("_pbr_falloff") != 0 || e.valueForKey("_pbr_falloff") == nullptr;  // Default to PBR
-            bool isTweakable = e.intForKey("tweakable") != 0;
-            
-            if (isRealtime) flags |= WORLDLIGHT_FLAG_REALTIME;
-            if (hasRealtimeShadows) flags |= WORLDLIGHT_FLAG_REALTIME_SHADOWS;
-            if (isPbrFalloff) flags |= WORLDLIGHT_FLAG_PBR_FALLOFF;
-            if (isTweakable || isRealtime) flags |= WORLDLIGHT_FLAG_TWEAK;  // Realtime lights are tweakable
-            
-            // Add additional common flags based on official maps (bit 3 and 4 often set)
-            flags |= 0x08;  // Bit 3 - commonly set in official maps
-            flags |= 0x10;  // Bit 4 - commonly set in official maps
-            
-            WorldLight_t light = {};
-            light.origin = origin;
-            light.intensity = intensity;
-            light.normal = normal;
-            light.shadowUpresFactor = shadowUpres;
-            light.shadowFilterSize = shadowFilterSize;
-            light.shadowBias = shadowBias;
-            light.bounceBoost = 0.0f;
-            light.type = type;
-            light.style = style;
-            light.texdata = 0;
-            light.owner = 0;
-            light.emitter_radius = emitterRadius;
-            light.sun_highlight_size_or_vfog_boost = 0.0f;
-            light.specular_intensity = specularIntensity;
-
-            if (type == emit_spotlight) {
-                float innerCone = e.floatForKey("_inner_cone");
-                float outerCone = e.floatForKey("_cone");
-                // Defaults if not specified (VRAD defaults: inner=10, outer=inner)
-                if (innerCone == 0.0f && !e.valueForKey("_inner_cone")) innerCone = 10.0f;
-                if (outerCone == 0.0f && !e.valueForKey("_cone")) outerCone = innerCone;
-                light.stopdot = std::cos(degrees_to_radians(innerCone));
-                light.stopdot2 = std::cos(degrees_to_radians(outerCone));
-                light.exponent = exponent;
-                light.constant_attn = constantAttn;
-                light.linear_attn = linearAttn;
-                light.quadratic_attn = quadraticAttn;
-            } else {
-                // Point light
-                light.stopdot = 0.0f;
-                light.stopdot2 = 0.0f;
-                light.exponent = exponent;
-                light.constant_attn = constantAttn;
-                light.linear_attn = linearAttn;
-                light.quadratic_attn = quadraticAttn;
-            }
-
-            light.radius = distance > 0 ? distance : e.floatForKey("_radius");
-            light.flags = flags;
-
-            otherLights.push_back(light);
+        if (spot) {
+            const float inner = FloatKey(e, "_inner_cone", 30.0f);
+            const float outer = FloatKey(e, "_cone", 45.0f);
+            light.stopdot = std::cos(degrees_to_radians(inner));
+            light.stopdot2 = std::cos(degrees_to_radians(std::max(inner, outer)));
+            light.exponent = FloatKey(e, "_exponent", 1.0f);
         }
+
+        int flags = pbr ? WORLDLIGHT_FLAG_PBR : WORLDLIGHT_FLAG_NON_PBR;
+        if (tweakable) flags |= WORLDLIGHT_FLAG_TWEAK | WORLDLIGHT_FLAG_REALTIME;
+        if (realtime) {
+            flags |= WORLDLIGHT_FLAG_REALTIME;
+            if (realtimeShadows == 0) flags |= WORLDLIGHT_FLAG_NO_RT_SHADOWS;
+            if (realtimeShadows == 2) flags |= WORLDLIGHT_FLAG_RT_SHADOWS_2;
+        }
+        light.flags = flags;
+        if (realtime && realtimeShadows != 0) {
+            light.shadowUpresFactor = e.intForKey("shadow_upres");
+            light.shadowFilterSize = e.intForKey("shadow_filter_size");
+        }
+        light.shadowBias = FloatKey(e, "shadow_bias", 0.0f);
+        light.emitter_radius = FloatKey(e, "_emitter_radius", 0.0f);
+        light.specular_intensity = FloatKey(e, "_specular_intensity", 1.0f);
+        locals.emplace_back(LightGroup(light), light);
     }
 
-    // Build final list in correct order:
-    // 1. All emit_skyambient lights first
-    // 2. All emit_skylight lights second (must match count of skyambient)
-    // 3. All other lights after
-    for (const auto& light : skyAmbientLights) {
-        ApexLegends::Bsp::worldLights.push_back(light);
-    }
-    for (const auto& light : skyLights) {
-        ApexLegends::Bsp::worldLights.push_back(light);
-    }
-    for (const auto& light : otherLights) {
-        ApexLegends::Bsp::worldLights.push_back(light);
-    }
+    std::stable_sort(locals.begin(), locals.end(),
+                     [](const auto &a, const auto &b) { return a.first < b.first; });
+    for (const WorldLight_t &light : ambients) ApexLegends::Bsp::worldLights.push_back(light);
+    for (const WorldLight_t &light : suns) ApexLegends::Bsp::worldLights.push_back(light);
+    for (const auto &[group, light] : locals) ApexLegends::Bsp::worldLights.push_back(light);
 
-    // Generate tweak lights list - indices of all lights with WORLDLIGHT_FLAG_TWEAK set
-    ApexLegends::Bsp::tweakLights.clear();
     for (uint32_t i = 0; i < ApexLegends::Bsp::worldLights.size(); i++) {
-        if (ApexLegends::Bsp::worldLights[i].flags/* & WORLDLIGHT_FLAG_TWEAK*/) {
+        if (ApexLegends::Bsp::worldLights[i].flags & WORLDLIGHT_FLAG_TWEAK) {
             ApexLegends::Bsp::tweakLights.push_back(i);
         }
     }
 
     Sys_Printf("  %zu world lights (%zu environments, %zu point/spot, %zu tweakable)\n",
-        ApexLegends::Bsp::worldLights.size(), skyAmbientLights.size(),
-        otherLights.size(), ApexLegends::Bsp::tweakLights.size());
+        ApexLegends::Bsp::worldLights.size(), ambients.size(), locals.size(),
+        ApexLegends::Bsp::tweakLights.size());
+}
+
+/*
+    HardwareLightIndex
+    Index of a world light among the non-ambient world lights. RTL pages
+    (0x7A) and light probes reference lights by this index; the sun of the
+    first light_environment is 0.
+*/
+int ApexLegends::HardwareLightIndex(std::size_t worldLightIndex) {
+    int ambientsBefore = 0;
+    for (std::size_t i = 0; i < worldLightIndex && i < ApexLegends::Bsp::worldLights.size(); i++) {
+        if (ApexLegends::Bsp::worldLights[i].type == emit_skyambient) ambientsBefore++;
+    }
+    return static_cast<int>(worldLightIndex) - ambientsBefore;
+}
+
+/*
+    LocalLightFalloff
+    Distance falloff of a point or spot light, 0 at and beyond its radius.
+    Non-PBR lights use their stored attenuation polynomial. PBR lights are
+    stored x100000, which only fits an inverse-square law, so they use a
+    windowed inverse square; that shape is an approximation of the engine's
+    shader, not a measurement.
+*/
+float ApexLegends::LocalLightFalloff(const WorldLight_t &light, float dist) {
+    if (light.radius > 0.0f && dist >= light.radius) return 0.0f;
+    if (light.flags & WORLDLIGHT_FLAG_PBR) {
+        const float d = std::max(dist, 1.0f);
+        float window = 1.0f;
+        if (light.radius > 0.0f) {
+            const float x = dist / light.radius, x4 = x * x * x * x;
+            window = std::max(0.0f, 1.0f - x4);
+            window *= window;
+        }
+        return window / (d * d);
+    }
+    const float value = light.constant_attn + light.linear_attn * dist + light.quadratic_attn * dist * dist;
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+/*
+    LocalLightSpot
+    Cone factor of a light toward `dirFromLight` (unit vector from the light);
+    1 for point lights.
+*/
+float ApexLegends::LocalLightSpot(const WorldLight_t &light, const Vector3 &dirFromLight) {
+    if (light.type != emit_spotlight) return 1.0f;
+    const float spotDot = vector3_dot(dirFromLight, light.normal);
+    if (spotDot <= light.stopdot2) return 0.0f;
+    if (spotDot >= light.stopdot || light.stopdot <= light.stopdot2) return 1.0f;
+    float t = (spotDot - light.stopdot2) / (light.stopdot - light.stopdot2);
+    if (light.exponent > 0.0f && light.exponent != 1.0f) t = std::pow(t, light.exponent);
+    return t;
 }
 
 /*
@@ -670,4 +582,31 @@ void ApexLegends::EmitShadowEnvironments() {
     }
 
     Sys_Printf("  %zu shadow environments\n", ApexLegends::Bsp::shadowEnvironments.size());
+}
+
+
+/*
+    AssignMeshCubemaps
+    Mesh record field [2] carries the cubemap index in its high byte for lit
+    meshes (retail: 0x0302 = lit bump, cubemap 3). Runs after EmitCubemaps
+    and picks the cubemap nearest the mesh's bounds centre.
+*/
+void ApexLegends::AssignMeshCubemaps() {
+    for (std::size_t i = 0; i < ApexLegends::Bsp::meshes.size(); i++) {
+        ApexLegends::Mesh_t &mesh = ApexLegends::Bsp::meshes[i];
+        const uint16_t pool = mesh.unknown[2] & 0xFF;
+        if (pool == 0 || pool == 3) continue;  // unlit pools keep 0xFF
+        uint16_t index = 0xFF;
+        if (!ApexLegends::Bsp::cubemaps.empty() && i < ApexLegends::Bsp::meshBounds.size()) {
+            const Vector3 centre = ApexLegends::Bsp::meshBounds[i].origin;
+            float best = FLT_MAX;
+            for (std::size_t c = 0; c < ApexLegends::Bsp::cubemaps.size() && c < 0xFF; c++) {
+                const CubemapSample_t &cube = ApexLegends::Bsp::cubemaps[c];
+                const Vector3 delta = centre - Vector3(cube.origin[0], cube.origin[1], cube.origin[2]);
+                const float d = vector3_dot(delta, delta);
+                if (d < best) { best = d; index = static_cast<uint16_t>(c); }
+            }
+        }
+        mesh.unknown[2] = static_cast<uint16_t>(pool | (index << 8));
+    }
 }

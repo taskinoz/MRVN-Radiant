@@ -57,11 +57,13 @@ enum emittype_t : int32_t {
     emit_skyambient = 5
 };
 
-// World light flags
-constexpr int32_t WORLDLIGHT_FLAG_REALTIME         = 0x01;  // Realtime light (dynamic)
-constexpr int32_t WORLDLIGHT_FLAG_REALTIME_SHADOWS = 0x02;  // Casts realtime shadows
-constexpr int32_t WORLDLIGHT_FLAG_PBR_FALLOFF      = 0x04;  // Uses PBR falloff curve
-constexpr int32_t WORLDLIGHT_FLAG_TWEAK            = 0x80;  // Can be adjusted at runtime (tweak light)
+// World light flags (lump 0x36), measured from retail S3 mp_rr_aqueduct.
+constexpr int32_t WORLDLIGHT_FLAG_NON_PBR         = 0x04;  // static light, attenuation polynomial
+constexpr int32_t WORLDLIGHT_FLAG_REALTIME        = 0x08;  // realtime (also set for tweakable lights)
+constexpr int32_t WORLDLIGHT_FLAG_NO_RT_SHADOWS   = 0x10;  // realtime without realtime shadows
+constexpr int32_t WORLDLIGHT_FLAG_PBR             = 0x20;  // "_pbr_falloff" "1"; intensity stored x100000
+constexpr int32_t WORLDLIGHT_FLAG_RT_SHADOWS_2    = 0x40;  // "realtime_shadows" "2"
+constexpr int32_t WORLDLIGHT_FLAG_TWEAK           = 0x80;  // "script_tweakable" "1"
 
 // 0x36 (54) - dworldlight_t (112 bytes)
 // World lights for dynamic lighting in the BSP
@@ -150,29 +152,18 @@ static_assert(sizeof(ShadowMeshAlphaVertex_t) == 20, "ShadowMeshAlphaVertex_t mu
 // This means int16 value of 8192 (0x2000) = 1.0 linear light intensity
 // The game's default probe uses 0x2000 for DC terms when no probe data exists
 //
-// Official map analysis shows:
-//   - DC range: 0 to ~8192 for normally lit areas (can exceed for HDR)
-//   - Gradient range: -8192 to +8192 
-//   - lightingFlags (offset 36): usually 0x0096 (150 decimal)
-//   - Padding0 (offset 40): usually 0xFFFFFFFF for most probes
-//   - Padding1 (offset 44): always 0x00000000
+// Layout matches TF2's probes and retail S3 mp_rr_aqueduct: after the
+// 12 SH values come a sky vector and sun visibility (retail values such as
+// (-16, 4, 8192) and 8192), then four weights and four hardware light
+// indices at +0x24. Retail probes reference realtime and static local lights.
 #pragma pack(push, 1)
 struct LightProbe_t {
-    int16_t  ambientSH[3][4];       // +0x00 - Spherical harmonics for R, G, B (24 bytes)
-    uint16_t staticLightIndexes[4]; // +0x18 - Raw worldlight indices (8 bytes)
-                                    //         BSP stores 0-based worldlight index
-                                    //         Engine's Mod_LoadLightProbes adds +32 at load time
-                                    //         to convert to global light handles (0-31=shadowenvs, 32+=worldlights)
-                                    //         0xFFFF = no light in this slot
-    uint8_t  staticLightFlags[4];   // +0x20 - Weight/flags for each static light (4 bytes)
-                                    //         Game calls this "staticLightWeights"
-                                    //         0xFF = valid light, 0x00 = no light
-                                    //         CRITICAL: Game breaks loop when weight[slot] == 0
-                                    //         So EACH valid slot must have non-zero weight!
-    uint16_t lightingFlags;         // +0x24 - Lighting flags (usually 0x0096 = 150)
-    uint16_t reserved;              // +0x26 - Reserved (usually 0xFFFF)
-    uint32_t padding0;              // +0x28 - Padding (usually 0xFFFFFFFF)
-    uint32_t padding1;              // +0x2C - Padding (always 0x00000000)
+    int16_t  ambientSH[3][4];       // +0x00 - R, G, B: x/y/z gradient and DC, fixed point /8192
+    int16_t  skyVector[3];          // +0x18 - unoccluded sky direction * cbrt(sky fraction), /8192
+    int16_t  sunVisibility;         // +0x1E - fraction of the sun seen, /8192
+    uint8_t  staticLightFlags[4];   // +0x20 - per-light visibility weight; the engine stops at the first 0
+    uint16_t staticLightIndexes[4]; // +0x24 - hardware light index (world index minus ambients), 0xFFFF = none
+    uint32_t padding;               // +0x2C - 0
 };
 #pragma pack(pop)
 static_assert(sizeof(LightProbe_t) == 48, "LightProbe_t must be exactly 48 bytes");
@@ -274,6 +265,9 @@ namespace ApexLegends {
     void        EmitVisTree();
     void        EmitLevelInfo();
     void        EmitWorldLights();
+    int         HardwareLightIndex(std::size_t worldLightIndex);
+    float       LocalLightFalloff(const WorldLight_t &light, float dist);
+    float       LocalLightSpot(const WorldLight_t &light, const Vector3 &dirFromLight);
     void        EmitCubemaps();
     void        EmitShadowEnvironments();
     void        EmitShadowMeshes();
@@ -295,6 +289,9 @@ namespace ApexLegends {
     // Get the lightmap page index for a mesh
     // Returns 0 (default page) for non-lit meshes - all meshes have a valid lightmap index
     int16_t     GetLightmapPageIndex(int meshIndex);
+    void        GetLightmapOrigin(int meshIndex, uint16_t &x, uint16_t &y);
+    void        AssignMeshCubemaps();
+    void        BuildLightOccluders(const entity_t &world);
 
     /*
         vector3_from_angles

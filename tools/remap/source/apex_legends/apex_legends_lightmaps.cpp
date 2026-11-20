@@ -40,6 +40,9 @@
 #include "../bspfile_abstract.h"
 #include "../hiprt_trace.h"
 #include "apex_legends.h"
+#include "../respawn/lightbake.h"
+#include <atomic>
+#include <memory>
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
@@ -70,23 +73,17 @@ static inline float QuinticInterp(float t) {
 //   endFade = radius
 // This matches VRAD's hard falloff behavior
 static inline float ComputeLightFade(float dist, const WorldLight_t &light) {
-    if (light.radius <= 0) return 1.0f;
-    if (dist >= light.radius) return 0.0f;
+    // LocalLightFalloff already reaches zero at the radius.
+    return (light.radius > 0 && dist >= light.radius) ? 0.0f : 1.0f;
+}
 
-    // Derive d50 from quadratic attenuation: q = 1/d50², so d50 = 1/sqrt(q)
-    float startFade = light.radius;
-    if (light.quadratic_attn > 0) {
-        float d50 = 1.0f / std::sqrt(light.quadratic_attn);
-        startFade = 0.75f * light.radius + 0.25f * d50;
-    } else {
-        startFade = 0.75f * light.radius;  // Fallback: start fade at 75% of radius
-    }
-
-    if (dist <= startFade) return 1.0f;
-
-    // Quintic interpolation from 1.0 at startFade to 0.0 at radius
-    float t = (dist - startFade) / (light.radius - startFade);
-    return 1.0f - QuinticInterp(t);
+// Static point and spot lights (no WORLDLIGHT_FLAG_REALTIME) are baked into
+// lightmaps and probe SH. Realtime lights are drawn by the engine through
+// RTL slots (lump 0x69) and probe light references instead. This is the
+// model verified in-game for Titanfall 2; in S3 tests, static lights given
+// only RTL slots did not light surfaces with their colour or falloff.
+static inline bool BakeLocalLight(const WorldLight_t &light) {
+    return (light.flags & WORLDLIGHT_FLAG_REALTIME) == 0;
 }
 
 // Minimum distance clamp to prevent light intensity blowup at very close range
@@ -587,6 +584,11 @@ static std::vector<LightmapChart_t> BuildLightmapCharts(const Shared::Mesh_t &me
         }
         if (vector3_length(normal) < 1e-6f) normal = Vector3(0, 0, 1);
         normal = vector3_normalised(normal);
+        // Triangle winding does not say which side is the surface's front;
+        // the authored vertex normals (brush side planes) do.
+        Vector3 authored(0, 0, 0);
+        for (uint32_t v : chart.vertices) authored += mesh.vertices[v].normal;
+        if (vector3_dot(authored, normal) < 0.0f) normal = normal * -1.0f;
         // Plane through the chart's centroid (exact for planar charts).
         Vector3 centroid(0, 0, 0);
         for (uint32_t v : chart.vertices) centroid += mesh.vertices[v].xyz;
@@ -1032,7 +1034,7 @@ static TexelLighting_t ComputeLightingAtPoint(const Vector3 &worldPos, const Vec
     // Static point/spot lights with shadow rays
     for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
         if (light.type == emit_skyambient || light.type == emit_skylight) continue;
-        if (light.flags & WORLDLIGHT_FLAG_REALTIME) continue;
+        if (!BakeLocalLight(light)) continue;
 
         Vector3 lightPos(light.origin[0], light.origin[1], light.origin[2]);
         Vector3 toLight = lightPos - worldPos;
@@ -1052,14 +1054,7 @@ static TexelLighting_t ComputeLightingAtPoint(const Vector3 &worldPos, const Vec
             if (NdotL > 0) {
                 if (TraceRayAgainstMeshes(worldPos, lightDir, dist - 1.0f)) continue;
 
-                float atten = 1.0f;
-                if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                    atten = 1.0f / (light.constant_attn +
-                                   light.linear_attn * evalDist +
-                                   light.quadratic_attn * evalDist * evalDist);
-                } else {
-                    atten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                }
+                float atten = ApexLegends::LocalLightFalloff(light, evalDist);
                 directLight = directLight + light.intensity * NdotL * atten * fadeFactor;
             }
         } else if (light.type == emit_spotlight) {
@@ -1078,14 +1073,7 @@ static TexelLighting_t ComputeLightingAtPoint(const Vector3 &worldPos, const Vec
                             spotAtten = std::pow(spotAtten, light.exponent);
                     }
                     // Distance attenuation (same formula as point lights)
-                    float distAtten = 1.0f;
-                    if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                        distAtten = 1.0f / (light.constant_attn +
-                                           light.linear_attn * evalDist +
-                                           light.quadratic_attn * evalDist * evalDist);
-                    } else {
-                        distAtten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                    }
+                    float distAtten = ApexLegends::LocalLightFalloff(light, evalDist);
                     // Multiply by direction cosine (angular distribution)
                     directLight = directLight + light.intensity * NdotL * spotAtten * distAtten * spotDot * fadeFactor;
                 }
@@ -1345,7 +1333,7 @@ void ApexLegends::ComputeLightmapLighting() {
             // Point/spot light shadow rays
             for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
                 if (light.type == emit_skyambient || light.type == emit_skylight) continue;
-                if (light.flags & WORLDLIGHT_FLAG_REALTIME) continue;
+                if (!BakeLocalLight(light)) continue;
                 
                 Vector3 lightPos(light.origin[0], light.origin[1], light.origin[2]);
                 Vector3 toLight = lightPos - worldPos;
@@ -1364,14 +1352,7 @@ void ApexLegends::ComputeLightmapLighting() {
                     float NdotL = vector3_dot(sampleNormal, lightDir);
                     if (NdotL <= 0) continue;
                     
-                    float atten;
-                    if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                        atten = 1.0f / (light.constant_attn +
-                                       light.linear_attn * evalDist +
-                                       light.quadratic_attn * evalDist * evalDist);
-                    } else {
-                        atten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                    }
+                    float atten = ApexLegends::LocalLightFalloff(light, evalDist);
                     
                     rayOrigins.push_back(worldPos);
                     rayDirs.push_back(lightDir);
@@ -1395,14 +1376,7 @@ void ApexLegends::ComputeLightmapLighting() {
                             spotAtten = std::pow(spotAtten, light.exponent);
                     }
                     // Distance attenuation (same formula as point lights)
-                    float distAtten = 1.0f;
-                    if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                        distAtten = 1.0f / (light.constant_attn +
-                                           light.linear_attn * evalDist +
-                                           light.quadratic_attn * evalDist * evalDist);
-                    } else {
-                        distAtten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                    }
+                    float distAtten = ApexLegends::LocalLightFalloff(light, evalDist);
                     
                     rayOrigins.push_back(worldPos);
                     rayDirs.push_back(lightDir);
@@ -1624,7 +1598,7 @@ void ApexLegends::ComputeLightmapLighting() {
                             // Point/spot light shadow rays
                             for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
                                 if (light.type == emit_skyambient || light.type == emit_skylight) continue;
-                                if (light.flags & WORLDLIGHT_FLAG_REALTIME) continue;
+                                if (!BakeLocalLight(light)) continue;
                                 
                                 Vector3 lightPos(light.origin[0], light.origin[1], light.origin[2]);
                                 Vector3 toLight = lightPos - worldPos;
@@ -1643,14 +1617,7 @@ void ApexLegends::ComputeLightmapLighting() {
                                 if (NdotL <= 0) continue;
                                 
                                 if (light.type == emit_point) {
-                                    float atten;
-                                    if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                                        atten = 1.0f / (light.constant_attn +
-                                                       light.linear_attn * evalDist +
-                                                       light.quadratic_attn * evalDist * evalDist);
-                                    } else {
-                                        atten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                                    }
+                                    float atten = ApexLegends::LocalLightFalloff(light, evalDist);
                                     
                                     rayOrigins.push_back(worldPos);
                                     rayDirs.push_back(lightDir);
@@ -1670,14 +1637,7 @@ void ApexLegends::ComputeLightmapLighting() {
                                             spotAtten = std::pow(spotAtten, light.exponent);
                                     }
                                     // Distance attenuation (same formula as point lights)
-                                    float distAtten = 1.0f;
-                                    if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                                        distAtten = 1.0f / (light.constant_attn +
-                                                           light.linear_attn * evalDist +
-                                                           light.quadratic_attn * evalDist * evalDist);
-                                    } else {
-                                        distAtten = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                                    }
+                                    float distAtten = ApexLegends::LocalLightFalloff(light, evalDist);
                                     
                                     rayOrigins.push_back(worldPos);
                                     rayDirs.push_back(lightDir);
@@ -1879,12 +1839,178 @@ static void EncodeHDRTexelPair(const Vector3 &directColor, const Vector3 &indire
     Note: SetupSurfaceLightmaps() must be called before this, which happens
     in EmitMeshes() to ensure UV coordinates are available during vertex emission.
 */
+// =============================================================================
+// LIGHTMAP PLANES (retail encoding)
+// =============================================================================
+/*
+    Retail S3 mp_rr_aqueduct lightmaps (lump 0x62), per page, measured
+    21 November 2026, match Titanfall 2's planes (respawn/lightbake.h):
+      plane A  RGBM: rgb/255 * (a/255 * 3.984375 + 0.015625); every alpha
+               value is used and the peak channel sits near 255. It holds
+               baked static light and an ambient fill; it does not change
+               with sun exposure, so the sun is not baked into it.
+      plane B  bent sky direction scaled by cbrt(sky visibility),
+               rgb/255 * 2.007874 - 1. Alpha is 0 where no sky is seen and
+               255 on exposed texels, with intermediate values at simple
+               fractions (64, 85, 128, 170, 191): written here as the
+               fraction of four sub-texel sun rays that reach the sun.
+    The fork wrote RGBE colour into both planes, which the engine read as
+    RGBM: lit areas turned into rings with black centres.
+
+    Shadow rays use Respawn::Bake::Occluders built from opaque world brushes
+    (sky brushes let rays out), the same structure as the Titanfall 2 baker.
+*/
+namespace {
+std::unique_ptr<Respawn::Bake::Occluders> g_occluders;
+
+Respawn::Bake::V3 ToV3(const Vector3 &v) { return {v.x(), v.y(), v.z()}; }
+}
+
+void ApexLegends::BuildLightOccluders(const entity_t &world) {
+    std::vector<Respawn::Bake::Brush> brushes;
+    for (const brush_t &brush : world.brushes) {
+        bool visible = false, sky = false, translucent = false;
+        for (const side_t &side : brush.sides) {
+            if (side.bevel || !side.shaderInfo) continue;
+            const int flags = side.shaderInfo->compileFlags;
+            sky |= (flags & C_SKY) != 0;
+            translucent |= (flags & (C_TRANSLUCENT | C_ALPHASHADOW)) != 0;
+            visible |= (flags & C_NODRAW) == 0;
+        }
+        if (!visible || sky || translucent) continue;
+        Respawn::Bake::Brush &out = brushes.emplace_back();
+        for (const side_t &side : brush.sides) {
+            if (side.bevel) continue;
+            out.planes.push_back({side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z(), side.plane.dist()});
+        }
+        out.mins = ToV3(brush.minmax.mins);
+        out.maxs = ToV3(brush.minmax.maxs);
+    }
+    Sys_Printf("  %zu occluder brushes for lighting\n", brushes.size());
+    g_occluders = std::make_unique<Respawn::Bake::Occluders>(std::move(brushes));
+}
+
+static bool OccludersBlocked(const Vector3 &from, const Vector3 &to) {
+    return g_occluders && g_occluders->blocked(ToV3(from), ToV3(to));
+}
+
+static bool OccludersInside(const Vector3 &point) {
+    return g_occluders && g_occluders->inside(ToV3(point));
+}
+
+static void BakeLightmapPlanes(std::vector<std::vector<bool>> &computed) {
+    const WorldLight_t *ambient = nullptr, *sun = nullptr;
+    std::vector<const WorldLight_t *> statics;
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        if (light.type == emit_skyambient && !ambient) ambient = &light;
+        else if (light.type == emit_skylight && !sun) sun = &light;
+        else if ((light.type == emit_point || light.type == emit_spotlight) && BakeLocalLight(light)) statics.push_back(&light);
+    }
+    constexpr int kSkyRays = 32;
+    constexpr double kAmbientScale = 0.04;  // TF2 baker default, calibrated on retail SKY A
+    constexpr float kFar = 65536.0f, kRayOffset = 0.5f;
+
+    std::atomic<std::size_t> texels{0}, buried{0};
+    const auto started = std::chrono::steady_clock::now();
+    // Per surface: 8 bytes per texel and whether it was baked; committed below
+    // on one thread (computed is a vector<bool>).
+    std::vector<std::vector<std::array<uint8_t, 8>>> results(LightmapBuild::surfaces.size());
+    std::vector<std::vector<uint8_t>> baked(LightmapBuild::surfaces.size());
+    Respawn::Bake::detail::parallelFor(LightmapBuild::surfaces.size(), 0, [&](std::size_t s) {
+        const SurfaceLightmap_t &surf = LightmapBuild::surfaces[s];
+        results[s].assign((size_t)surf.rect.width * surf.rect.height, {});
+        baked[s].assign(results[s].size(), 0);
+        const Vector3 n = surf.plane.normal();
+        Vector3 t, b;
+        ComputeSurfaceBasis(surf.plane, t, b);
+        for (int y = 0; y < surf.rect.height; y++) {
+            for (int x = 0; x < surf.rect.width; x++) {
+                // Start just off the surface; nudge within the texel when the
+                // centre is buried in a touching brush.
+                Vector3 start = ComputeTexelWorldPos(surf, (float)x, (float)y) + n * kRayOffset;
+                if (OccludersInside(start)) {
+                    bool freed = false;
+                    for (int k = 0; k < 8 && !freed; k++) {
+                        const float dx = (k & 1 ? 0.4f : -0.4f) * (k < 4 ? 1.0f : 0.5f);
+                        const float dy = (k & 2 ? 0.4f : -0.4f) * (k < 4 ? 1.0f : 0.5f);
+                        const Vector3 p = ComputeTexelWorldPos(surf, x + dx, y + dy) + n * kRayOffset;
+                        if (!OccludersInside(p)) { start = p; freed = true; }
+                    }
+                    if (!freed) { buried++; continue; }  // dilation fills it from neighbours
+                }
+
+                // Sky: cosine-weighted hemisphere, fixed spiral.
+                int open = 0;
+                Vector3 bent(0, 0, 0);
+                for (int k = 0; k < kSkyRays; k++) {
+                    const float z = std::sqrt((k + 0.5f) / kSkyRays), r = std::sqrt(1.0f - z * z), a = k * 2.39996323f;
+                    const Vector3 dir = t * (r * std::cos(a)) + b * (r * std::sin(a)) + n * z;
+                    if (!OccludersBlocked(start, start + dir * kFar)) { open++; bent = bent + dir; }
+                }
+                const float fraction = open / float(kSkyRays);
+                const Vector3 skyVector = open ? vector3_normalised(bent) * std::cbrt(fraction) : Vector3(0, 0, 0);
+
+                // Sun: four sub-texel rays.
+                float sunVisible = 0.0f;
+                if (sun) {
+                    const Vector3 toSun = sun->normal * -1.0f;
+                    if (vector3_dot(n, toSun) > 0.0f) {
+                        int lit = 0;
+                        for (int k = 0; k < 4; k++) {
+                            const Vector3 p = ComputeTexelWorldPos(surf, x + (k & 1 ? 0.25f : -0.25f), y + (k & 2 ? 0.25f : -0.25f)) + n * kRayOffset;
+                            if (!OccludersBlocked(p, p + toSun * kFar)) lit++;
+                        }
+                        sunVisible = lit / 4.0f;
+                    }
+                }
+
+                // Baked colour: ambient fill plus static local lights.
+                Vector3 colour(0, 0, 0);
+                if (ambient) colour = ambient->intensity * float(kAmbientScale * (0.4 + 0.6 * fraction));
+                for (const WorldLight_t *light : statics) {
+                    const Vector3 toLight = light->origin - start;
+                    const float dist = vector3_length(toLight);
+                    if (dist < 1.0f) continue;
+                    const Vector3 l = toLight * (1.0f / dist);
+                    const float lambert = vector3_dot(n, l);
+                    if (lambert <= 0.0f) continue;
+                    const float scale = ApexLegends::LocalLightFalloff(*light, dist) * ApexLegends::LocalLightSpot(*light, l * -1.0f) * lambert;
+                    if (scale <= 0.0f) continue;
+                    if (OccludersBlocked(start, light->origin - l * 1.0f)) continue;
+                    colour = colour + light->intensity * scale;
+                }
+
+                const auto planeA = Respawn::Bake::encodeRGBM(ToV3(colour));
+                auto planeB = Respawn::Bake::encodeDirection(ToV3(skyVector));
+                planeB[3] = static_cast<uint8_t>(std::lround(sunVisible * 255.0f));
+                std::array<uint8_t, 8> &out = results[s][(size_t)y * surf.rect.width + x];
+                std::memcpy(out.data(), planeA.data(), 4);
+                std::memcpy(out.data() + 4, planeB.data(), 4);
+                baked[s][(size_t)y * surf.rect.width + x] = 1;
+                texels++;
+            }
+        }
+    });
+    for (std::size_t s = 0; s < LightmapBuild::surfaces.size(); s++) {
+        const SurfaceLightmap_t &surf = LightmapBuild::surfaces[s];
+        ApexLegends::LightmapPage_t &page = ApexLegends::Bsp::lightmapPages[surf.rect.pageIndex];
+        for (int y = 0; y < surf.rect.height; y++) {
+            for (int x = 0; x < surf.rect.width; x++) {
+                const size_t i = (size_t)y * surf.rect.width + x;
+                if (!baked[s][i]) continue;
+                const int px = surf.rect.x + x, py = surf.rect.y + y;
+                std::memcpy(&page.pixels[((size_t)py * page.width + px) * 8], results[s][i].data(), 8);
+                computed[surf.rect.pageIndex][(size_t)py * page.width + px] = true;
+            }
+        }
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    Sys_Printf("  baked %zu lightmap texels (%zu buried) with %zu static lights in %.2fs\n",
+               texels.load(), buried.load(), statics.size(), seconds);
+}
+
 void ApexLegends::EmitLightmaps() 
 {
-    // Compute lighting if we have surfaces allocated
-    if (!LightmapBuild::surfaces.empty()) {
-        ComputeLightmapLighting();
-    }
 
     Sys_FPrintf(SYS_VRB, "--- EmitLightmaps ---\n");
     
@@ -1911,32 +2037,14 @@ void ApexLegends::EmitLightmaps()
         return;
     }
     
-    // Encode luxels to lightmap pages, tracking which pixels were computed
+    // Bake both planes per texel, tracking which pixels were computed.
     std::vector<std::vector<bool>> computedPixels(ApexLegends::Bsp::lightmapPages.size());
     for (size_t p = 0; p < ApexLegends::Bsp::lightmapPages.size(); p++) {
         const auto &pg = ApexLegends::Bsp::lightmapPages[p];
         computedPixels[p].resize((size_t)pg.width * pg.height, false);
     }
-    
-    for (SurfaceLightmap_t &surf : LightmapBuild::surfaces) {
-        ApexLegends::LightmapPage_t &page = ApexLegends::Bsp::lightmapPages[surf.rect.pageIndex];
-        
-        for (int y = 0; y < surf.rect.height; y++) {
-            for (int x = 0; x < surf.rect.width; x++) {
-                int idx = y * surf.rect.width + x;
-                const Vector3 &directColor = surf.luxels[idx];
-                const Vector3 &indirectColor = surf.indirectLuxels[idx];
-                
-                int px = surf.rect.x + x;
-                int py = surf.rect.y + y;
-                int offset = (py * page.width + px) * 8;
-                
-                EncodeHDRTexelPair(directColor, indirectColor, &page.pixels[offset]);
-                computedPixels[surf.rect.pageIndex][(size_t)py * page.width + px] = true;
-            }
-        }
-    }
-    
+    BakeLightmapPlanes(computedPixels);
+
     // Dilate (pad) lightmap edges to prevent bilinear filtering from
     // sampling neutral unallocated pixels at surface boundaries.
     // 2 passes of 4-neighbor dilation using computed-pixel bitmap.
@@ -2079,6 +2187,23 @@ bool ApexLegends::GetLightmapUV(int meshIndex, int vertexIndex, const Vector3 &w
     // Using 0.5 ensures we sample from the middle where lighting is uniform
     outUV = Vector2(0.5f, 0.5f);
     return false;
+}
+
+
+/*
+    GetLightmapOrigin
+    Top-left texel of the mesh's lightmap charts on its page (mesh record
+    fields [5..6]); 0xFFFF when the mesh has no lightmap.
+*/
+void ApexLegends::GetLightmapOrigin(int meshIndex, uint16_t &x, uint16_t &y) {
+    int minX = INT_MAX, minY = INT_MAX;
+    for (const SurfaceLightmap_t &surf : LightmapBuild::surfaces) {
+        if (surf.meshIndex != meshIndex) continue;
+        minX = std::min(minX, surf.rect.x);
+        minY = std::min(minY, surf.rect.y);
+    }
+    x = minX == INT_MAX ? 0xFFFF : static_cast<uint16_t>(minX);
+    y = minY == INT_MAX ? 0xFFFF : static_cast<uint16_t>(minY);
 }
 
 
@@ -2328,6 +2453,8 @@ static bool TraceRayAgainstMeshes_Fallback(const Vector3 &origin, const Vector3 
 // Uses HIPRT BVH acceleration when available, falls back to brute force
 // Returns true if something is hit within maxDist
 static bool TraceRayAgainstMeshes(const Vector3 &origin, const Vector3 &dir, float maxDist) {
+    // Brush occluders (BuildLightOccluders) when available: a BVH, not a scan.
+    if (g_occluders) return OccludersBlocked(origin, origin + dir * maxDist);
     // Use HIPRT if scene is ready (much faster - O(log n) vs O(n))
     if (HIPRTTrace::IsSceneReady()) {
         return HIPRTTrace::TestVisibility(origin, dir, maxDist);
@@ -2538,14 +2665,7 @@ static void ComputeAmbientFromSphericalSamples(const Vector3 &position,
         
         // Distance attenuation (matching VRAD formula used in lightmap baking)
         float evalDist = std::max(dist, 1.0f);
-        float falloff = 1.0f;
-        if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-            falloff = 1.0f / (light.constant_attn +
-                             light.linear_attn * evalDist +
-                             light.quadratic_attn * evalDist * evalDist);
-        } else {
-            falloff = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-        }
+        float falloff = ApexLegends::LocalLightFalloff(light, evalDist);
         
         // Light intensity - use raw intensity (VRAD-scale)
         Vector3 lightColor = light.intensity;
@@ -3032,102 +3152,83 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
 
 /*
     AssignStaticLightsToProbe
-    Finds the most influential worldlights for a probe at the given position.
-    Assigns up to 4 light indices to the probe's staticLightIndexes array.
-    Sets staticLightFlags[0] based on how many valid lights were found.
-    
-    The algorithm:
-    1. Skip sky lights (emit_skyambient, emit_skylight) - they don't use indices
-    2. For each point/spot light, calculate influence based on distance and intensity
-    3. Sort by influence and take the top 4
-    4. Assign indices, using 0xFFFF for empty slots
+    Fills a probe's light references, sky vector and sun visibility (layout
+    as in TF2, retail S3 and the R5 SDK's dlightprobe_t):
+    - up to four realtime lights (static lights are baked into the SH; retail
+      also references static lights, which is not reproduced), strongest first by falloff * cone * intensity * visibility, stored as
+      hardware light indices with their visibility as the 1-255 weight;
+    - values 12-14: average unoccluded upper-hemisphere direction scaled by
+      cbrt(fraction of sky seen); value 15: fraction of the sun seen.
+    Visibility is averaged over a character-sized set of points around the
+    probe, since a probe lights a whole character.
 */
+static const Vector3 kProbeJitter[8] = {
+    Vector3(12, 0, 20), Vector3(-12, 0, 20), Vector3(0, 12, 20), Vector3(0, -12, 20),
+    Vector3(12, 0, -20), Vector3(-12, 0, -20), Vector3(0, 12, -20), Vector3(0, -12, -20)};
+
+static float ProbeVisibility(const Vector3 &probePos, const Vector3 &target, bool directional) {
+    int open = 0;
+    for (const Vector3 &jitter : kProbeJitter) {
+        const Vector3 from = probePos + jitter;
+        Vector3 dir = directional ? target : target - from;
+        float dist = directional ? 65536.0f : vector3_length(dir);
+        if (dist < 1.0f) { open++; continue; }
+        dir = dir * (1.0f / (directional ? vector3_length(dir) : dist));
+        if (!TraceRayAgainstMeshes(from, dir, directional ? dist : dist - 2.0f)) open++;
+    }
+    return open / 8.0f;
+}
+
 static void AssignStaticLightsToProbe(const Vector3 &probePos, LightProbe_t &probe) {
-    // Structure to hold light influence data
-    struct LightInfluence {
-        uint16_t index;
-        float influence;
-    };
-    
-    std::vector<LightInfluence> influences;
-    influences.reserve(ApexLegends::Bsp::worldLights.size());
-    
-    // Calculate influence for each non-sky worldlight
-    for (size_t i = 0; i < ApexLegends::Bsp::worldLights.size(); i++) {
+    struct Pick { float score; std::size_t light; float visible; };
+    std::vector<Pick> picks;
+    for (std::size_t i = 0; i < ApexLegends::Bsp::worldLights.size(); i++) {
         const WorldLight_t &light = ApexLegends::Bsp::worldLights[i];
-        
-        // Skip sky lights - they're handled separately via SH ambient
-        if (light.type == emit_skyambient || light.type == emit_skylight) {
-            continue;
-        }
-        
-        // Calculate distance to light
-        Vector3 delta = light.origin - probePos;
-        float distSq = vector3_dot(delta, delta);
-        float dist = std::sqrt(distSq);
-        
-        // Calculate light intensity magnitude
-        float intensityMag = vector3_length(light.intensity);
-        if (intensityMag < 0.001f) {
-            continue;
-        }
-        
-        // Calculate influence based on intensity and distance falloff
-        // Use quadratic falloff as a reasonable approximation
-        float influence = intensityMag / (1.0f + distSq * 0.0001f);
-        
-        // For spotlights, reduce influence if probe is outside the cone
-        if (light.type == emit_spotlight) {
-            Vector3 dirToProbe = vector3_normalised(delta);
-            float dot = -vector3_dot(dirToProbe, light.normal);  // Negative because delta points from light to probe
-            
-            // If outside outer cone, skip this light
-            if (dot < light.stopdot2) {
-                continue;
-            }
-            
-            // Attenuate based on cone falloff
-            if (dot < light.stopdot) {
-                float t = (dot - light.stopdot2) / (light.stopdot - light.stopdot2);
-                influence *= t * t;  // Quadratic falloff in penumbra
-            }
-        }
-        
-        if (influence > 0.001f) {
-            influences.push_back({static_cast<uint16_t>(i), influence});
-        }
+        if (light.type != emit_point && light.type != emit_spotlight) continue;
+        if (BakeLocalLight(light)) continue;  // static lights are in the probe SH
+        const Vector3 delta = probePos - light.origin;
+        const float dist = vector3_length(delta);
+        if (dist < 1.0f) continue;
+        const float strength = std::max({light.intensity[0], light.intensity[1], light.intensity[2]});
+        const float score = ApexLegends::LocalLightFalloff(light, dist)
+                          * ApexLegends::LocalLightSpot(light, delta * (1.0f / dist)) * strength;
+        if (score <= 0.0f) continue;
+        picks.push_back({score, i, 0.0f});
     }
-    
-    // Sort by influence (highest first)
-    std::sort(influences.begin(), influences.end(), 
-              [](const LightInfluence &a, const LightInfluence &b) {
-                  return a.influence > b.influence;
-              });
-    
-    // Assign up to 4 lights
-    // Store raw 0-based worldlight indices in the BSP.
-    // Engine's Mod_LoadLightProbes adds +32 at load time to convert to
-    // global light handles (0-31 = shadow envs, 32+ = worldlights).
-    int validLightCount = 0;
-    for (int slot = 0; slot < 4; slot++) {
-        if (slot < static_cast<int>(influences.size())) {
-            probe.staticLightIndexes[slot] = influences[slot].index;
-            validLightCount++;
-        } else {
-            probe.staticLightIndexes[slot] = 0xFFFF;  // No light in this slot
-        }
+    std::sort(picks.begin(), picks.end(), [](const Pick &a, const Pick &b) { return a.score > b.score; });
+
+    int slot = 0;
+    for (Pick &pick : picks) {
+        if (slot == 4) break;
+        pick.visible = ProbeVisibility(probePos, ApexLegends::Bsp::worldLights[pick.light].origin, false);
+        if (pick.visible <= 0.0f) continue;
+        probe.staticLightIndexes[slot] = static_cast<uint16_t>(ApexLegends::HardwareLightIndex(pick.light));
+        probe.staticLightFlags[slot] = static_cast<uint8_t>(std::clamp<int>(std::lround(pick.visible * 255.0f), 1, 255));
+        slot++;
     }
-    
-    // Set staticLightFlags - each VALID light slot needs 0xFF!
-    // CRITICAL: Game breaks the loop when flag == 0, so each valid slot must have 0xFF
-    // Pattern from official maps:
-    //   1 light:  (255, 0, 0, 0)
-    //   2 lights: (255, 255, 0, 0)
-    //   3 lights: (255, 255, 255, 0)
-    //   4 lights: (255, 255, 255, 255)
-    for (int slot = 0; slot < 4; slot++) {
-        probe.staticLightFlags[slot] = (slot < validLightCount) ? 0xFF : 0x00;
+    for (; slot < 4; slot++) {
+        probe.staticLightIndexes[slot] = 0xFFFF;
+        probe.staticLightFlags[slot] = 0;
     }
+
+    // Sky vector: cosine-weighted golden-angle spiral over the upper hemisphere.
+    int visible = 0;
+    Vector3 bent(0, 0, 0);
+    for (int k = 0; k < 64; k++) {
+        const float z = std::sqrt((k + 0.5f) / 64.0f), r = std::sqrt(1.0f - z * z), a = k * 2.39996323f;
+        const Vector3 dir(r * std::cos(a), r * std::sin(a), z);
+        if (!TraceRayAgainstMeshes(probePos, dir, 65536.0f)) { visible++; bent = bent + dir; }
+    }
+    const float fraction = visible / 64.0f;
+    const Vector3 skyVector = visible ? vector3_normalised(bent) * std::cbrt(fraction) : Vector3(0, 0, 0);
+    for (int k = 0; k < 3; k++) probe.skyVector[k] = ClampToInt16(skyVector[k] * 8192.0f);
+
+    float sun = 0.0f;
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        if (light.type == emit_skylight) { sun = ProbeVisibility(probePos, light.normal * -1.0f, true); break; }
+    }
+    probe.sunVisibility = ClampToInt16(sun * 8192.0f);
+    probe.padding = 0;
 }
 
 /*
@@ -3498,10 +3599,12 @@ void ApexLegends::EmitSingleLightProbe() {
     probe.staticLightFlags[1] = 0x00;
     probe.staticLightFlags[2] = 0x00;
     probe.staticLightFlags[3] = 0x00;
-    probe.lightingFlags = 0x0096;
-    probe.reserved = 0xFFFF;
-    probe.padding0 = 0xFFFFFFFF;
-    probe.padding1 = 0x00000000;
+    // Neutral outdoor probe: open sky straight up, sun fully visible.
+    probe.skyVector[0] = 0;
+    probe.skyVector[1] = 0;
+    probe.skyVector[2] = 8192;
+    probe.sunVisibility = 8192;
+    probe.padding = 0;
     
     // Set neutral ambient SH (DC term only, small positive value)
     // SH coefficient [3] is the DC (average) term, scale is 8192
@@ -3643,16 +3746,17 @@ void ApexLegends::EmitLightProbes() {
     baseProbe.staticLightFlags[1] = 0x00;
     baseProbe.staticLightFlags[2] = 0x00;
     baseProbe.staticLightFlags[3] = 0x00;
-    baseProbe.lightingFlags = 0x0096;      // Usually 150 (0x96) in official maps
-    baseProbe.reserved = 0xFFFF;           // Usually 0xFFFF in official maps
-    baseProbe.padding0 = 0xFFFFFFFF;       // Usually 0xFFFFFFFF in official maps  
-    baseProbe.padding1 = 0x00000000;       // Always 0 in official maps
+    // Sky vector, sun visibility and light references are filled per probe
+    // by AssignStaticLightsToProbe.
     
     // Count non-sky worldlights for point light shadow rays
     std::vector<size_t> pointLightIndices;
     for (size_t li = 0; li < ApexLegends::Bsp::worldLights.size(); li++) {
         const WorldLight_t &light = ApexLegends::Bsp::worldLights[li];
         if (light.type == emit_skyambient || light.type == emit_skylight) continue;
+        // Realtime lights reach characters through probe light references
+        // (AssignStaticLightsToProbe) instead of SH.
+        if (!BakeLocalLight(light)) continue;
         pointLightIndices.push_back(li);
     }
     
@@ -3786,13 +3890,7 @@ void ApexLegends::EmitLightProbes() {
                 
                 // Distance attenuation (VRAD formula)
                 float evalDist = std::max(dist, 1.0f);
-                if (light.quadratic_attn > 0 || light.linear_attn > 0) {
-                    info.falloff = 1.0f / (light.constant_attn +
-                                          light.linear_attn * evalDist +
-                                          light.quadratic_attn * evalDist * evalDist);
-                } else {
-                    info.falloff = 1.0f / (1.0f + evalDist * evalDist * 0.0001f);
-                }
+                info.falloff = ApexLegends::LocalLightFalloff(light, evalDist);
                 info.lightColor = light.intensity;
                 lightRayInfos.push_back(info);
             }
@@ -4102,113 +4200,236 @@ void ApexLegends::EmitLightProbes() {
 
 /*
     EmitRealTimeLightmaps
-    Generate real-time lighting data per lightmap texel
-    
-    Lumps involved:
-      0x69 (LIGHTMAP_DATA_REAL_TIME_LIGHTS) - Per-texel light indices
-      0x7A (LIGHTMAP_DATA_RTL_PAGE) - Compressed page data (126 bytes per page = 63 uint16)
-    
-    The RTL system allows each lightmap texel to reference specific worldlights
-    that can affect it at runtime. This enables:
-      - Per-texel light masking (only relevant lights affect each texel)
-      - Efficient runtime light updates (skip texels not affected by a light)
-    
-    Per-lightmap RTL data size calculation (from engine):
-      rpakSize = 2 * (alignedSize + 2 * texelCount)
-      where alignedSize = ((width + 3) & ~3) * ((height + 3) & ~3)
-    
-    Per-texel format (4 bytes):
-      - bytes 0-2: 24-bit mask (which of the 63 lights in the page affect this texel)
-                   Actually split: byte 0 = offset into page, bytes 1-2 = mask bits
-      - byte 3: page index (which RTL page, 0-255)
-      - Special value 0xFFFFFF00 means no RTL lights affect this texel
-    
-    RTL Pages (126 bytes = 63 uint16 each):
-      - Each page contains up to 63 worldlight indices
-      - Lights with WORLDLIGHT_FLAG_REALTIME flag are RTL lights
+    Writes lumps 0x69 (LIGHTMAP_DATA_REAL_TIME_LIGHTS) and 0x7A (RTL pages).
+
+    Decoded from retail S0 Canyonlands and S3 Aqueduct. For every lightmap
+    page, in page order:
+      A  uint32 per texel: four 6-bit slots (bits 0-23, 63 = unused) and an
+         RTL page index (bits 24-31); 0x00FFFFFF where no light reaches;
+      B  two BC5 textures, page-sized: (slot 0, slot 1) then (slot 2, slot 3),
+         each channel the slot's shadow visibility 0-255 (0 when unused);
+      C  one BC4 texture, almost all zero in retail; written as zero.
+    That is 6.5 bytes per texel; the external .bsp_lump copy omits C (6.0).
+    Each RTL page (lump 0x7A) is 63 uint16 hardware light indices (world
+    index minus ambients), zero-filled; retail page values resolve to lights
+    within range of the texel 99.96% of the time under this reading. Retail
+    lists static lights in its pages too; here only realtime lights get
+    slots, since static lights are baked into the lightmap.
 */
-
-// RTL page - holds 63 light indices
-struct RTLPage_t {
-    uint16_t lightIndices[63];
-    int count;  // How many lights are in this page (0-63)
-};
-
-// Per-texel RTL info during computation
-struct TexelRTLInfo_t {
-    Vector3 worldPos;       // World position of this texel
-    Vector3 normal;         // Surface normal at this texel
-    bool valid;             // Is this texel part of a surface?
-};
-
-// Check if an RTL light can potentially affect a texel
-static bool CanLightAffectTexel(const WorldLight_t &light, const Vector3 &texelPos, 
-                                 const Vector3 &texelNormal, float maxRadius) {
-    Vector3 lightPos(light.origin[0], light.origin[1], light.origin[2]);
-    Vector3 toLight = lightPos - texelPos;
-    float distSq = vector3_dot(toLight, toLight);
-    float dist = sqrtf(distSq);
-    
-    // Range check - use light radius or maxRadius as fallback
-    float effectiveRadius = (light.radius > 0) ? light.radius : maxRadius;
-    if (dist > effectiveRadius) {
-        return false;
+namespace {
+void EncodeBC4Block(const uint8_t values[16], uint8_t out[8]) {
+    uint8_t lo = 255, hi = 0;
+    for (int t = 0; t < 16; t++) {
+        lo = std::min(lo, values[t]);
+        hi = std::max(hi, values[t]);
     }
-    
-    // Facing check - light must be in front of surface
-    Vector3 toLightDir = toLight * (1.0f / std::max(dist, 0.001f));
-    float facing = vector3_dot(texelNormal, toLightDir);
-    if (facing <= 0.0f) {
-        return false;
-    }
-    
-    // For spotlights, check cone angle
-    if (light.type == 2) {  // emit_spotlight
-        Vector3 lightDir(light.normal[0], light.normal[1], light.normal[2]);
-        Vector3 negToLight = toLightDir * -1.0f;
-        float spotDot = vector3_dot(lightDir, negToLight);
-        
-        // Outside outer cone - no effect
-        if (spotDot < light.stopdot2) {
-            return false;
+    out[0] = hi;
+    out[1] = lo;
+    uint64_t bits = 0;
+    if (hi != lo) {
+        // e0 > e1: eight-value mode. Code 0 = e0, 1 = e1, 2..7 interpolate.
+        int palette[8] = {hi, lo};
+        for (int i = 1; i <= 6; i++) palette[i + 1] = ((7 - i) * hi + i * lo) / 7;
+        for (int t = 0; t < 16; t++) {
+            int best = 0, bestError = 256;
+            for (int code = 0; code < 8; code++) {
+                const int error = std::abs(palette[code] - values[t]);
+                if (error < bestError) { bestError = error; best = code; }
+            }
+            bits |= static_cast<uint64_t>(best) << (3 * t);
         }
     }
-    
-    // Visibility check - trace from texel to light
-    // Offset start position along normal to avoid self-intersection
-    Vector3 traceStart = texelPos + texelNormal * 1.0f;
-    Vector3 traceDir = vector3_normalised(lightPos - traceStart);
-    float traceDist = vector3_length(lightPos - traceStart) - 1.0f;
-    
-    if (traceDist > 0 && TraceRayAgainstMeshes(traceStart, traceDir, traceDist)) {
-        return false;  // Blocked by geometry
+    for (int k = 0; k < 6; k++) out[2 + k] = static_cast<uint8_t>(bits >> (8 * k));
+}
+
+// Appends a page-sized block texture: BC4 when `second` is null (all zero
+// when `first` is null too), BC5 otherwise (each block: BC4 first, BC4 second).
+void AppendBlockTexture(std::vector<uint8_t> &out, int width, int height,
+                        const std::vector<uint8_t> *first, const std::vector<uint8_t> *second) {
+    uint8_t values[16];
+    uint8_t block[8];
+    auto encode = [&](const std::vector<uint8_t> *channel, int bx, int by) {
+        for (int t = 0; t < 16; t++) {
+            const int x = std::min(bx * 4 + (t & 3), width - 1);
+            const int y = std::min(by * 4 + (t >> 2), height - 1);
+            values[t] = channel ? (*channel)[(size_t)y * width + x] : 0;
+        }
+        EncodeBC4Block(values, block);
+        out.insert(out.end(), block, block + 8);
+    };
+    for (int by = 0; by < (height + 3) / 4; by++) {
+        for (int bx = 0; bx < (width + 3) / 4; bx++) {
+            encode(first, bx, by);
+            if (second) encode(second, bx, by);
+        }
     }
-    
-    return true;
+}
 }
 
 void ApexLegends::EmitRealTimeLightmaps() {
-    Sys_Printf("--- EmitRealTimeLightmaps ---\n");
-    
-    // Clear RTL lumps - let engine use fallback textures
-    // When m_InitialRealTimeLightData is null, engine uses:
-    //   - Texture 0: TEXTURE_WHITE_UINT (0xFFFFFFFF = no RTL masking)
-    //   - Texture 1: TEXTURE_BLACK
-    //   - Texture 2: TEXTURE_BLACK
-    // This avoids striping artifacts from incorrect BC-compressed texture data
+    Sys_FPrintf(SYS_VRB, "--- EmitRealTimeLightmaps ---\n");
     ApexLegends::Bsp::lightmapDataRealTimeLights.clear();
     ApexLegends::Bsp::lightmapDataRTLPage.clear();
-    
-    // Count RTL-capable lights for info
-    size_t rtlLightCount = 0;
-    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
-        if (light.type == 1 || light.type == 2) {  // point or spotlight
-            rtlLightCount++;
+
+    std::vector<std::size_t> localLights;
+    for (std::size_t i = 0; i < ApexLegends::Bsp::worldLights.size(); i++) {
+        const WorldLight_t &light = ApexLegends::Bsp::worldLights[i];
+        if ((light.type == emit_point || light.type == emit_spotlight) && !BakeLocalLight(light)) localLights.push_back(i);
+    }
+
+    const std::size_t pageCount = ApexLegends::Bsp::lightmapHeaders.size();
+    struct PageData { int width, height; std::vector<uint32_t> slots; std::vector<uint8_t> visibility[4]; };
+    std::vector<PageData> pages(pageCount);
+    for (std::size_t p = 0; p < pageCount; p++) {
+        PageData &page = pages[p];
+        page.width = ApexLegends::Bsp::lightmapHeaders[p].width;
+        page.height = ApexLegends::Bsp::lightmapHeaders[p].height;
+        page.slots.assign((size_t)page.width * page.height, 0x00FFFFFFu);
+        for (auto &channel : page.visibility) channel.assign((size_t)page.width * page.height, 0);
+    }
+
+    std::vector<std::vector<std::size_t>> rtlPages;  // world light indices, at most 63 each
+    std::size_t litTexels = 0, assignedSlots = 0, droppedLights = 0;
+
+    struct TexelPick { std::size_t light; float score; uint8_t visible; };
+    for (const SurfaceLightmap_t &surf : LightmapBuild::surfaces) {
+        if (localLights.empty() || surf.rect.pageIndex < 0 || surf.rect.pageIndex >= (int)pageCount) continue;
+        PageData &page = pages[surf.rect.pageIndex];
+        const Vector3 normal = surf.plane.normal();
+
+        // Lights whose radius can reach this chart at all.
+        Vector3 lo(FLT_MAX, FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (const Vector3 &corner : {ComputeTexelWorldPos(surf, 0, 0), ComputeTexelWorldPos(surf, surf.rect.width - 1, 0),
+                                      ComputeTexelWorldPos(surf, 0, surf.rect.height - 1),
+                                      ComputeTexelWorldPos(surf, surf.rect.width - 1, surf.rect.height - 1)}) {
+            for (int k = 0; k < 3; k++) { lo[k] = std::min(lo[k], corner[k]); hi[k] = std::max(hi[k], corner[k]); }
+        }
+        std::vector<std::size_t> candidates;
+        for (std::size_t index : localLights) {
+            const WorldLight_t &light = ApexLegends::Bsp::worldLights[index];
+            float distSq = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                const float d = std::max({lo[k] - light.origin[k], 0.0f, light.origin[k] - hi[k]});
+                distSq += d * d;
+            }
+            if (light.radius > 0.0f && distSq >= light.radius * light.radius) continue;
+            candidates.push_back(index);
+        }
+        if (candidates.empty()) continue;
+
+        // Per texel: the four strongest lights that see it.
+        std::vector<std::array<TexelPick, 4>> texelPicks((size_t)surf.rect.width * surf.rect.height);
+        std::vector<int> texelCounts(texelPicks.size(), 0);
+        std::map<std::size_t, float> chartScore;
+        for (int y = 0; y < surf.rect.height; y++) {
+            for (int x = 0; x < surf.rect.width; x++) {
+                const size_t t = (size_t)y * surf.rect.width + x;
+                std::vector<TexelPick> found;
+                for (std::size_t index : candidates) {
+                    const WorldLight_t &light = ApexLegends::Bsp::worldLights[index];
+                    float score = 0.0f;
+                    int open = 0;
+                    // 2x2 samples over the texel footprint for soft visibility.
+                    for (int s = 0; s < 4; s++) {
+                        const Vector3 pos = ComputeTexelWorldPos(surf, x + ((s & 1) ? 0.25f : -0.25f), y + ((s & 2) ? 0.25f : -0.25f));
+                        const Vector3 toLight = light.origin - pos;
+                        const float dist = vector3_length(toLight);
+                        if (dist < 1.0f) continue;
+                        const Vector3 dir = toLight * (1.0f / dist);
+                        const float facing = vector3_dot(normal, dir);
+                        if (facing <= 0.0f) continue;
+                        const float reach = ApexLegends::LocalLightFalloff(light, dist) * ApexLegends::LocalLightSpot(light, dir * -1.0f);
+                        if (reach <= 0.0f) continue;
+                        score = std::max(score, reach * facing);
+                        const Vector3 start = pos + normal * 1.0f;
+                        if (!TraceRayAgainstMeshes(start, dir, std::max(0.0f, dist - 2.0f))) open++;
+                    }
+                    if (open == 0 || score <= 0.0f) continue;
+                    const float strength = std::max({light.intensity[0], light.intensity[1], light.intensity[2]});
+                    found.push_back({index, score * strength * open / 4.0f, static_cast<uint8_t>(std::lround(open * 255.0f / 4.0f))});
+                }
+                std::sort(found.begin(), found.end(), [](const TexelPick &a, const TexelPick &b) { return a.score > b.score; });
+                const int count = std::min<int>(4, (int)found.size());
+                for (int k = 0; k < count; k++) {
+                    texelPicks[t][k] = found[k];
+                    chartScore[found[k].light] += found[k].score;
+                }
+                texelCounts[t] = count;
+            }
+        }
+        if (chartScore.empty()) continue;
+
+        // A texel's slots index one RTL page, so a chart's lights share a page.
+        std::vector<std::pair<std::size_t, float>> chartLights(chartScore.begin(), chartScore.end());
+        std::sort(chartLights.begin(), chartLights.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+        if (chartLights.size() > 63) {
+            droppedLights += chartLights.size() - 63;
+            chartLights.resize(63);
+        }
+        int pageIndex = -1;
+        for (std::size_t p = 0; p < rtlPages.size() && pageIndex < 0; p++) {
+            std::size_t missing = 0;
+            for (const auto &[index, score] : chartLights)
+                if (std::find(rtlPages[p].begin(), rtlPages[p].end(), index) == rtlPages[p].end()) missing++;
+            if (rtlPages[p].size() + missing <= 63) pageIndex = static_cast<int>(p);
+        }
+        if (pageIndex < 0) {
+            if (rtlPages.size() >= 256) {
+                Sys_Warning("More than 256 RTL pages needed; remaining charts get no realtime lights\n");
+                continue;
+            }
+            rtlPages.emplace_back();
+            pageIndex = static_cast<int>(rtlPages.size() - 1);
+        }
+        std::vector<std::size_t> &rtlPage = rtlPages[pageIndex];
+        for (const auto &[index, score] : chartLights)
+            if (std::find(rtlPage.begin(), rtlPage.end(), index) == rtlPage.end()) rtlPage.push_back(index);
+
+        for (int y = 0; y < surf.rect.height; y++) {
+            for (int x = 0; x < surf.rect.width; x++) {
+                const size_t t = (size_t)y * surf.rect.width + x;
+                const size_t texel = (size_t)(surf.rect.y + y) * page.width + (surf.rect.x + x);
+                uint32_t packed = 0x00FFFFFFu | (static_cast<uint32_t>(pageIndex) << 24);
+                int slot = 0;
+                for (int k = 0; k < texelCounts[t]; k++) {
+                    const auto it = std::find(rtlPage.begin(), rtlPage.end(), texelPicks[t][k].light);
+                    if (it == rtlPage.end()) continue;  // dropped from an over-full chart
+                    const uint32_t position = static_cast<uint32_t>(it - rtlPage.begin());
+                    packed = (packed & ~(63u << (6 * slot))) | (position << (6 * slot));
+                    page.visibility[slot][texel] = texelPicks[t][k].visible;
+                    slot++;
+                    assignedSlots++;
+                }
+                page.slots[texel] = packed;
+                if (slot) litTexels++;
+            }
         }
     }
-    
-    // TODO: Full RTL implementation requires:
-    // 1. Proper BC7 compression for texture 1 (light influence gradients)
-    // 2. Proper BC4 compression for texture 2 (additional mask data)
-    // Without proper BC-compressed textures, the engine shows striping artifacts
+
+    // Lump 0x69: per page A, B (two BC5), C (BC4).
+    std::vector<uint8_t> &data = ApexLegends::Bsp::lightmapDataRealTimeLights;
+    for (PageData &page : pages) {
+        const uint8_t *slots = reinterpret_cast<const uint8_t *>(page.slots.data());
+        data.insert(data.end(), slots, slots + page.slots.size() * 4);
+        AppendBlockTexture(data, page.width, page.height, &page.visibility[0], &page.visibility[1]);
+        AppendBlockTexture(data, page.width, page.height, &page.visibility[2], &page.visibility[3]);
+        AppendBlockTexture(data, page.width, page.height, nullptr, nullptr);
+    }
+
+    // Lump 0x7A: 63 hardware light indices per page; keep one page even when empty.
+    if (rtlPages.empty()) rtlPages.emplace_back();
+    for (const std::vector<std::size_t> &rtlPage : rtlPages) {
+        for (int slot = 0; slot < 63; slot++) {
+            const uint16_t value = slot < (int)rtlPage.size()
+                ? static_cast<uint16_t>(ApexLegends::HardwareLightIndex(rtlPage[slot])) : 0;
+            ApexLegends::Bsp::lightmapDataRTLPage.push_back(static_cast<uint8_t>(value & 0xFF));
+            ApexLegends::Bsp::lightmapDataRTLPage.push_back(static_cast<uint8_t>(value >> 8));
+        }
+    }
+
+    Sys_Printf("  %zu realtime lights, %zu RTL pages, %zu texels with realtime lights, %zu slots\n",
+               localLights.size(), rtlPages.size(), litTexels, assignedSlots);
+    if (droppedLights) {
+        Sys_Warning("%zu chart lights dropped: a chart can reference at most 63 lights\n", droppedLights);
+    }
 }

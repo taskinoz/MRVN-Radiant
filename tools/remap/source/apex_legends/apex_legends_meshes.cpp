@@ -89,22 +89,32 @@ void ApexLegends::EmitMeshes(const entity_t &e) {
         // Calculate relative vertex offset (relative to MaterialSort's vertexOffset)
         int relativeVertexOffset = vertexOffset - materialSortOffset;
 
-        // Fill in the unknown array - these fields are critical for mesh rendering
-        // unknown[0-1]: vertexOffset (relative to MaterialSort's vertexOffset, stored as uint32)
-        // unknown[2-3]: vertexCount (stored as uint32)
-        // unknown[4]: vertexType (0=LIT_FLAT, 1=UNLIT, 2=LIT_BUMP, 3=UNLIT_TS)
-        // unknown[5]: unused
-        // unknown[6-7]: const0 (must be 0xFFFFFF00 = 4294967040)
-        m.unknown[0] = (uint16_t)(relativeVertexOffset & 0xFFFF);
-        m.unknown[1] = (uint16_t)((relativeVertexOffset >> 16) & 0xFFFF);
-        m.unknown[2] = vertexCount;
+        // Mesh record fields after triCount, as in TF2 and retail S3
+        // (mp_rr_aqueduct, 4,908 meshes):
+        //   [0] first vertex, relative to the material sort's vertexOffset
+        //   [1] last local vertex index (vertex count - 1)
+        //   [2] vertex pool (0 unlit, 1 lit flat, 2 lit bump, 3 unlit TS)
+        //       | cubemap index << 8 (0xFF for unlit; set by AssignMeshCubemaps)
+        //   [3..4] 0
+        //   [5..6] lightmap texel origin of the mesh on its page (0xFFFF unlit)
+        //   [7] 0
+        if (relativeVertexOffset < 0 || relativeVertexOffset > 0xFFFF || vertexCount == 0) {
+            Error("Mesh %d: vertex range %d+%u does not fit the 16-bit mesh fields", meshIndex, relativeVertexOffset, vertexCount);
+        }
+        const uint16_t pool = vertexType == 2 ? 2 : vertexType == 3 ? 3 : vertexType == 1 ? 0 : 1;
+        uint16_t luxelX = 0xFFFF, luxelY = 0xFFFF;
+        if (pool == 2 || pool == 1) {
+            ApexLegends::GetLightmapOrigin(meshIndex, luxelX, luxelY);
+        }
+        m.unknown[0] = static_cast<uint16_t>(relativeVertexOffset);
+        m.unknown[1] = static_cast<uint16_t>(vertexCount - 1);
+        m.unknown[2] = static_cast<uint16_t>(pool | ((pool == 0 || pool == 3) ? 0xFF00 : 0x0000));
         m.unknown[3] = 0;
-        m.unknown[4] = vertexType;
-        m.unknown[5] = 0;
-        // const0 = 0xFFFFFF00 -> low 16 bits = 0xFF00, high 16 bits = 0xFFFF
-        m.unknown[6] = 0xFF00;
-        m.unknown[7] = 0xFFFF;
-        
+        m.unknown[4] = 0;
+        m.unknown[5] = luxelX;
+        m.unknown[6] = luxelY;
+        m.unknown[7] = 0;
+
         MinMax  aabb;
 
         // Save vertices and vertexnormals

@@ -290,7 +290,7 @@ z -4000). The layout is Source's IVP compact surface, read from retail Angel Cit
   drag 1,1,1, axis map size 0), then an `IVP_Compact_Surface` (48 bytes): mass
   centre, rotation inertia, upper radius, `max_deviation | byte_size << 8`
   (retail deviation 227), ledge tree root offset, and `IVPS` in the last word.
-- **Ledges:** 16-byte header (point offset, client data 0,
+- **Ledges:** 16-byte header (point offset, client data,
   `is_compact << 2 | size / 16 << 8`, triangle count), 16-byte triangles
   (`index:12 | pierce:12 | material:7 | virtual:1`, then three edges of
   `start point:16 | opposite:15 | virtual:1`, where opposite is a signed count of
@@ -298,6 +298,13 @@ z -4000). The layout is Source's IVP compact surface, read from retail Angel Cit
   metres: `(x, -z, y) / 39.3701`. Triangles wind counter-clockwise seen from
   outside. Retail ledges share one point pool per surface; remap puts each
   ledge's points after its triangles, which IVP also accepts.
+- **Client data:** each brush ledge stores the index of the CM_BRUSHES entry
+  built from its brush. Angel City numbers its world ledges 0, 1, 2, ... and
+  each brush entity's ledge continues the same global index (24,739 onwards);
+  all 22,198 ledges name a CM brush. remap previously wrote 0 for every ledge.
+  It now writes the CM index, shared by source brushes that collision merging
+  joins; patch prisms, which have no CM brush, keep 0. What the engine reads
+  it for has not been traced, and no runtime difference has been observed yet.
 - **Ledge tree:** 28-byte nodes: right child offset (0 for a leaf), ledge
   offset (leaves only), centre, radius and three box sizes; the left child
   follows its parent. Retail centres and radii are the box centre and half

@@ -60,14 +60,18 @@ bool SameCollisionFace(const side_t& a, const side_t& b) {
 // Keep render and IVP source brushes intact. The CM representation can remove
 // an internal plane only when the adjacent volumes form one convex brush and
 // coincident outer faces have the same material and texture mapping.
-std::vector<brush_t> CollisionBrushes(entity_t& entity) {
+// sources[i] lists the entity brushes that collision brush i was built from, so
+// VPhysics ledges can name their CM brush as retail does.
+std::vector<brush_t> CollisionBrushes(entity_t& entity, std::vector<std::vector<const brush_t*>>& sources) {
     std::vector<brush_t> brushes;
+    sources.clear();
     for (auto& brush : entity.brushes) {
         ClassifyCollisionBrush(brush); // EmitPhysicsModel still reads the originals.
         // Render-only brushes ($contentflag nonsolid) block nothing; emitting them
         // would only spend the 16-bit collision brush index.
         if (brush.contentFlags == 0 && !brush.recoveredContents) continue;
         brushes.push_back(brush);
+        sources.push_back({&brush});
     }
     if (g_game->bspVersion != 29 && g_game->bspVersion != 37) return brushes;
     std::vector<Respawn::ConvexCellHull> hulls(brushes.size());
@@ -154,17 +158,28 @@ std::vector<brush_t> CollisionBrushes(entity_t& entity) {
             }
             hulls[b] = {};
             parents[b] = a;
+            sources[a].insert(sources[a].end(), sources[b].begin(), sources[b].end());
             ++merged; changed = true;
         }
     } while (changed);
     if (merged) Sys_Printf("%9zu exact convex collision-brush merges\n",merged);
     if (budgetRejected) Sys_Printf("%9zu collision merges rejected by native bevel-plane budget\n",budgetRejected);
     std::vector<brush_t> result;
+    std::vector<std::vector<const brush_t*>> kept;
     for (std::size_t i = 0; i < brushes.size(); ++i) if (root(i) == i) {
         AddBrushBevels(brushes[i]);
         result.push_back(std::move(brushes[i]));
+        kept.push_back(std::move(sources[i]));
     }
+    sources = std::move(kept);
     return result;
+}
+
+// Emits a collision brush and records its CM index for its source brushes.
+void EmitCollisionBrush(brush_t& brush, const std::vector<const brush_t*>& sources) {
+    Titanfall::EmitBrush(brush);
+    for (const brush_t* source : sources)
+        Titanfall::Bsp::cmBrushOfSource[source] = uint32_t(Titanfall::Bsp::cmBrushes.size() - 1);
 }
 
 struct PatchCollision {
@@ -455,7 +470,9 @@ void EmitPrimitiveGroups(std::vector<PendingPrimitive> &pending) {
     Emits brushes of entity into bsp
 */
 void Titanfall::EmitCollisionGrid( entity_t &e ) {
-    auto collisionBrushes = CollisionBrushes(e);
+    std::vector<std::vector<const brush_t*>> sources;
+    auto collisionBrushes = CollisionBrushes(e, sources);
+    const auto sourcesOf = [&](const brush_t* brush) -> const auto& { return sources.at(std::size_t(brush - collisionBrushes.data())); };
     std::vector<brush_t*> gridBrushes;
     std::vector<brush_t*> modelBrushes;
 
@@ -495,7 +512,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     // Other models may already have emitted brushes; only index our own.
     const std::size_t firstBrush = Titanfall::Bsp::cmBrushes.size();
     for( brush_t *brush : gridBrushes )
-        Titanfall::EmitBrush( *brush );
+        EmitCollisionBrush( *brush, sourcesOf(brush) );
 
     // Worldspawn size
     Vector3 size = gridSize.maxs - gridSize.mins;
@@ -606,7 +623,7 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
 
     // Emit model brushes
     for( brush_t *brush : modelBrushes )
-        Titanfall::EmitBrush( *brush );
+        EmitCollisionBrush( *brush, sourcesOf(brush) );
 
     if (Titanfall::Bsp::cmGeoSets.size() > 65535)
         Error("Collision model-cell start exceeds 16 bits");
@@ -643,12 +660,13 @@ void Titanfall::EmitCollisionGrid( entity_t &e ) {
     Emits brushes of entity into bsp
 */
 void Titanfall::EmitModelGridCell( entity_t &e ) {
-    auto collisionBrushes = CollisionBrushes(e);
+    std::vector<std::vector<const brush_t*>> sources;
+    auto collisionBrushes = CollisionBrushes(e, sources);
     const auto patches = EmitPatchCollision(e);
     std::size_t offset = Titanfall::Bsp::cmBrushes.size();
 
-    for( brush_t &brush : collisionBrushes )
-        Titanfall::EmitBrush( brush );
+    for( std::size_t k = 0; k < collisionBrushes.size(); ++k )
+        EmitCollisionBrush( collisionBrushes[k], sources[k] );
 
     if (Titanfall::Bsp::cmGeoSets.size() > 65535)
         Error("Collision model-cell start exceeds 16 bits");

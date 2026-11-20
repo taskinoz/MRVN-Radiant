@@ -27,6 +27,7 @@
 #include "qmath.h"
 #include <array>
 #include <cstdint>
+#include <unordered_map>
 #include "../remap.h"
 #include "../lump_names.h"
 #include "../respawn/lightbake.h"
@@ -453,6 +454,8 @@ namespace Titanfall {
         inline std::vector<uint16_t>              cmBrushSideProperties;
         inline std::vector<int32_t>               cmUniqueContents;
         inline std::vector<CMBrush_t>             cmBrushes;
+        // CM brush index of each entity brush, written as VPhysics ledge client data.
+        inline std::unordered_map<const brush_t*, uint32_t> cmBrushOfSource;
         inline std::vector<uint16_t>              cmBrushSidePlaneOffsets;
         inline std::vector<CMBrushSideTexVec_t>   cmBrushSideTexVecs;
         inline std::vector<Vector3>               occlusionMeshVertices;

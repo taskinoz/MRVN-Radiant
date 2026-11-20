@@ -772,8 +772,13 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("roof does not reduce sky ambient")
 
 
-def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
-    """Check TF1 world/entity IVP ledges, outward triangles and watertight edges."""
+def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None, brush_clients=True):
+    """Check TF1 world/entity IVP ledges, outward triangles and watertight edges.
+
+    Like retail, each brush ledge's client data names the CM brush that contains
+    it; patch prisms have no CM brush, so callers with prisms disable that check.
+    """
+    cm_brushes = load_records(bsp, inventory)[92]
     lump = inventory["lumps"][0x1D]
     with bsp.open("rb") as stream:
         stream.seek(lump["offset"])
@@ -813,7 +818,7 @@ def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
                 continue
             ledges += 1
             ledge += node
-            points_at, _, flags, triangles = struct.unpack_from("<iiIh", solid, ledge)
+            points_at, client, flags, triangles = struct.unpack_from("<iIIh", solid, ledge)
             def point(i):
                 return struct.unpack_from("<3f", solid, ledge + points_at + 16 * i)
             def edge(address):
@@ -821,6 +826,15 @@ def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None):
                 opposite = (word >> 16) & 0x7FFF
                 return word & 0xFFFF, opposite - 0x8000 if opposite & 0x4000 else opposite
             corners = sorted({edge(ledge + 20 + 16 * t + 4 * k)[0] for t in range(triangles) for k in range(3)})
+            if brush_clients:
+                if client >= len(cm_brushes):
+                    raise RuntimeError(f"VPhysics ledge client data {client} is not a CM brush")
+                cm = cm_brushes[client]
+                for i in corners:
+                    x, y, z = point(i)
+                    world = (x * 39.3701, z * 39.3701, -y * 39.3701)
+                    if any(abs(world[a] - cm[a]) > cm[6 + a] + 0.01 for a in range(3)):
+                        raise RuntimeError(f"VPhysics ledge lies outside its CM brush {client}")
             heights.extend(-point(i)[1] * 39.3701 for i in corners)
             centre = [sum(point(i)[a] for i in corners) / len(corners) for a in range(3)]
             for t in range(triangles):
@@ -1379,8 +1393,8 @@ def main():
             if validate(patch_bsp)['issues']:
                 raise RuntimeError('patch entity output failed record validation')
             if game == 'titanfallonline':
-                physics_checks(patch_bsp, patch_inventory, 8, model_index=1, z_bounds=(-32, 64))
-                physics_checks(patch_bsp, patch_inventory, 9, model_index=2, z_bounds=(-32, 0))
+                physics_checks(patch_bsp, patch_inventory, 8, model_index=1, z_bounds=(-32, 64), brush_clients=False)
+                physics_checks(patch_bsp, patch_inventory, 9, model_index=2, z_bounds=(-32, 0), brush_clients=False)
             reports.append({'game': game, 'fixture': 'patch-entities', 'issues': []})
         if game != "apexlegends":
             collision_portal_fixtures(folder, command, reports, game)

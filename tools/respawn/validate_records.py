@@ -356,8 +356,77 @@ def check_tf1_texture_strings(data, table, textures):
     return issues
 
 
-def check_tf1_physics(data, model_count):
-    """Bound model/solid framing and keydata; do not decode IVP collision trees."""
+IVP_NODE = struct.Struct('<2i')
+IVP_LEDGE = struct.Struct('<iIIh')
+
+
+def check_ivp_solid(data, start, length, cm_brush_count):
+    """Return the first structural error in one VPHY compact surface, or None.
+
+    Checks framing, the ledge tree, ledges, triangle indices, edge twins, point
+    ranges and finite coordinates. Ledge client data is the CM brush index in
+    retail. Retail also stores some -0.0 coordinates and padding, so neither is
+    checked here; remap's own output is held to +0.0 by compiler_regression.py.
+    """
+    if length < 76:
+        return 'physics solid is shorter than its VPHY and compact-surface headers'
+    version, model_type, surface_size = struct.unpack_from('<hhi', data, start + 4)
+    if (version, model_type) != (0x100, 0) or surface_size != length - 28:
+        return 'unsupported VPHY version/model type or surface size'
+    surface = start + 28
+    end = surface + surface_size
+    word, root = struct.unpack_from('<Ii', data, surface + 28)
+    if word >> 8 != surface_size or data[surface + 44:surface + 48] != b'IVPS':
+        return 'compact surface byte size or IVPS marker is invalid'
+    if not all(math.isfinite(v) for v in struct.unpack_from('<7f', data, surface)):
+        return 'nonfinite compact-surface mass/inertia/radius'
+    pending, nodes = [surface + root], 0
+    while pending:
+        node = pending.pop()
+        nodes += 1
+        if not surface + 48 <= node <= end - 28 or nodes > surface_size // 28:
+            return 'ledge tree node outside surface or cyclic'
+        right, offset = IVP_NODE.unpack_from(data, node)
+        if right:
+            if right < 56:
+                return 'ledge tree right child does not follow its left subtree'
+            pending += [node + 28, node + right]
+            continue
+        ledge = node + offset
+        if not surface + 48 <= ledge <= end - 16:
+            return 'ledge outside surface'
+        points, client, flags, triangles = IVP_LEDGE.unpack_from(data, ledge)
+        if flags & 0xf != 4 or triangles <= 0 or ledge + 16 + 16 * triangles > end:
+            return 'ledge flags or triangle range invalid'
+        if cm_brush_count and client >= cm_brush_count:
+            return 'ledge client data outside CM_BRUSHES'
+        words = struct.unpack_from(f'<{4 * triangles}I', data, ledge + 16)
+        used = set()
+        for t in range(triangles):
+            if words[4 * t] & 0xfff != t:
+                return 'ledge triangle index disagrees with its position'
+            for k in range(3):
+                edge = words[4 * t + 1 + k]
+                opposite = (edge >> 16) & 0x7fff
+                opposite -= 0x8000 if opposite & 0x4000 else 0
+                other = 4 * t + 1 + k + opposite
+                if not 0 <= other < len(words) or other % 4 == 0:
+                    return 'ledge edge twin outside its triangles'
+                following = words[4 * t + 1 + (k + 1) % 3] & 0xffff
+                if words[other] & 0xffff != following:
+                    return 'ledge edge is not twinned with its reverse'
+                used.add(edge & 0xffff)
+        first = ledge + points
+        if not surface + 48 <= first or first + 16 * (max(used) + 1) > end:
+            return 'ledge points outside surface'
+        for index in used:
+            if not all(math.isfinite(v) for v in struct.unpack_from('<3f', data, first + 16 * index)):
+                return 'nonfinite ledge point'
+    return None
+
+
+def check_tf1_physics(data, model_count, cm_brush_count=0):
+    """Bound model/solid framing and keydata, then each IVP compact surface."""
     issues = []
     def error(index, message):
         issues.append({'severity': 'error', 'lump': 29, 'record': index, 'message': message})
@@ -393,6 +462,10 @@ def check_tf1_physics(data, model_count):
                 return issues
             if data[cursor:cursor + 4] != b'VPHY':
                 error(model, 'unsupported physics solid signature')
+            else:
+                problem = check_ivp_solid(data, cursor, length, cm_brush_count)
+                if problem:
+                    error(model, problem)
             cursor += length
         if cursor != end:
             error(model, 'physics solids do not consume model payload')
@@ -552,7 +625,7 @@ def validate(path):
         report['issues'].extend(check_tf1_texture_strings(
             load_raw_payload(path, inventory, 43), records[44], records[2]))
         report['issues'].extend(check_tf1_physics(
-            load_raw_payload(path, inventory, 29), len(records[14])))
+            load_raw_payload(path, inventory, 29), len(records[14]), len(records[92])))
     if inventory["version_raw"] == 37:
         report["game_lump"] = inspect_game_lump(path, inventory=inventory)
         # Minimal synthetic fixtures may have no visibility data at all.

@@ -66,6 +66,7 @@ struct Ledge {
     std::vector<P3> points;
     std::vector<std::array<uint16_t, 3>> triangles;  // CCW seen from outside
     std::vector<uint8_t> materials;                  // materialtable index per triangle
+    uint32_t client = 0;                             // CM brush index, as retail
     P3 mins{1e30, 1e30, 1e30}, maxs{-1e30, -1e30, -1e30};
 };
 
@@ -244,7 +245,7 @@ std::size_t WriteLedge(Writer &w, const Ledge &ledge) {
     const std::size_t size = 16 + 16 * nt + 16 * ledge.points.size();
     const std::size_t at = w.Reserve(size);
     w.Put<int32_t>(at + 0, int32_t(16 + 16 * nt));                // c_point_offset
-    w.Put<int32_t>(at + 4, 0);                                    // client_data
+    w.Put<uint32_t>(at + 4, ledge.client);                        // client_data: CM brush
     w.Put<uint32_t>(at + 8, (1u << 2) | uint32_t(size / 16) << 8);  // is_compact, size_div_16
     w.Put<int16_t>(at + 12, int16_t(nt));
 
@@ -445,6 +446,8 @@ void Titanfall::EmitPhysicsModel(const entity_t &e, int modelIndex) {
         if (sky) continue;
         Ledge ledge;
         if (!BuildLedge(brush, ledge)) { ++skipped; continue; }
+        if (const auto cm = Titanfall::Bsp::cmBrushOfSource.find(&brush); cm != Titanfall::Bsp::cmBrushOfSource.end())
+            ledge.client = cm->second;
         if (contents & (CONTENTS_WATER | CONTENTS_SLIME)) {
             if (!world) continue;
             const shaderInfo_t *surface = nullptr;

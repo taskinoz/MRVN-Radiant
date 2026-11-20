@@ -41,6 +41,7 @@ ADDON_PREFIX = 'MRVN.TF1Harness.'
 OWNER = '.mrvn-harness-owner.json'
 # Barrels spawn as physics props in R1Delta; crate.mdl and projectile_rocket.mdl do not.
 DEFAULT_MODEL = 'models/containers/barrel.mdl'
+ASSET_ROOTS = ('materials', 'models', 'sound', 'scripts', 'resource', 'particles')
 ADDON_LIST = re.compile(r'\s*"AddonList"\s*\{[^{}]*\}\s*', re.I | re.S)
 MAP_NAME = re.compile(r'[A-Za-z0-9_]+')
 MODEL_NAME = re.compile(r'models/[A-Za-z0-9_/-]+\.mdl')
@@ -141,7 +142,7 @@ def model_files(source, models):
     return found
 
 
-def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=None):
+def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=None, asset_source=None):
     """Stage an owned addon with the compiled map (maps=None: a retail map) and,
     when models is not None, a level-init precache script for drop models.
 
@@ -155,7 +156,9 @@ def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=No
     .mdl/.phy files), and a custom map mounts no map VPK. Its models then load
     with empty keyvalues, so prop_physics finds no prop_data and deletes itself
     ("no propdata ... DELETED", server.dll 0x1c3c54). model_source copies each
-    drop model's loose files into the addon."""
+    drop model's loose files into the addon. asset_source is a loose tree
+    (materials/, models/, ...) copied into the addon as is, for materials and
+    models a custom map needs that no mounted VPK provides."""
     app = resolve_dir(app, 'R1Delta app')
     game = resolve_dir(game, 'Titanfall install')
     r1 = game / 'r1'
@@ -171,7 +174,18 @@ def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=No
     if not re.fullmatch(r'[a-f0-9]{32}', run_id):
         raise ValueError('invalid run ID')
     session = {'run_id': run_id, 'app': str(app), 'game': str(game), 'r1': str(r1), 'map': map_name, 'addon': None}
-    if maps is None and models is None:
+    assets = []
+    if asset_source is not None:
+        asset_source = resolve_dir(asset_source, 'asset files')
+        for path in sorted(asset_source.rglob('*')):
+            if linked(path):
+                raise ValueError(f'refusing linked asset path: {path}')
+            relative = path.relative_to(asset_source)
+            if path.is_file():
+                if relative.parts[0].lower() not in ASSET_ROOTS:
+                    raise ValueError(f'asset files must be under {"/".join(ASSET_ROOTS)}: {relative}')
+                assets.append((path, relative))
+    if maps is None and models is None and not assets:
         return session
     staged = model_files(model_source, set(models or ()) | {DEFAULT_MODEL}) if model_source and models is not None else []
     source = None
@@ -211,7 +225,7 @@ def prepare(app, game, maps, map_name, models=None, run_id=None, model_source=No
                 if item.is_file() and item.name.startswith(map_name) and (
                         item.suffix.lower() in ('.bsp', '.ent', '.bsp_lump') or '.bsp.' in item.name):
                     shutil.copyfile(item, target / item.name)
-        for item, relative in staged:
+        for item, relative in staged + assets:
             (addon / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(item, addon / relative)
         if models is not None:
@@ -506,6 +520,8 @@ def main(argv=None):
     p.add_argument('--model-files', type=Path,
                    help="Loose model tree (e.g. Titanfall Online's assets_dump) to stage drop models from; "
                         'needed for drops on compiled maps')
+    p.add_argument('--asset-files', type=Path,
+                   help='Loose tree (materials/, models/, ...) copied into the addon, e.g. from tf1_assets.py')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--timeout', type=int, default=300, help='Seconds to start, load and spawn')
     p.add_argument('--attempts', type=int, default=3)
@@ -515,7 +531,8 @@ def main(argv=None):
     checks = validate_checks(json.loads(args.checks.read_text()) if args.checks else {})
     args.output.mkdir(parents=True, exist_ok=True)
     session = prepare(find_app(args.r1delta), find_game(args.game), args.maps, args.map,
-                      checks['drop_models'] if checks['drops'] else None, model_source=args.model_files)
+                      checks['drop_models'] if checks['drops'] else None, model_source=args.model_files,
+                      asset_source=args.asset_files)
     try:
         for number in range(1, args.attempts + 1):
             report = attempt(session, checks, args.output, args.timeout)

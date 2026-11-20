@@ -66,6 +66,22 @@ class R1HarnessTests(unittest.TestCase):
                                run_id='b' * 32, model_source=self.root / 'assets_dump')
         self.assertFalse((self.r1 / 'addons' / ('MRVN.TF1Harness.' + 'b' * 32)).exists())
 
+    def test_loose_asset_tree_is_copied_and_removed(self):
+        assets = self.root / 'assets'
+        (assets / 'materials/world').mkdir(parents=True)
+        (assets / 'materials/world/a.vmt').write_text('"LightmappedGeneric" {}')
+        session = r1_harness.prepare(self.app, self.game, self.maps, 'mp_test', None, run_id='a' * 32,
+                                     asset_source=assets)
+        addon = Path(session['addon'])
+        self.assertTrue((addon / 'materials/world/a.vmt').is_file())
+        r1_harness.cleanup(session)
+        self.assertFalse(addon.exists())
+        (assets / 'maps').mkdir()
+        (assets / 'maps/x.bsp').write_bytes(b'x')
+        with self.assertRaisesRegex(ValueError, 'asset files must be under'):
+            r1_harness.prepare(self.app, self.game, self.maps, 'mp_test', None, run_id='b' * 32,
+                               asset_source=assets)
+
     def test_cleanup_accepts_the_games_tab_indented_listing(self):
         session = self.prepare()
         name = Path(session['addon']).name

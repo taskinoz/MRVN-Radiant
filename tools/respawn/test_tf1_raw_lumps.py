@@ -212,8 +212,10 @@ class Tf1RealtimeLightTests(unittest.TestCase):
         self.assertIn('after an unused', str(check_tf1_rtl(bytes([255, 1, 255, 255]), self.LIGHTS)))
         self.assertIn('names no WORLD_LIGHTS', str(check_tf1_rtl(bytes([3, 255, 255, 255]), self.LIGHTS)))
         self.assertIn('not point or spot', str(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS)))
-        # Without a leading sky ambient the hardware numbering is not assumed.
-        self.assertEqual(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS[1:]), [])
+        # Hardware indices skip ambient records: a map without an ambient or
+        # sun numbers its first point light 0.
+        self.assertEqual(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS[2:]), [])
+        self.assertIn('not point or spot', str(check_tf1_rtl(bytes([0, 255, 255, 255]), self.LIGHTS[1:])))
 
 
 if __name__ == '__main__':

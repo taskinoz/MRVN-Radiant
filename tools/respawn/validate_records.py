@@ -631,7 +631,9 @@ def check_tf1_rtl(data, lights):
     """Check v29 realtime-light texels: four hardware light bytes, 255 unused.
 
     In every retail map used slots precede unused ones and each byte names a
-    point or spot light at WORLD_LIGHTS index byte + 1 (after the sky ambient).
+    point or spot light by hardware index: its WORLD_LIGHTS index once the
+    ambient records (type 5) are skipped. Retail record 0 is the sky ambient,
+    so there it is index byte + 1; a map without an ambient starts at 0.
     """
     issues = []
     def error(index, message):
@@ -642,11 +644,11 @@ def check_tf1_rtl(data, lights):
     filled = RTL_ORDER.match(used).end()
     if filled != len(used):
         error(filled // 4, 'realtime-light slot used after an unused slot')
-    ambient_first = bool(lights) and lights[0][13] == 5
+    hardware = [light for light in lights if light[13] != 5]
     for value in sorted(set(data) - {255}):
-        if value + 1 >= len(lights):
+        if value >= len(hardware):
             error(None, f'realtime-light byte {value} names no WORLD_LIGHTS record')
-        elif ambient_first and lights[value + 1][13] not in (1, 2):
+        elif hardware[value][13] not in (1, 2):
             error(None, f'realtime-light byte {value} names a light that is not point or spot')
     return issues
 

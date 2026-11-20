@@ -85,32 +85,43 @@ fork's portals and cells, and multiplayer.
 
 ## Seasons 0–3 compared
 
-Retail samples: S0, S1 and S2 Canyonlands and S3 Aqueduct (see
-[RESPAWN_SAMPLES.md](RESPAWN_SAMPLES.md)). All four use rBSP 47, header
-revision 30, and version 0 for every lump. Static props are 64-byte records
-in every season (derived from the stored prop count: game lump version 47,
-same parented-prop tail). Meshes and mesh bounds give the same record count
-at 28 and 32 bytes. World-light and light-probe lump lengths are whole
-multiples of the 112- and 48-byte records the compiler writes in every
-season; that is consistent, not proof.
+**Use maps that shipped with Season 3 as the S3 reference.** R5Reloaded
+also carries maps backported from later seasons. The `Apex s3` install is
+build `R5pc_r5launch_N1094_CL456479` (30 October 2019); its Aqueduct and
+Ash's Redemption VPKs are later additions, and Aqueduct (an Arenas map) is
+a backport. The S3-native references used from 21 November 2026 are
+World's Edge (`mp_rr_desertlands_64k_x_64k`, new in S3) and the Firing
+Range (`mp_rr_canyonlands_staging`), extracted from that install.
+Kings Canyon `mu1`/`mu1_night` also shipped with it.
 
-The one structural difference found is lightmaps:
+Retail samples: S0, S1 and S2 Canyonlands, S3 World's Edge and Firing
+Range (see [RESPAWN_SAMPLES.md](RESPAWN_SAMPLES.md)). All use rBSP 47,
+header revision 30 and version 0 for every lump. Static props are 64-byte
+records in every season (game lump version 47, same parented-prop tail).
+Meshes and mesh bounds give the same record count at 28 and 32 bytes.
 
-| | S0–S2 | S3 |
+What the backported Aqueduct has that S0–S3 maps do not:
+
+| | S0–S3 (shipped) | Aqueduct (backport) |
 | --- | --- | --- |
-| Lightmap header (lump 0x53) | `01 00 00 00`, 1024 × h | `01 08 00 00`, 1024 × h |
-| Lump 0x61 | absent | 2 bytes per lightmap texel |
-| Lump 0x69 (real-time light data) | 6.5 bytes per texel | 6.5 bytes per texel |
+| Lightmap header (0x53) | `01 00 00 00`; page sizes vary (1088×1032, 960×952, 384×328, 1024×968), multiples of 8 | `01 08 00 00` |
+| Lump 0x61 | absent | BC7 copy of both lightmap planes, 2 bytes per texel |
+| Lump 0x2B | empty | 28 bytes |
+| PAKFILE (0x28) | `materials/maps/<map>/cubemaps.hdr.vtf` (stored zip) | empty zip |
+| Real-time light data (0x69) | 6.5 bytes per texel (6.0 in external sidecars) | 6.5 |
 
-S3 accepts the S0–S2 form: our output uses header type 1 without the S3 flag
-and loads and renders. So one output should suit all four seasons. That is
-an inference from matching layouts. S0–S2 have no harness here and are
-**not** natively tested.
+So the earlier reading of 0x61 and the `0x08` header flag as "S3 features"
+was wrong: they come from the later-season backport. The compiler writes
+neither, which is correct for S3. Our output loads and renders in S3; one
+output should suit all four seasons, an inference from matching layouts
+(S0–S2 have no harness here and are not natively tested).
 
 ## Lighting, shadows and visibility (21 November 2026)
 
-Measured on retail S3 `mp_rr_aqueduct` (S0 Canyonlands where noted),
-cross-checked against the R5 SDK's `dlightprobe_t`, and tested in R5Reloaded.
+First measured on `mp_rr_aqueduct`, then re-checked on S3-native World's
+Edge and Firing Range (see above), cross-checked against the R5 SDK's
+`dlightprobe_t`, and tested in R5Reloaded. Everything in the table holds on
+the S3-native maps, with the corrections in the next section.
 The fork had each of these wrong in ways the engine tolerated without
 crashing; what was fixed is listed with its in-game evidence.
 
@@ -130,12 +141,41 @@ lists static lights in RTL pages and probe references; giving static lights
 only RTL slots did not light surfaces with their colour or falloff, so that
 part of retail behaviour is not reproduced.
 
-Lump 0x61 (S3 only, header flag `0x08`) is a BC7 copy of the two lightmap
-planes, two textures per page; S3 reads the uncompressed form without it.
+Lump 0x61 (later seasons, header flag `0x08`) is a BC7 copy of the two
+lightmap planes, two textures per page; S3 maps do not have it.
 
 Lightmap shadow rays use `Respawn::Bake::Occluders` built from opaque world
 brushes (sky brushes let rays out), replacing a scan of every triangle per
 ray. Props and patches do not yet occlude baked light.
+
+## Corrections from S3-native maps (21 November 2026)
+
+Re-checking against World's Edge and the Firing Range confirmed the
+world-light encoding (flag rule, falloff fit, cones, shadow fields), mesh
+records, both lightmap planes (plane B alpha is 0 on every surface facing
+away from the sun; its direction points mostly up), RTL planes and BC5
+visibility, and the CSM reference split. It changed these:
+
+- **Tree indices are 22 bits.** World's Edge has 135,338 visibility nodes,
+  539,490 references and 211,364 CSM nodes. Node words are `count |
+  index << 8 (22 bits) | bit 30`; small maps show bit 30 as a `0x40` top
+  byte. Both trees now use 32-bit reference indices, lifting the old
+  65,535-object limit. One root per cell (265 on World's Edge) and one per
+  shadow environment (2 on the Firing Range).
+- **Node order and totals.** Retail interleaves internal nodes and leaves;
+  0x25 and 0x26 hold each node's subtree total up to the last internal
+  node. Writing internal nodes first remains valid.
+- **RTL pages** hold world index minus every ambient before it: the Firing
+  Range has two light environments, so values are world − 2 (98.3% of slot
+  lights within range); `HardwareLightIndex` already counts this way.
+- **Probes reference static lights too** (World's Edge: 805k static and
+  637k realtime references). The compiler still references realtime
+  lights only, because static lights are baked into the probe SH; whether
+  retail's SH excludes them is not known.
+- **Cubemaps** are one VTF 7.5 in the PAKFILE: 256×256, one frame per
+  cubemap, format 66 (Respawn-specific, about one byte per texel, probably
+  BC6H), 9 mips, flags `0x420c`, and a `CMA` resource. The compiler does
+  not write it yet.
 
 ## Open work, in order
 
@@ -146,10 +186,10 @@ ray. Props and patches do not yet occlude baked light.
 3. **Brush entities.** `func_brush`, doors and other movers through the
    `*coll` entity collision path.
 4. **Cells and portals.** The object tree is retail-shaped with one cell;
-   measure culling with several cells on a large map. Trees are limited to
-   65,535 nodes and references.
-5. **S3 lightmap extension (0x61).** Optional BC7 copy of the lightmap
-   planes; emit it if a later build needs it.
+   measure culling with several cells on a large map. Trees allow 22-bit
+   (4,194,303) node and reference indices.
+5. **Cubemaps.** Bake cubemaps and write `cubemaps.hdr.vtf` into the
+   PAKFILE in the S3 format above.
 6. **S0–S2.** Find a way to run custom maps in those builds, or document
    that the shared layout is the only evidence.
 7. **Navigation.** R5 maps use separate navmesh files; none are generated.

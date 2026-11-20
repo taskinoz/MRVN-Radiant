@@ -1137,10 +1137,14 @@ def main():
             if texture_names.count(name) != 1:
                 raise RuntimeError(f"{game}: missing or duplicated exact material {name}: {texture_names}")
         # Each authored vertex type must have emitted a pool, particularly 0x600.
-        pools = (71, 73, 74) if game == "apexlegends" else (71, 72, 73, 74)
+        # TF1 draws lit-flat only on water and never unlit-TS, so v29 writes
+        # authored lit-flat faces as lit-bump and unlit-TS as unlit.
+        pools = {"apexlegends": (71, 73, 74), "titanfallonline": (71, 73)}.get(game, (71, 72, 73, 74))
         for pool in pools:
             if not inventory["lumps"][pool]["length"]:
                 raise RuntimeError(f"{game}: expected populated vertex pool {pool}")
+        if game == "titanfallonline" and inventory["lumps"][74]["length"]:
+            raise RuntimeError("titanfallonline: unlit-TS vertices must be written as unlit")
         if game == "apexlegends":
             apex_levelinfo_fixtures(folder, command, reports, game)
         if game != "apexlegends":

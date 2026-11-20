@@ -1,3 +1,5 @@
+#include <set>
+#include <string>
 /* -------------------------------------------------------------------------------
 
    Copyright (C) 2022-2023 MRVN-Radiant and contributors.
@@ -481,10 +483,29 @@ void Titanfall::EmitMeshes(const entity_t &e) {
     for (const Shared::Mesh_t &mesh : Shared::meshes) {
         if (mesh.vertices.empty() || mesh.vertices.size() > 65536 || mesh.triangles.size() / 3 > 65535)
             Error("Mesh vertex or triangle count exceeds its 16-bit field");
+        // Retail TF1 draws lit-flat vertices only on cheap water tops and never
+        // uses unlit-TS; R1Delta draws both black on ordinary materials. So v29
+        // writes other lit-flat surfaces as lit-bump and unlit-TS as unlit.
+        int surfaceFlags = mesh.shaderInfo->surfaceFlags;
+        if (g_game->bspVersion == 29) {
+            const int format = surfaceFlags & S_VERTEX_UNLIT_TS;
+            const bool water = (surfaceFlags & 0x3008) == 0x3008;
+            int replaced = -1;
+            if (format == S_VERTEX_UNLIT_TS) replaced = S_VERTEX_UNLIT;
+            else if (format == S_VERTEX_LIT_FLAT && !water && !(surfaceFlags & (S_SKY | S_SKY_2D))) replaced = S_VERTEX_LIT_BUMP;
+            if (replaced >= 0) {
+                static std::set<std::string> warned;
+                if (warned.insert(mesh.shaderInfo->shader.c_str()).second)
+                    Sys_Warning("%s: TF1 does not draw %s vertices here; writing %s\n", mesh.shaderInfo->shader.c_str(),
+                                format == S_VERTEX_UNLIT_TS ? "unlit-TS" : "lit-flat",
+                                replaced == S_VERTEX_UNLIT ? "unlit" : "lit-bump");
+                surfaceFlags = (surfaceFlags & ~S_VERTEX_UNLIT_TS) | replaced;
+            }
+        }
         Titanfall::Mesh_t &m = Titanfall::Bsp::meshes.emplace_back();
         Titanfall::Bsp::meshCompileFlags.push_back(mesh.shaderInfo->compileFlags);
         m.const0 = 4294967040;  // :)
-        m.flags = mesh.shaderInfo->surfaceFlags;
+        m.flags = surfaceFlags;
         if (g_game->bspVersion == 29 && (mesh.shaderInfo->compileFlags & C_ALPHASHADOW))
             m.flags |= S_TF1_ALPHA_TEST;
         // Engine surface/decal queries iterate through this index inclusively.
@@ -494,13 +515,13 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
         int vertexOffset = 0;
 
-        if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT_TS)) {
+        if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT_TS)) {
             m.vertexType = 3;
             vertexOffset = Titanfall::Bsp::vertexUnlitTSVertices.size();
-        } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags,S_VERTEX_LIT_BUMP)) {
+        } else if (CHECK_FLAG(surfaceFlags,S_VERTEX_LIT_BUMP)) {
             m.vertexType = 2;
             vertexOffset = Titanfall::Bsp::vertexLitBumpVertices.size();
-        } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT)) {
+        } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT)) {
             m.vertexType = 1;
             vertexOffset = Titanfall::Bsp::vertexUnlitVertices.size();
         } else {
@@ -536,11 +557,11 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
             aabb.extend(vertex.xyz);
 
-            if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT_TS)) {
+            if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT_TS)) {
                 Titanfall::EmitVertexUnlitTS(vertex, tangents.at(i));
-            } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_LIT_BUMP)) {
+            } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_LIT_BUMP)) {
                 Titanfall::EmitVertexLitBump(vertex, tangents.at(i));
-            } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT)) {
+            } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT)) {
                 Titanfall::EmitVertexUnlit(vertex);
             } else {
                 Titanfall::EmitVertexLitFlat(vertex);

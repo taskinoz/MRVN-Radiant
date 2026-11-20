@@ -77,6 +77,7 @@ commands, environment and limits of the resulting evidence.
 | `compiler_regression.py` | Compiles the regression set with a given `remap` and compares |
 | `tfo_harness.py` | Loads a compiled TF1 map in Titanfall Online and runs traces, views and physics drops ([RESPAWN_TF1_LUMPS.md](../../docs/respawn/RESPAWN_TF1_LUMPS.md)) |
 | `r5_harness.py`, `r5_harnessctl.py`, `r5_harness_smoke.py` | Local R5Reloaded map harness ([RESPAWN_R5_HARNESS.md](../../docs/respawn/RESPAWN_R5_HARNESS.md)) |
+| `stage_r5_map.py`, `cast_to_obj.py`, `apex_native_regression.py` | Package/install compiled Apex maps for R5Reloaded, make prop editor copies from RSX Cast exports, and run the native S3 fixture checks ([RESPAWN_APEX_S3.md](../../docs/respawn/RESPAWN_APEX_S3.md)) |
 | `test_*.py` | Unit tests: `python -m unittest discover -s tools/respawn -p "test_*.py"` |
 | `CMakeLists.txt`, `*_tests.cpp` | C++ tests for the BSP reader, encodings, lightmap packing, bake and CSG; `relight_bridge.cpp` feeds `repair_tf1_port.py` into the native baker |
 

@@ -1,5 +1,10 @@
 # r5valkyrie Apex fork review and initial integration
 
+> **Superseded 20 November 2026:** the whole r5valkyrie Apex backend has
+> since been ported and tested natively in Season 3. See
+> [RESPAWN_APEX_S3.md](RESPAWN_APEX_S3.md). This review records the earlier
+> selective integration.
+
 Reviewed 17 November 2026. This is a selective source integration, not a merge of
 the fork or a new Apex runtime compatibility certificate.
 

@@ -19,6 +19,7 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 | Note | Covers |
 | --- | --- |
+| [RESPAWN_APEX_S3.md](RESPAWN_APEX_S3.md) | Apex S0–S3 compiler: r5valkyrie backend port, S3 native tests, season comparison, open work |
 | [RESPAWN_APEX_FORK_REVIEW.md](RESPAWN_APEX_FORK_REVIEW.md) | Pinned r5valkyrie fork review, initial Apex metadata fixes and season/schema limits |
 | [RESPAWN_TF2_LUMPS.md](RESPAWN_TF2_LUMPS.md) | Cubemaps, probe BSP, CSM objects, collision primitives and noded triangle collision |
 | [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md) | Titanfall 1 lighting, tangents, cubemaps, VPhysics, portals and testing in Titanfall Online |

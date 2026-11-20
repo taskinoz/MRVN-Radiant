@@ -282,11 +282,16 @@ How the menu stage is lit:
   and ambient plus nearby realtime lights.
 - **Coliseum's rig:** this mirrors retail Coliseum. Its stage probes see the menu
   sun and link several menu spotlights at weight 255.
-- **Spotlight flags:** realtime lights with `"shadow" "0"` get flag 56 and those
-  with `"realtime_shadows" "2"` get flag 104, as in retail. They are linked from
-  probes but take no RTL slots, since only flags 28 and 24 appear in retail RTL
-  pages.
-- **PBR lights:** `_pbr_falloff 1` records store intensity ×100000.
+- **Light flags (21 November):** flags are now built from keys as retail
+  does (`analyze_rtl.py lights`): 4, or 32 for `_pbr_falloff 1`; +8 realtime;
+  +16 when `realtime_shadows` is 0 or absent; +64 for `realtime_shadows 2`.
+  Every realtime point/spot light takes RTL slots with a baked mask. The
+  `shadow` key no longer changes flags or removes slots; before, `shadow 0`
+  lights (56) and `realtime_shadows 2` lights (104) got no slots and so lit no
+  world surfaces. TF1 writes 6 baked, 30 realtime and 14 for
+  `realtime_shadows` 1 or 2 (before, `shadow 0` became 14).
+- **PBR lights:** `_pbr_falloff 1` records store intensity ×100000. The light
+  scale step used to overwrite this, leaving PBR spots at their raw intensity.
 - **Entity routing:** Titanfall 2 entities now go through `Titanfall2::EmitEntity`,
   which writes lights and environments to `_env.ent`, as retail does. Previously
   they all went into the BSP entity lump through the Titanfall 1 router.

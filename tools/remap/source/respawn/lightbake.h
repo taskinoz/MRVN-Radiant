@@ -1279,12 +1279,15 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
                                        detail::hash(std::uint32_t(i * 3266489917u)), true) * options.bounceScale;
 
         Probe& probe = probes[i];
-        // Up to four visible realtime local lights, strongest first.
+        // Up to four visible local lights, strongest first. Retail links baked
+        // lights too (about 70% of references in TF1 Angel City and TF2 Angel
+        // City/Colony02): characters get no lightmap, so this is the only way
+        // a baked light reaches them.
         struct Pick { double score; int light; double visible; };
         Pick picks[4] = {{0, -1, 0}, {0, -1, 0}, {0, -1, 0}, {0, -1, 0}};
         for (std::size_t l = 0; l < lights.size(); ++l) {
             const Light& light = lights[l];
-            if (!light.realtime || (light.type != LightType::Point && light.type != LightType::Spot)) continue;
+            if (light.type != LightType::Point && light.type != LightType::Spot) continue;
             const V3 toLight = light.origin - p;
             const double d = length(toLight);
             if (d >= light.zeroDistance || d < 1) continue;
@@ -1298,7 +1301,9 @@ inline std::vector<Probe> bakeProbes(const std::vector<V3>& points, const std::v
         }
         for (int k = 0; k < 4; ++k) {
             if (picks[k].light < 0) continue;
-            probe.weights[k] = static_cast<std::uint8_t>(std::lround(picks[k].visible * 255));
+            // Retail weights are 255 on 99.4% of references; partial visibility
+            // only ranks the candidates.
+            probe.weights[k] = 255;
             probe.lights[k] = static_cast<std::int16_t>(lights[picks[k].light].hardwareIndex);
         }
 

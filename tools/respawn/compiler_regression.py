@@ -517,7 +517,7 @@ def tf1_realtime_light_fixture(folder, command, reports, game):
                            realtime='0') +
                     entity(classname='light', origin='256 -256 64', _light='255 200 150 200', _distance='256') +
                     entity(classname='light_spot', origin='0 256 200', pitch='-90', angles='90 0 0',
-                           _light='255 255 255 400', _distance='400', _cone='45', _inner_cone='20', shadow='0'),
+                           _light='255 255 255 400', _distance='400', _cone='45', _inner_cone='20', realtime_shadows='1'),
                     encoding='utf-8')
     with path.with_suffix('.log').open('wb') as log:
         subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -533,7 +533,7 @@ def tf1_realtime_light_fixture(folder, command, reports, game):
     for h, w in enumerate(hardware):
         light = lights[w]
         kinds[h] = (light[13], light[22], tuple(round(v) for v in light[0:3]))
-    expected = {(3, 0): 'sun', (1, 6): 'baked point', (1, 30): 'realtime point', (2, 14): 'unshadowed spot'}
+    expected = {(3, 0): 'sun', (1, 6): 'baked point', (1, 30): 'realtime point', (2, 14): 'realtime_shadows 1 spot'}
     found = {expected.get((t, f), f'unexpected type {t} flags {f}') for t, f, _ in kinds.values()}
     if found != set(expected.values()) or any(l[22] != 0 for l in lights if l[13] == 5):
         raise RuntimeError(f'v29 world-light flags: {sorted(found)}')
@@ -713,11 +713,12 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("probe beside the realtime point light has no link to it")
     if probe_near(-300, 0, 64)[15] != 0 or probe_near(400, 0, 64)[15] != 8192:
         raise RuntimeError("probe sun visibility does not follow the roof")
-    if any(5 in p[20:24] for p in probes):
-        raise RuntimeError("static light was linked from a probe")
+    # Retail links baked lights from probes too (characters have no lightmap).
+    if 5 not in probe_near(-256, 0, 64)[20:24]:
+        raise RuntimeError("probe beside the static point light has no link to it")
     if any(i in (1, 3) for page in pages for i in page):
         raise RuntimeError("menu-stage lights entered the gameplay RTL pages")
-    if [(l[13], l[22]) for l in lights] != [(5, 0), (5, 0), (3, 24), (3, 24), (2, 28), (2, 56), (1, 28), (1, 4)]:
+    if [(l[13], l[22]) for l in lights] != [(5, 0), (5, 0), (3, 24), (3, 24), (2, 28), (2, 28), (1, 28), (1, 4)]:
         raise RuntimeError(f"world light order/flags: {[(l[13], l[22]) for l in lights]}")
     if any(any(l[9:12]) or (l[13] == 5 and any(l[6:9])) or
            (l[13] == 1 and l[6:9] != (1.0, 0.0, 0.0)) for l in lights):

@@ -301,6 +301,11 @@ int main() {
         require(probes[1].values[14] > probes[0].values[14], "Open probe sky vector is longer upwards");
         require(probes[1].lights[0] == 1 && probes[1].weights[0] == 255 && probes[1].lights[1] == -1, "Probe local light link");
         require(probes[0].lights[0] == -1, "Out-of-range light is not linked");
+        Light bakedLamp = lamp2;
+        bakedLamp.realtime = false;
+        const auto bakedProbes = bakeProbes(probePoints, {sun, bakedLamp}, {0.8, 0.8, 0.8}, scene, options);
+        require(bakedProbes[1].lights[0] == 1 && bakedProbes[1].weights[0] == 255,
+                "Baked local lights are linked as in retail");
         require(probes[1].values[3] > 0 && probes[1].values[3] < 8192, "Ambient W term in fixed point");
 
         // KD tree: every probe referenced once, leaves of at most eight, cuts separate children.

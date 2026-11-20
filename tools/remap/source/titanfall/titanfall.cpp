@@ -102,15 +102,13 @@ void WriteR1BSPFile(const char *filename) {
     const bool baked = Titanfall2::Bsp::lightingBaked;
     std::vector<uint8_t> worldLights, realtime, probeReferences;
     if (baked) {
-        // Retail TF1 flags: ambient and sun 0, baked 6, realtime 30, realtime
-        // without shadows 14. Every TF1 point/spot light carries bit 2, which the
-        // TF2 values (4, 28, 56, 104, sun 24) lack.
+        // Retail TF1 flags are bits set by keys (analyze_rtl.py, five maps):
+        // 2|4 for every point/spot light, +8 realtime, +16 when
+        // "realtime_shadows" is 0 or absent. So baked 6, realtime 30, and 14
+        // for "realtime_shadows" 1 or 2. Ambient and sun are 0.
         for (Titanfall2::WorldLight_t light : Titanfall2::Bsp::worldLights) {
             if (light.type == 5 || light.type == 3) light.flags = 0;
-            else if (light.flags == 4) light.flags = 6;
-            else if (light.flags == 56) light.flags = 14;
-            else if (light.flags == 28 || light.flags == 104) light.flags = 30;
-            else light.flags |= 2;
+            else light.flags = 6 | (light.flags & 8) | ((light.flags & 8) ? (light.flags & 16) : 0);
             const auto *bytes = reinterpret_cast<const uint8_t *>(&light);
             worldLights.insert(worldLights.end(), bytes, bytes + 100);
         }

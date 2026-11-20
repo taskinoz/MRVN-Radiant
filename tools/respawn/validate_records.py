@@ -11,9 +11,10 @@ import re
 from pathlib import Path
 import struct
 import sys
+import zlib
 
 from inspect_bsp import FormatError, HEADER_SIZE, inspect
-from game_lump import inspect_game_lump
+from game_lump import decode_sprp_v12, inspect_game_lump, parse_directory
 from entity_text import parse_entities, parse_partition
 from tricoll import check_tricoll_records
 from portals import check_portal_records
@@ -43,11 +44,19 @@ SCHEMAS = {
 TF1_SCHEMAS = {
     36: ('2fi', 1), 42: ('3iI', 0), 44: ('I', 0), 54: ('12f3i7f3i', 1),
     99: ('3fBBH3fHH', 0), 100: ('H', 0),
-    83: ('I2H', 1), 101: ('16h4B4hI', 0), 102: ('H', 0),
+    # Retail VERTEX_BLINN_PHONG is always empty; this is the writer's layout.
+    75: ('2I2f4B2f4f', 0),
+    # One u32 per static prop: every retail upper half is zero.
+    83: ('I2H', 1), 101: ('16h4B4hI', 0), 102: ('I', 0),
     103: ('2I', 0), 104: ('3fI', 0),
     117: ('3f', 0), 118: ('H', 0),
     124: ('3f', 0), 125: ('5f', 0), 126: ('H', 0), 127: ('2I2h', 0),
 }
+
+# v29 lumps checked from their raw bytes rather than fixed-size records.
+TF1_RAW_CHECKS = {0: 'entity text', 24: 'partition declaration', 29: 'physics framing',
+                  35: 'sprp v12', 40: 'stored zip', 43: 'texture strings',
+                  98: 'texel size', 105: 'texel size and light slots'}
 
 
 def check_tf2_object_references(records, prop_count):
@@ -308,19 +317,38 @@ def check_tf1_entities(path, inventory):
     issues, counts = [], {}
     def error(message):
         issues.append({'severity': 'error', 'lump': 24, 'record': None, 'message': message})
+    def entity_issue(message, severity='error'):
+        issues.append({'severity': severity, 'lump': 0, 'record': None, 'message': message})
+    text = load_raw_payload(path, inventory, 0)
     try:
-        counts['embedded'] = len(parse_entities(load_raw_payload(path, inventory, 0).decode(
-            'utf-8', errors='surrogateescape')))
+        entities = parse_entities(text.decode('utf-8', errors='surrogateescape'))
+        counts['embedded'] = len(entities)
+        classnames = [[value for key, value in pairs if key == 'classname'] for pairs in entities]
+        # Every retail map embeds worldspawn first, then brush entities.
+        if not entities or classnames[0] != ['worldspawn']:
+            entity_issue('embedded entities must start with one worldspawn')
+        if sum(names == ['worldspawn'] for names in classnames) > 1:
+            entity_issue('embedded entities contain more than one worldspawn')
+        if any(len(names) != 1 or not names[0] for names in classnames):
+            entity_issue('embedded entity lacks exactly one nonempty classname')
+        # Retail ends with one NUL; remap omits it and still loads, so warn only.
+        if not text.endswith(b'\0'):
+            entity_issue('embedded entity text is not NUL-terminated like retail', 'warning')
     except FormatError as exc:
-        issues.append({'severity': 'error', 'lump': 0, 'record': None, 'message': str(exc)})
+        entity_issue(str(exc))
     declaration = load_raw_payload(path, inventory, 24)
     if not declaration:
         return issues, counts
     if len(declaration) > 65536:
         error('oversized entity partition declaration')
         return issues, counts
+    if not declaration.endswith(b'\0'):
+        error('entity partition declaration is not NUL-terminated')
     try:
         tokens = declaration.rstrip(b'\0').decode('ascii').split()
+        if ' '.join(tokens).encode() != declaration.rstrip(b'\0'):
+            issues.append({'severity': 'warning', 'lump': 24, 'record': None,
+                           'message': 'entity partition names are not single-space separated like retail'})
         if (not tokens or tokens[0] != '01*' or len({token.casefold() for token in tokens[1:]}) != len(tokens[1:]) or
                 any(not re.fullmatch(r'[A-Za-z0-9_]+', token) for token in tokens[1:])):
             raise ValueError('unsupported or duplicate entity partition declaration')
@@ -405,6 +433,174 @@ def check_tf1_physics(data, model_count):
     return issues
 
 
+def check_tf1_game_lump(data, base, records):
+    """Check the v29 sprp v12 framing, dictionary and placements.
+
+    Returns (issues, prop_count). Fields retail fills with stale bytes (the two
+    u16 after the model index, lighting origin, the word before scale) are not
+    checked, and the always-empty leaf table gives no leaf ranges to check.
+    """
+    issues = []
+    def error(lump, index, message):
+        issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
+    if not data:
+        return issues, 0
+    try:
+        entries = parse_directory(data, base)
+    except FormatError as exc:
+        error(35, None, str(exc))
+        return issues, None
+    sprp = [entry for entry in entries if entry['name'] == 'sprp']
+    if len(sprp) != 1:
+        error(35, None, 'GAME_LUMP must hold exactly one sprp entry')
+        return issues, None
+    entry = sprp[0]
+    if (entry['flags'], entry['version']) != (0, 12):
+        error(35, None, f"unsupported v29 sprp flags {entry['flags']} version {entry['version']}")
+        return issues, None
+    start = entry['relative_offset'] or 0
+    try:
+        sprp = decode_sprp_v12(data[start:start + entry['length']])
+    except FormatError as exc:
+        error(35, None, str(exc))
+        return issues, None
+    names, count = sprp['model_names'], sprp['placement_count']
+    for index, raw in enumerate(names):
+        if b'\0' not in raw or raw[0] == 0:
+            error(35, index, 'sprp model name is empty or unterminated')
+    first, second = sprp['unknown_header_counts']
+    # Unknown counts; second <= first <= placements in every retail map. A
+    # header shifted by one word (placements then one count) breaks this.
+    if not second <= first <= count:
+        error(35, None, 'sprp v12 header counts are not ordered as in retail')
+    for index, prop in enumerate(sprp['placements']):
+        if prop[6] >= len(names):
+            error(35, index, 'sprp placement model index outside name table')
+        if not all(math.isfinite(value) for value in (*prop[:6], prop[13], prop[14], prop[18])):
+            error(35, index, 'nonfinite sprp placement origin, angles or fade')
+        if not math.isfinite(prop[28]) or prop[28] <= 0:
+            error(35, index, 'sprp placement scale is not finite and positive')
+    level = records.get(123, [])
+    if len(level) == 1 and level[0][3] != count:
+        error(123, 0, 'LEVEL_INFO static-prop count differs from sprp placements')
+    probes = records.get(102, [])
+    if probes and len(probes) != count:
+        error(102, None, 'static-prop probe count differs from sprp placements')
+    return issues, count
+
+
+def check_tf1_pakfile(data):
+    """Check that a v29 PAKFILE is a self-contained stored zip."""
+    issues = []
+    def error(index, message):
+        issues.append({'severity': 'error', 'lump': 40, 'record': index, 'message': message})
+    if not data:
+        return issues
+    eocd = None
+    for position in range(len(data) - 22, max(-1, len(data) - 22 - 65536), -1):
+        if (data[position:position + 4] == b'PK\x05\x06' and
+                position + 22 + struct.unpack_from('<H', data, position + 20)[0] == len(data)):
+            eocd = position
+            break
+    if eocd is None:
+        error(None, 'pakfile lacks an end-of-central-directory record ending the lump')
+        return issues
+    disk, cd_disk, disk_entries, entries, cd_size, cd_offset = struct.unpack_from('<4H2I', data, eocd + 4)
+    if disk or cd_disk or disk_entries != entries or 0xffff in (disk_entries, entries):
+        error(None, 'multi-disk or ZIP64 pakfile is unsupported')
+        return issues
+    if cd_offset + cd_size > eocd:
+        error(None, 'pakfile central directory outside lump')
+        return issues
+    cursor, spans, names = cd_offset, [], set()
+    for index in range(entries):
+        if cursor + 46 > cd_offset + cd_size or data[cursor:cursor + 4] != b'PK\x01\x02':
+            error(index, 'truncated or invalid pakfile central directory entry')
+            return issues
+        (flags, method, crc, packed, size, name_length, extra_length, comment_length,
+         local) = struct.unpack_from('<8x2H4x3I3H8xI', data, cursor)
+        name = data[cursor + 46:cursor + 46 + name_length]
+        cursor += 46 + name_length + extra_length + comment_length
+        if cursor > cd_offset + cd_size:
+            error(index, 'pakfile entry name outside central directory')
+            return issues
+        text = name.decode('utf-8', errors='replace').replace('\\', '/')
+        if not name or text.startswith('/') or '..' in text.split('/') or ':' in text:
+            error(index, 'unsafe or empty pakfile entry name')
+        if text.casefold() in names:
+            error(index, 'duplicate pakfile entry name')
+        names.add(text.casefold())
+        # Every retail entry is stored (method 0) and unencrypted.
+        if method != 0 or flags & 1 or packed != size or 0xffffffff in (packed, size, local):
+            error(index, 'pakfile entry is compressed, encrypted or ZIP64')
+            continue
+        if local + 30 > cd_offset or data[local:local + 4] != b'PK\x03\x04':
+            error(index, 'pakfile local header outside lump or invalid')
+            continue
+        local_name, local_extra = struct.unpack_from('<2H', data, local + 26)
+        begin = local + 30 + local_name + local_extra
+        if begin + size > cd_offset:
+            error(index, 'pakfile entry data overlaps its central directory or lump end')
+            continue
+        if zlib.crc32(data[begin:begin + size]) != crc:
+            error(index, 'pakfile entry CRC mismatch')
+        spans.append((local, begin + size, index))
+    if cursor != cd_offset + cd_size:
+        error(None, 'pakfile central directory size disagrees with its entries')
+    spans.sort()
+    for (_, end, _), (start, _, index) in zip(spans, spans[1:]):
+        if start < end:
+            error(index, 'overlapping pakfile entries')
+    return issues
+
+
+def check_tf1_rtl(data, lights):
+    """Check v29 realtime-light texels: four hardware light bytes, 255 unused.
+
+    In every retail map used slots precede unused ones and each byte names a
+    point or spot light at WORLD_LIGHTS index byte + 1 (after the sky ambient).
+    """
+    issues = []
+    def error(index, message):
+        issues.append({'severity': 'error', 'lump': 105, 'record': index, 'message': message})
+    if len(data) % 4:
+        return issues  # The texel-count check reports the size.
+    used = data.translate(RTL_USED)
+    filled = RTL_ORDER.match(used).end()
+    if filled != len(used):
+        error(filled // 4, 'realtime-light slot used after an unused slot')
+    ambient_first = bool(lights) and lights[0][13] == 5
+    for value in sorted(set(data) - {255}):
+        if value + 1 >= len(lights):
+            error(None, f'realtime-light byte {value} names no WORLD_LIGHTS record')
+        elif ambient_first and lights[value + 1][13] not in (1, 2):
+            error(None, f'realtime-light byte {value} names a light that is not point or spot')
+    return issues
+
+
+RTL_USED = bytes(48 + (value != 255) for value in range(256))
+RTL_ORDER = re.compile(rb'(?:1111|1110|1100|1000|0000)*')
+
+
+def check_tf1_vertex_references(records):
+    """v29 tangent words are plain normal indices; Blinn-Phong is index-checked."""
+    issues = []
+    normals = len(records.get(30, []))
+    for lump in (73, 74):
+        for index, vertex in enumerate(records.get(lump, [])):
+            if vertex[-1] >= normals or vertex[-2] >= normals:
+                issues.append({'severity': 'error', 'lump': lump, 'record': index,
+                               'message': 'v29 tangent/bitangent index outside VERTEX_NORMALS'})
+    for index, vertex in enumerate(records.get(75, [])):
+        if vertex[0] >= len(records.get(3, [])) or vertex[1] >= normals:
+            issues.append({'severity': 'error', 'lump': 75, 'record': index,
+                           'message': 'position or normal reference outside lump'})
+        if not all(math.isfinite(value) for value in (*vertex[2:4], *vertex[8:])):
+            issues.append({'severity': 'error', 'lump': 75, 'record': index,
+                           'message': 'nonfinite Blinn-Phong UV or tangent quaternion'})
+    return issues
+
+
 def check_tf1_shadow_records(records):
     """Check v29 occlusion/shadow streams; shadow-object IDs remain opaque."""
     issues = []
@@ -467,7 +663,7 @@ def check_tf1_mesh_metadata(records):
 def check_tf1_records(records, inventory):
     """Known v29 auxiliary layouts; no claim about RTL channel meanings."""
     issues = (check_tf1_csm_records(records) + check_tf1_shadow_records(records)
-              + check_tf1_mesh_metadata(records))
+              + check_tf1_mesh_metadata(records) + check_tf1_vertex_references(records))
     def error(lump, index, message):
         issues.append({'severity': 'error', 'lump': lump, 'record': index, 'message': message})
     for i, (surface, bottom, texture) in enumerate(records[36]):
@@ -487,7 +683,7 @@ def check_tf1_records(records, inventory):
         if probe >= len(records[101]):
             error(104, i, 'lightprobe reference outside LIGHTPROBES')
     for i, (probe,) in enumerate(records[102]):
-        if probe != 0xffff and probe >= len(records[101]):
+        if probe != 0xffffffff and probe >= len(records[101]):
             error(102, i, 'static-prop probe outside LIGHTPROBES')
     graph = {}
     for i, (word, value) in enumerate(records[103]):
@@ -553,6 +749,11 @@ def validate(path):
             load_raw_payload(path, inventory, 43), records[44], records[2]))
         report['issues'].extend(check_tf1_physics(
             load_raw_payload(path, inventory, 29), len(records[14])))
+        game_issues, report['static_prop_count'] = check_tf1_game_lump(
+            load_raw_payload(path, inventory, 35), inventory['lumps'][35]['offset'], records)
+        report['issues'].extend(game_issues)
+        report['issues'].extend(check_tf1_pakfile(load_raw_payload(path, inventory, 40)))
+        report['issues'].extend(check_tf1_rtl(load_raw_payload(path, inventory, 105), records[54]))
     if inventory["version_raw"] == 37:
         report["game_lump"] = inspect_game_lump(path, inventory=inventory)
         # Minimal synthetic fixtures may have no visibility data at all.
@@ -560,6 +761,9 @@ def validate(path):
             prop_count = sum(e.get('placement_count',0) for e in report['game_lump']['entries'])
             report['issues'].extend(check_tf2_object_references(records,prop_count))
     report["issues"].extend(check_portal_records(records, inventory["version_raw"]))
+    # Warnings note retail differences the engine tolerates; callers gate on issues.
+    report["warnings"] = [i for i in report["issues"] if i["severity"] == "warning"]
+    report["issues"] = [i for i in report["issues"] if i["severity"] != "warning"]
     return report
 
 

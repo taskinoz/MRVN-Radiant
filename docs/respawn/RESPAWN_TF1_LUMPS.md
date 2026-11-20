@@ -584,6 +584,47 @@ native drop results need repeats, and one failing run does not show a
 collision defect. The harness's `drop_samples` option logs drop positions every
 0.2 seconds.
 
+## Raw-lump facts behind the validator (21 November 2026)
+
+Measured on six retail TF1 maps (Angel City, beta Angel City, Colony,
+Fracture, Lagoon, Relic) and the TFO lobby. `validate_records.py` checks each.
+
+- **ENTITIES:** worldspawn first, once; every entity has one classname. Retail
+  ends with exactly one NUL. remap writes no NUL and its maps still load, so a
+  missing NUL is only a warning (`warnings` in the report).
+- **ENTITY_PARTITIONS:** always `01* env fx script snd spawn\0`, single spaces,
+  NUL-terminated.
+- **GAME_LUMP:** one `prps` entry, flags 0, sprp **version 12**, directory
+  offsets BSP-absolute even in sidecars. The payload is the name table, a u32
+  leaf count (always 0) with u16 leaves, three u32 (placements, then two
+  unknown counts with second ≤ first ≤ placements), then 84-byte placements
+  laid out as `repair_tf1_port.py`'s `OLD_PROP`, model index straight after the
+  angles. The two u16 after the model index reach 65535 with no leaves, so they
+  are not leaf ranges. Lighting origin and the word at byte 68 hold stale bits
+  (often non-finite) and are not checked. Every model name is used.
+  LEVEL_INFO's prop count equals the placement count.
+- **remap's v29 sprp writer differs:** it writes two words after the leaf count
+  and one trailing word. With props, the first origin lands in the header and
+  every placement is four bytes early. The validator rejects this (header counts
+  out of order); remap's empty-prop output is byte-identical to retail. Static
+  props in compiled TF1 maps are unverified in game.
+- **STATIC_PROP_LIGHTPROBE_INDICES:** one u32 per prop. The upper halves are
+  always zero, so the schema is now `I` rather than two `H` per prop.
+- **PAKFILE:** a stored zip (method 0, no flags or extra fields), its local
+  headers start at byte 0 and the end-of-central-directory record ends the lump
+  with a 32-byte `XZP1 0` comment. Checks: EOCD, central directory, local headers
+  and CRCs in range, no compressed, ZIP64, unsafe or duplicate names.
+- **LIGHTMAP_DATA_SKY / REAL_TIME_LIGHTS:** every header is type 1. SKY is
+  exactly 8 bytes and RTL exactly 4 bytes per header texel (sum of width ×
+  height) in all maps. In every RTL texel used bytes come before 255s, and each
+  byte *b* names WORLD_LIGHTS[*b* + 1], always a point (1) or spot (2) light;
+  record 0 is the sky ambient (5) and 1 the sun (3). The light check needs that
+  leading ambient (the baseline has none and writes only 255).
+- **VERTEX_BLINN_PHONG / VERTEX_UNLIT_TS:** empty in every sample. Blinn-Phong
+  uses the writer's 44-byte layout (indices, UV, colour, lightmap UV, tangent
+  quaternion); no mesh flag selects it. Lit-bump and unlit-TS tangent words are
+  plain VERTEX_NORMALS indices in v29, and all retail ones are in range.
+
 ## Still missing
 
 - **PHYSICS_TRIANGLES (1.4 MB in Angel City):** precomputed virtual-mesh hulls,

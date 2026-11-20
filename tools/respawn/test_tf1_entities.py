@@ -66,5 +66,23 @@ class Tf1EntityTests(unittest.TestCase):
         self.assertEqual(parse_partition(('ENTITIES01\r\n' + text).encode()), rows)
 
 
+    def test_worldspawn_first_and_classnames(self):
+        for text in (b'\0', b'{ "classname" "info_target" }\0',
+                     b'{ "classname" "worldspawn" }{ "classname" "worldspawn" }\0',
+                     b'{ "classname" "worldspawn" }{ "targetname" "x" }\0',
+                     b'{ "classname" "worldspawn" "classname" "func_brush" }\0'):
+            self.write_map(entities=text)
+            self.assertTrue(self.check()[0], text)
+
+    def test_missing_entity_nul_is_a_warning_and_partition_nul_an_error(self):
+        self.write_map(entities=b'{ "classname" "worldspawn" }')
+        issues = self.check()[0]
+        self.assertEqual([issue['severity'] for issue in issues], ['warning'])
+        self.write_map(declaration=b'01* spawn')
+        self.assertIn('not NUL-terminated', str(self.check()[0]))
+        self.write_map(declaration=b'01*  spawn\0')
+        self.assertEqual([issue['severity'] for issue in self.check()[0]], ['warning'])
+
+
 if __name__ == '__main__':
     unittest.main()

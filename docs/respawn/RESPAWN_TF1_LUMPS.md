@@ -532,8 +532,8 @@ streaming and visibility parity gaps below.
 TFO gives every TRICOLL header VPhysics collision without any keydata:
 
 - `engine.dll` RVA 0x245f60 parses PHYSICS_TRIANGLES as `u16 count`,
-  `u16 size[count]`, then concatenated blobs; sizes 0 and 0xfffe..0xffff are
-  null. Its count equals the TRICOLL header count (Angel City: 5,806 headers,
+  `u16 size[count]`, then concatenated blobs; sizes 0 and 0xffff are null
+  (0xfffe is a real size; see the decoded layout below). Its count equals the TRICOLL header count (Angel City: 5,806 headers,
   1,403,258 blob bytes). RVA 0x246090 then calls `IPhysicsCollision` vtable
   slot 0x1a0 (Source's `CreateVirtualMesh`) once per TRICOLL header
   (`size / 44`, computed at 0x242b20), with the header index as user data and
@@ -584,31 +584,87 @@ native drop results need repeats, and one failing run does not show a
 collision defect. The harness's `drop_samples` option logs drop positions every
 0.2 seconds.
 
+## PHYSICS_TRIANGLES decoded (21 November 2026)
+
+Read from the TFO `vphysics.dll` packer (`PackLedgesIntoHull` RVA 0x6870,
+per hull 0x56b0), unpacker (0x6dd0) and the engine callback, and checked on all
+blobs of five retail maps. Each blob is Source's packed virtual-mesh hull:
+
+| Bytes | Contents |
+| --- | --- |
+| 4 | `u8 hullCount`, three zero bytes (always 1 hull in retail) |
+| 5 per hull | `u8 faces, virtualFaces, edges, virtualEdges, baseVertex` |
+| 4 per face | three edge indices in winding order, then `u8 pierce` |
+| 2 per edge | `u8 v0, v1`: header-local vertex index minus `baseVertex` |
+
+All hull headers come first, then each hull's faces and edges. The first face
+to use an edge walks it v0 to v1 and the second v1 to v0, so faces are
+counter-clockwise from outside. Faces `[0, virtualFaces)` and edges
+`[0, virtualEdges)` get IVP's `is_virtual` bit; the packer puts virtual
+items first and numbers edges by first use. `pierce` is the hull face IVP
+stores as `pierce_index`. The unpacker builds an `IVP_Compact_Ledge` (marked as
+having children) over the mesh's own vertex array, so no points are stored.
+The earlier "count no larger than F" and "fourth count" are the virtual counts,
+and the extra byte is `baseVertex` (nonzero in 1-4% of blobs).
+
+How the engine uses it:
+
+- `CreateVirtualMesh` is called with `buildOuterHull = (lump size <= 0)`.
+  With the lump present the engine skips, for every header, the hull build
+  (`CreateMeshHull` 0x45fc0: one IVP ledge per triangle, an
+  `IVP_SurfaceBuilder_Ledge_Soup` compile with qhull, then packing). Its
+  `GetVirtualMesh` callback (engine 0x245ce0) passes the blob pointer as
+  `virtualmeshlist_t::pHull`. This is the only load-time saving; it was not
+  timed.
+- A null entry then means **no hull** for that mesh (the engine does not
+  fall back to building one).
+- Limits (`FitsInPackedHull` 0x67e0): 3 x faces <= 512 and
+  `max(vertex) - min(minVertex, 255) <= 255`. Otherwise the original builds
+  two hulls from the triangle halves (by index count, which drops the last
+  triangle when the count is odd); queries use at most two hulls, hull 0 for
+  triangles `[0, n/2)` and hull 1 for `[n/2, n)`. Retail never needed two.
+- The hull's vertex for each IVP point is the nearest header vertex, lowest
+  index on ties (0x53f0).
+
+Retail writes a blob exactly for headers whose collision contents include
+SOLID, WINDOW or GRATE, and 0xffff for clip-only and bullet-clip headers:
+19,297 of 19,299 headers agree (one exception each in Angel City and
+Fracture). Four retail blobs (Fracture 3, Relic 1) contain a degenerate face.
+
+Retail bytes cannot be regenerated. The hull is IVP's simplified qhull hull:
+translated copies of identical geometry give different face order,
+triangulation and virtual bits in 605 of 1,003 Angel City pairs. Retail hulls
+also drop extreme points (the hull of a 16-vertex pole keeps 10), leaving
+vertices up to 849 units outside in a few headers, and the pierce face is
+near, not at, the most opposite normal. `physics_triangles.py` builds an
+equivalent hull instead: exact convex hull of the header's vertices
+(double-sided polygon if flat), all faces and edges virtual (retail Angel City:
+99% of faces, 89% of edges), most-opposite-normal pierce, simplified only when over
+the limits. Field agreement with retail over the 16,214 structurally valid retail blobs:
+
+| Map | Blobs | Same hull vertices | Same face/edge counts | Same base | Same faces | Bytes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Angel City | 5,724 | 46.4% | 49.7% | 96.3% | 9.0% | 0 |
+| Colony | 651 | 58.4% | 59.8% | 97.7% | 33.3% | 0 |
+| Fracture | 4,225 | 53.8% | 57.6% | 98.8% | 25.3% | 0 |
+| Lagoon | 2,295 | 61.5% | 64.4% | 98.0% | 20.7% | 0 |
+| Relic | 3,319 | 45.0% | 50.5% | 98.1% | 15.2% | 0 |
+| **All** | **16,214** | **50.7%** | **54.4%** | **97.6%** | **17.2%** | **0** |
+
+Where the face sets agree, 77.6% of pierce indices agree (62,634 of 80,694);
+the virtual counts agree for 4.7% of hulls. Only 40 regenerated hulls (0.25%)
+leave a vertex more than 0.5 units outside (simplified to fit the limits,
+worst 47.8 units in one Fracture header), against 298 retail hulls. Rebuilt
+whole lumps (contents from the collision grid) pass `check_blob` with no
+problems and are within 3% of retail size (Angel City 1,457,525 bytes against
+1,414,872). Run `physics_triangles.py --compare MAP.bsp` to reproduce; the
+in-game effect of a regenerated lump is untested.
+
 ## Still missing
 
-- **PHYSICS_TRIANGLES (1.4 MB in Angel City):** precomputed virtual-mesh hulls,
-  one per TRICOLL header. remap leaves it empty, so the engine builds them at
-  load. Layout, decoded 7 November 2026 and consistent for all 5,724 Angel City,
-  3,320 Relic and 651 Colony blobs (`.local/respawn/phys_tri_probe.py`):
-
-  | Bytes | Contents |
-  | --- | --- |
-  | 2 + 2n | `u16` count (= TRICOLL headers), then `u16` size per header; 0, `0xfffe`, `0xffff` mean none |
-  | 4 | hull count (always 1 here) |
-  | 4 | byte counts: faces F, a count no larger than F, edges E (= 1.5 F), a fourth count |
-  | 4F | per face: one byte, then three edge indices |
-  | 1 | one byte |
-  | 2E | per edge: two vertex indices, local to the header's vertices |
-
-  The face bytes fit equally as one leading byte, then three edge indices plus one
-  byte per face; the data does not decide between the two. Blob size is always
-  9 + 4F + 2E. Edges chained in face order form each face's
-  triangle, counter-clockwise seen from outside for 94-99% of faces (the rest are
-  flat or slivers). For example header 0 (14 vertices, 12 triangles) has 18
-  faces, 27 edges and 11 hull vertices; a flat quad is a 4-face, 6-edge double-
-  sided sliver. Still unknown: the second and fourth counts, the per-face byte
-  and the single byte (neither edge-direction bits nor a source-triangle index).
-  As the engine builds hulls itself, writing this lump would only save load time.
+- **PHYSICS_TRIANGLES:** decoded and validated (above), but remap writes it
+  empty. `tools/respawn/physics_triangles.py` can generate an equivalent lump;
+  a remap writer is not implemented yet.
 - **Patch collision coverage:** correctly facing flat-entity rays and isolated
   VPhysics drops pass in TFO. The new six-surface sweep fixture covers 156
   front-facing world ray/hull cases. Exact convex merging fixes the reproduced

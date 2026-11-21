@@ -663,8 +663,9 @@ in-game effect of a regenerated lump is untested.
 ## Still missing
 
 - **PHYSICS_TRIANGLES:** decoded and validated (above), but remap writes it
-  empty. `tools/respawn/physics_triangles.py` can generate an equivalent lump;
-  a remap writer is not implemented yet.
+  empty. `tools/respawn/physics_triangles.py --write OUTPUT.bsp INPUT.bsp`
+  can copy a v29 BSP and append an equivalent lump without changing the native
+  remap default. The native remap writer is not implemented yet.
 - **Patch collision coverage:** correctly facing flat-entity rays and isolated
   VPhysics drops pass in TFO. The new six-surface sweep fixture covers 156
   front-facing world ray/hull cases. Exact convex merging fixes the reproduced

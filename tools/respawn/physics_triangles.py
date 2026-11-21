@@ -494,7 +494,12 @@ def build(headers):
     A solid header whose triangles are degenerate gets a null entry."""
     blobs = []
     for vertices, triangles, contents in headers:
-        if not contents & SOLID_MASK:
+        if isinstance(contents, (set, frozenset)):
+            merged = 0
+            for value in contents:
+                merged |= value
+            contents = merged
+        if not isinstance(contents, int) or not contents & SOLID_MASK:
             blobs.append(None)
             continue
         blobs.append(build_blob(vertices, triangles))
@@ -610,13 +615,49 @@ def compare(path):
     return stats
 
 
+def write_lump(source, output):
+    """Write an equivalent PHYSICS_TRIANGLES lump to a new v29 BSP."""
+    headers, records, _ = load_headers(source)
+    if output.exists():
+        raise FileExistsError(output)
+    if source.stat().st_size > 256 * 1024 * 1024:
+        raise FormatError("PHYSICS_TRIANGLES writer size limit exceeded")
+    inv = __import__("inspect_bsp", fromlist=["inspect"]).inspect(source)
+    if inv["issues"]:
+        raise FormatError("PHYSICS_TRIANGLES writer requires a clean BSP inventory")
+    if any(entry["external_files"] for entry in inv["lumps"]):
+        raise FormatError("PHYSICS_TRIANGLES writer refuses sidecar-bearing BSPs")
+    contents = header_contents(records)
+    lump = build([(vertices, triangles, contents.get(i, set())) for i, (vertices, triangles) in enumerate(headers)])
+    data = bytearray(source.read_bytes())
+    data.extend(bytes((-len(data)) % 4))
+    offset = len(data)
+    data.extend(lump)
+    struct.pack_into("<4I", data, 16 + 0x46 * 16, offset, len(lump), 0, 0)
+    with output.open("xb") as stream:
+        stream.write(data)
+    return len(lump)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("bsp", type=Path, nargs="+")
     parser.add_argument("--compare", action="store_true", help="regenerate hulls and compare fields")
+    parser.add_argument("--write", type=Path, metavar="OUTPUT",
+                        help="write a regenerated lump to a new v29 BSP")
     args = parser.parse_args(argv)
     failed = False
     for path in args.bsp:
+        if args.write:
+            if len(args.bsp) != 1:
+                parser.error("--write requires exactly one BSP")
+            try:
+                print(json.dumps({"path": str(path), "output": str(args.write),
+                                  "bytes": write_lump(path, args.write)}))
+            except (FormatError, FileExistsError, ValueError) as error:
+                print(json.dumps({"path": str(path), "error": str(error)}))
+                failed = True
+            continue
         if args.compare:
             report = compare(path)
         else:

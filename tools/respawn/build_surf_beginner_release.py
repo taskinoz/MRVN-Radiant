@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build the Surf Beginner Northstar mod and Thunderstore release package."""
+"""Build the Surf Beginner Northstar mod and release packages.
+
+The player ZIP is the GitHub release asset consumed by the custom-maps
+Thunderstore workflow: it contains only ``MRVN.SourceSurfBeginner/mod.json``,
+its README and the ``mod/``, ``paks/`` and ``vpk/`` trees. The Thunderstore
+folder and ZIP are for manual uploads and carry the same runtime bytes.
+"""
 
 import argparse
 import json
@@ -16,6 +22,12 @@ from build_minecraft_ports import build_loadscreen
 MOD = "MRVN.SourceSurfBeginner"
 LEVEL = "mp_source_surf_beginner"
 VERSION = "0.2.0"
+THUNDER_NAME = "Surf_Beginner"
+THUNDER_NAMESPACE = "taskinoz"
+
+# Top-level entries the custom-maps Thunderstore packager accepts.
+RUNTIME_ROOTS = ("mod", "paks", "vpk", "source", "keyvalues")
+RUNTIME_FILES = ("mod.json", "README.md", "COPYING", "materials.json", "verification.json")
 
 TRANSLATIONS = {
     "english": ("Surf Beginner", "A seven-stage beginner surf course. Play Surf mode for timed runs through all seven stages."),
@@ -57,35 +69,73 @@ def font(size, bold=False):
     return ImageFont.load_default()
 
 
-def draw_assets(source_shot, release):
-    release.mkdir(parents=True, exist_ok=True)
-    shot = Image.open(source_shot).convert("RGB")
-    loading = ImageOpsFit(shot, (1920, 1080))
-    draw = ImageDraw.Draw(loading)
-    draw.rectangle((0, 820, 1920, 1080), fill=(18, 20, 24, 210))
-    draw.text((100, 865), "SURF BEGINNER", font=font(78, True), fill=(255, 255, 255))
-    draw.text((104, 960), "Seven stages. One run.", font=font(38), fill=(210, 214, 220))
-    loading.save(release / "loading-screen.png")
-
-    icon = ImageOpsFit(shot, (256, 256))
-    draw = ImageDraw.Draw(icon)
-    draw.rectangle((0, 176, 256, 256), fill=(18, 20, 24, 225))
-    draw.text((128, 214), "SURF", anchor="mm", font=font(38, True), fill=(255, 255, 255))
-    icon.save(release / "icon.png")
-    return loading
-
-
 def ImageOpsFit(image, size):
     # Local crop/scale equivalent for a stable 16:9 or square promotional image.
     from PIL import ImageOps
     return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS)
 
 
-def zip_directory(folder, archive):
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
-        for path in sorted(folder.rglob("*")):
-            if path.is_file() and path.resolve() != archive.resolve():
-                output.write(path, path.relative_to(folder).as_posix())
+def draw_assets(source_shot, promo):
+    """Write promotional images outside the mod tree; only the loadscreen RPak ships."""
+    promo.mkdir(parents=True, exist_ok=True)
+    shot = Image.open(source_shot).convert("RGB")
+    loading = ImageOpsFit(shot, (1920, 1080))
+    draw = ImageDraw.Draw(loading)
+    draw.rectangle((0, 820, 1920, 1080), fill=(18, 20, 24, 210))
+    draw.text((100, 865), "SURF BEGINNER", font=font(78, True), fill=(255, 255, 255))
+    draw.text((104, 960), "Seven stages. One run.", font=font(38), fill=(210, 214, 220))
+    loading.save(promo / "loading-screen.png")
+
+    icon = ImageOpsFit(shot, (256, 256))
+    draw = ImageDraw.Draw(icon)
+    draw.rectangle((0, 176, 256, 256), fill=(18, 20, 24, 225))
+    draw.text((128, 214), "SURF", anchor="mm", font=font(38, True), fill=(255, 255, 255))
+    icon.save(promo / "icon.png")
+
+
+def runtime_members(mod):
+    """Relative paths that are safe to ship, mirroring tools/thunderstore_ci.py."""
+    for path in sorted(mod.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(mod)
+        if len(relative.parts) == 1:
+            if relative.name in RUNTIME_FILES or relative.name.startswith("LICENSE"):
+                yield relative
+        elif relative.parts[0] in RUNTIME_ROOTS:
+            yield relative
+
+
+def copy_runtime(mod, destination):
+    for relative in runtime_members(mod):
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(mod / relative, target)
+
+
+def zip_runtime(mod, archive, prefix):
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as output:
+        for relative in runtime_members(mod):
+            output.write(mod / relative, f"{prefix}/{relative.as_posix()}")
+
+
+def validate(mod):
+    """Fail the build if the loading screen or a translation would be missing."""
+    info = json.loads((mod / "mod.json").read_text(encoding="utf-8-sig"))
+    if info.get("Localisation") != [f"resource/{LEVEL}_%language%.txt"]:
+        raise ValueError("mod.json does not declare the language-templated localisation")
+    translations = sorted((mod / "mod" / "resource").glob(f"{LEVEL}_*.txt"))
+    if len(translations) != len(TRANSLATIONS):
+        raise ValueError(f"expected {len(TRANSLATIONS)} translations, found {len(translations)}")
+    for path in translations:
+        text = path.read_bytes().decode("utf-16")
+        if f'"{LEVEL}"' not in text or '"Language"' not in text:
+            raise ValueError(f"translation is incomplete: {path.name}")
+    if not (mod / "paks" / f"{LEVEL}_loadscreen.rpak").is_file():
+        raise ValueError("missing custom loadscreen RPak")
+    aliases = json.loads((mod / "paks" / "rpak.json").read_text())["Aliases"]
+    if f"{LEVEL}_loadscreen.rpak" in aliases:
+        raise ValueError("rpak.json still aliases the Coliseum loading screen")
 
 
 def main():
@@ -113,21 +163,21 @@ def main():
         "Version": VERSION,
         "Description": "Surf Beginner - a seven-stage beginner surf course",
     })
-    mod_json["Localisation"] = ["resource/mp_source_surf_beginner_%language%.txt"]
+    mod_json["Localisation"] = [f"resource/{LEVEL}_%language%.txt"]
     (mod / "mod.json").write_text(json.dumps(mod_json, indent=2) + "\n")
 
     resource = mod / "mod" / "resource"
     resource.mkdir(parents=True, exist_ok=True)
-    for old in resource.glob("mp_source_surf_beginner_*.txt"):
+    for old in resource.glob(f"{LEVEL}_*.txt"):
         old.unlink()
     for language, (name, description) in TRANSLATIONS.items():
         utf16_text(resource / f"{LEVEL}_{language}.txt", language, name, description)
 
-    draw_assets(args.shot, mod)
+    promo = args.output.parent / f"{args.output.name}-promo"
+    draw_assets(args.shot, promo)
 
-    loading = mod / "loading-screen.png"
     build_args = SimpleNamespace(
-        loadscreen=loading,
+        loadscreen=promo / "loading-screen.png",
         loadscreen_template=args.loadscreen_template,
         repak=args.repak,
     )
@@ -137,12 +187,22 @@ def main():
     (mod / "paks" / "rpak.json").write_text(json.dumps({
         "Aliases": {f"{LEVEL}.rpak": "mp_coliseum.rpak"}
     }, indent=2) + "\n")
+    for build_only in ("loadscreen-assets", "pak-build", "build-loadscreen.json",
+                       "repak-loadscreen.log"):
+        path = mod / build_only
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
 
     readme = mod / "README.md"
     readme.write_text(
         "# Surf Beginner\n\n"
         "A Northstar port of the Counter-Strike: Source map `surf_beginner`, "
         "with seven stage checkpoints, timed runs, teleports, and reset controls.\n\n"
+        "The map has its own loading screen and translated lobby names and "
+        "descriptions for English, French, German, Italian, Spanish, Russian, "
+        "Japanese, Polish, Portuguese, Traditional Chinese and Simplified Chinese.\n\n"
         "## Install\n\n"
         "Requires the Surf mode mod version 0.2.0 or later.\n"
         "Extract `MRVN.SourceSurfBeginner` into your Northstar `mods` folder.\n\n"
@@ -153,28 +213,38 @@ def main():
         "```\n\n"
         "Use the boost/reset key to return to the stage 1 start platform.\n"
     )
+    validate(mod)
+
+    player_zip = args.output.parent / f"{MOD}-{VERSION}.zip"
+    zip_runtime(mod, player_zip, mod.name)
 
     thunder = args.output.parent / f"{args.output.name}-thunderstore"
     if thunder.exists():
         raise ValueError(f"Thunderstore output already exists: {thunder}")
     thunder.mkdir()
-    shutil.copyfile(mod / "icon.png", thunder / "icon.png")
+    shutil.copyfile(promo / "icon.png", thunder / "icon.png")
     shutil.copyfile(readme, thunder / "README.md")
-    shutil.copytree(mod, thunder / mod.name)
+    copy_runtime(mod, thunder / "mods" / f"{THUNDER_NAMESPACE}.{MOD}")
     manifest = {
-        "name": "SourceSurfBeginner",
+        "name": THUNDER_NAME,
         "version_number": VERSION,
-        "website_url": "https://github.com/taskinoz/MRVN-Radiant",
-        "description": "Seven-stage Surf Beginner map port for Titanfall 2 Northstar.",
-        "dependencies": ["Northstar-Northstar@1.35.0"],
+        "website_url": "https://github.com/taskinoz/Titanfall-2-Custom-Maps",
+        "description": "Seven-stage beginner surf map for Titanfall 2, with its own loading screen and 11 localisations. Requires Surf mode.",
+        "dependencies": ["taskinoz-Surf-0.2.0"],
     }
     (thunder / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    zip_directory(thunder, thunder / f"{MOD}-{VERSION}.zip")
+    thunder_zip = thunder / f"{THUNDER_NAMESPACE}-{THUNDER_NAME}-{VERSION}.zip"
+    with zipfile.ZipFile(thunder_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as output:
+        for path in sorted(thunder.rglob("*")):
+            if path.is_file() and path != thunder_zip:
+                output.write(path, path.relative_to(thunder).as_posix())
 
     print(json.dumps({
         "mod": str(mod),
+        "promo": str(promo),
+        "player_zip": str(player_zip),
         "thunderstore": str(thunder),
-        "mod_zip": str(thunder / f"{MOD}-{VERSION}.zip"),
+        "thunderstore_zip": str(thunder_zip),
     }, indent=2))
 
 

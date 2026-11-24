@@ -62,6 +62,7 @@ commands, environment and limits of the resulting evidence.
 | `tricoll.py` | Triangle collision decoding and OBJ export |
 | `rpak.py`, `rpak_apex.py` | TF2 v7 and Apex v8 RPak readers |
 | `lighting.py` | Light and lightmap inspection, authored lights |
+| `analyze_rtl.py` | Decodes RTL light slots per texel and tests them against lights and ray casts; summarises WORLD_LIGHTS fields |
 | `decompile_bsp.py` | Recovers a TF2 scene as an editable map ([RESPAWN_DECOMPILE.md](../../docs/respawn/RESPAWN_DECOMPILE.md)) |
 | `recover_collision_map.py` | Recovers collision brushes as a Radiant map |
 | `extract_maps.py` | Extracts sample maps through tf2vpk |
@@ -74,9 +75,10 @@ commands, environment and limits of the resulting evidence.
 | --- | --- |
 | `build_tf1_navigation.py` | Owned native AIN export and CRC packaging; requires ARES and pinned runtime ([guide](../../docs/respawn/RESPAWN_TF1_NAVIGATION.md)) |
 | `tf1_navigation_crc.py` | Scoped v29 map/entity CRC and exclusive graph-copy adjustment; route acceptance remains separate |
-| `compiler_regression.py` | Compiles the regression set with a given `remap` and compares |
+| `compiler_regression.py` | Compiles the regression set with a given `remap` and compares, including the TF2 one-light-class-per-room world-light/flag fixture, paired opaque/alpha shadow-mesh emission, and two-environment shadow/probe isolation |
 | `tfo_harness.py` | Loads a compiled TF1 map in Titanfall Online and runs traces, views and physics drops ([RESPAWN_TF1_LUMPS.md](../../docs/respawn/RESPAWN_TF1_LUMPS.md)) |
 | `r5_harness.py`, `r5_harnessctl.py`, `r5_harness_smoke.py` | Local R5Reloaded map harness ([RESPAWN_R5_HARNESS.md](../../docs/respawn/RESPAWN_R5_HARNESS.md)) |
+| `stage_r5_map.py`, `cast_to_obj.py`, `apex_native_regression.py` | Package/install compiled Apex maps for R5Reloaded, make prop editor copies from RSX Cast exports, and run the native S3 fixture checks ([RESPAWN_APEX_S3.md](../../docs/respawn/RESPAWN_APEX_S3.md)) |
 | `test_*.py` | Unit tests: `python -m unittest discover -s tools/respawn -p "test_*.py"` |
 | `CMakeLists.txt`, `*_tests.cpp` | C++ tests for the BSP reader, encodings, lightmap packing, bake and CSG; `relight_bridge.cpp` feeds `repair_tf1_port.py` into the native baker |
 
@@ -163,7 +165,10 @@ sidecars separately. Neither command extracts or bundles retail assets.
 partitions with `entity_text.py`. Duplicate output keys survive parsing. The
 default partition-table sidecar takes precedence; invalid syntax, unsafe names,
 case aliases and missing/linked/oversized files fail. Entity counts describe
-syntax coverage, not spawn or objective correctness.
+syntax coverage, not spawn or objective correctness. For v29 it also checks the
+sprp v12 static props, the stored-zip PAKFILE and realtime-light texel slots
+(retail facts in `docs/respawn/RESPAWN_TF1_LUMPS.md`). Retail differences the
+engine tolerates go to the report's `warnings` and do not fail validation.
 
 `prepare_tf1_triggers.py --remap PATH --output NEW_DIR` compiles an original
 floor, pilot spawns and axis-aligned/rotated trigger brushes, then writes shared

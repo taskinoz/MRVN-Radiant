@@ -119,6 +119,8 @@ def menu_rig(env_text=None):
 MOD = "MRVN.QuakeE1M1Test"
 MATERIAL = "world/concrete/concrete_plates_plain_wet_bm"
 WALL_MATERIAL = "world/boomtown/boomtown_wall_gapconcrete_01"
+WATER_MATERIAL = "world/water/water_mp_angelcity_cheap"
+SLIME_MATERIAL = "world/water/water_floating_village_beneath"
 
 
 def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None, shell=None):
@@ -150,10 +152,15 @@ def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None, 
                 entity_brushes.append(("\n".join(current + ["}"]), liquid))
             elif depth == 1:
                 classname = keys.get("classname", "")
-                # Only static wall geometry is safe to flatten into worldspawn.
+                # Preserve original static/structural geometry while flattening it
+                # into worldspawn. Quake-only doors/platforms/buttons are converted
+                # to closed static geometry; their animation and puzzle state are
+                # intentionally not simulated.
                 for brush, is_liquid in entity_brushes:
-                    if classname in ("worldspawn", "func_wall") and not is_liquid:
-                        brushes.append(brush)
+                    if classname in ("worldspawn", "func_wall") or (classname.startswith("func_") and
+                                                                    classname not in ("func_illusionary",)):
+                        if not is_liquid or classname == "worldspawn":
+                            brushes.append(brush)
                     else:
                         reason = "liquid" if is_liquid else classname
                         discarded[reason] = discarded.get(reason, 0) + 1
@@ -181,7 +188,13 @@ def adapt_map(text, stats=None, materials=None, sun=False, menu=None, sky=None, 
             a = [points[0][i] - points[1][i] for i in range(3)]
             b = [points[2][i] - points[1][i] for i in range(3)]
             normal_z = a[0] * b[1] - a[1] * b[0]
-            if materials is not None:
+            if liquid:
+                token = match[2].lower()
+                if token.startswith("*slime"):
+                    material = SLIME_MATERIAL
+                else:
+                    material = WATER_MATERIAL
+            elif materials is not None:
                 material = (materials.get(match[2]) or {}).get("shader") or WALL_MATERIAL
             else:
                 material = MATERIAL if normal_z > 0 else WALL_MATERIAL

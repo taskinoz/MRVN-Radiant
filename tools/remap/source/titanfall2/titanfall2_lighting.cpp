@@ -41,14 +41,17 @@ using Respawn::Bake::V3;
 using Respawn::Bake::Light;
 using Respawn::Bake::LightType;
 
-// Retail world-light flags (Coliseum/Glitch): realtime with baked shadow masks,
-// realtime without shadows ("shadow" "0"), realtime with dynamic shadows
-// ("realtime_shadows" "2"), static ("realtime" "0") and suns. Only 28 and 24
-// appear in retail RTL pages.
-constexpr int32_t FlagRealtime = 28;
-constexpr int32_t FlagRealtimeNoShadow = 56;
-constexpr int32_t FlagRealtimeDynamicShadow = 104;
-constexpr int32_t FlagStatic = 4;
+// Retail TF2 world-light flags are bits set by entity keys (2,297 of 2,298
+// records across six maps, see analyze_rtl.py): 4 legacy falloff or 32
+// "_pbr_falloff" "1", +8 realtime, +16 when "realtime_shadows" is 0 or
+// absent, +64 for "realtime_shadows" "2". So 28/56 are the usual realtime
+// lights, 12/40 and 76/104 the shadowed variants, 4/32 baked, suns 24. The
+// "shadow" key does not change them; every realtime light gets RTL slots.
+constexpr int32_t FlagLegacyFalloff = 4;
+constexpr int32_t FlagPbrFalloff = 32;
+constexpr int32_t FlagRealtimeBit = 8;
+constexpr int32_t FlagNoRealtimeShadows = 16;
+constexpr int32_t FlagDynamicShadows = 64;
 constexpr int32_t FlagSun = 24;
 // Lights with "_pbr_falloff" "1" store intensity x100000 (Coliseum spotlights).
 constexpr double PbrIntensityScale = 100000.0;
@@ -548,8 +551,7 @@ void Titanfall2::CollectLight(const entity_t &e) {
             light.intensity = QuakeColour(e, quakeBrightness);
         }
         pending.record = BaseRecord(light, spot ? 2 : 1);
-        if (HasKey(e, "_pbr_falloff") && e.intForKey("_pbr_falloff") == 1)
-            pending.record.intensity = pending.record.intensity * static_cast<float>(PbrIntensityScale);
+        const bool pbr = HasKey(e, "_pbr_falloff") && e.intForKey("_pbr_falloff") == 1;
         SetFalloff(e, light, pending.record, quakeBrightness);
         if (HasKey(e, "_source_attenuation")) {
             if (light.realtime) throw std::invalid_argument("Source attenuation requires a baked light");
@@ -560,16 +562,12 @@ void Titanfall2::CollectLight(const entity_t &e) {
             light.sourceAttenuation = true;
             light.sourceCoefficients = {c, l, q};
         }
-        if (!light.realtime) {
-            pending.record.flags = FlagStatic;
-        } else if (HasKey(e, "shadow") && e.intForKey("shadow") == 0) {
-            pending.record.flags = FlagRealtimeNoShadow;
-            light.shadowMask = false;
-        } else if (HasKey(e, "realtime_shadows") && e.intForKey("realtime_shadows") == 2) {
-            pending.record.flags = FlagRealtimeDynamicShadow;
-            light.shadowMask = false;
-        } else {
-            pending.record.flags = FlagRealtime;
+        pending.record.flags = pbr ? FlagPbrFalloff : FlagLegacyFalloff;
+        if (light.realtime) {
+            const int shadows = HasKey(e, "realtime_shadows") ? e.intForKey("realtime_shadows") : 0;
+            pending.record.flags |= FlagRealtimeBit;
+            if (shadows == 0) pending.record.flags |= FlagNoRealtimeShadows;
+            if (shadows == 2) pending.record.flags |= FlagDynamicShadows;
         }
 
         if (spot) {
@@ -613,7 +611,8 @@ void Titanfall2::EmitLighting(const entity_t &world) {
             if (t == LightType::Sun) return 1;
             if (!tf1) return t == LightType::Spot ? 2 : 3;
             if (!p.light.realtime) return t == LightType::Spot ? 5 : 6;
-            if (t == LightType::Spot) return p.light.shadowMask ? 3 : 2;
+            // Shadow-mask spots precede unshadowed spots, as in retail TF1.
+            if (t == LightType::Spot) return (p.record.flags & FlagNoRealtimeShadows) ? 3 : 2;
             return 4;
         };
         return rank(a) < rank(b);
@@ -627,6 +626,9 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         if (pending.light.type == LightType::Point || pending.light.type == LightType::Spot) {
             pending.light.intensity = pending.light.intensity * lightScale;
             pending.record.intensity = Vector3(pending.light.intensity.x, pending.light.intensity.y, pending.light.intensity.z);
+            // PBR-falloff lights store intensity x100000 (Coliseum spotlights).
+            if (pending.record.flags & FlagPbrFalloff)
+                pending.record.intensity = pending.record.intensity * static_cast<float>(PbrIntensityScale);
         }
         if (pending.light.type != LightType::Ambient)
             pending.light.hardwareIndex = hardware++;
@@ -634,6 +636,13 @@ void Titanfall2::EmitLighting(const entity_t &world) {
         Titanfall2::Bsp::bakeLights.push_back(pending.light);
         bakeLightEnvironments.push_back(pending.environment);
     }
+    // LEVEL_INFO's sun vector is the last sun record's normal (five TF1 and
+    // eight TF2 retail maps). Without a sun the placeholder stays.
+    for (auto light = Titanfall2::Bsp::worldLights.rbegin(); light != Titanfall2::Bsp::worldLights.rend(); ++light)
+        if (light->type == 3) {
+            if (!Titanfall::Bsp::levelInfo.empty()) Titanfall::Bsp::levelInfo.back().unk2 = light->normal;
+            break;
+        }
 
     // Opaque, non-sky world brushes cast shadows; sky brushes let sun and sky rays out.
     std::vector<Respawn::Bake::Brush> brushes;
@@ -735,6 +744,7 @@ void Titanfall2::EmitLighting(const entity_t &world) {
     if (tf1) {
         options.sunSlots = false;
         options.unshadowedSlots = true;
+        options.sunOcclusionAlpha = true;
     }
     options.luxelSize = Shared::luxelSize;
     // Authored outdoor test yards can opt out of sampled sky occlusion while

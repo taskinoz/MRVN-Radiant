@@ -12,6 +12,11 @@ external lump files), providing a useful retail reference for compiler output.
 Colony loaded and completed an empty harness run with both Titanfall1 content
 mods enabled; that run did not check collision or visual appearance.
 
+The one-hash integration compiler
+(`b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110`) passes all
+37 v29 compiler regressions, but the R1Delta/TFO native results recorded below
+were produced by earlier builds and have not been replayed under that exact hash.
+
 ## Testing in Titanfall Online
 
 ```powershell
@@ -400,11 +405,38 @@ rejects negative zeros in any VPhysics solid. Controls that ruled out other
 causes: world contents set to retail's 33570819 (no change), the TF1 content
 mods enabled (no change), and the floor moved down 4 or 32 units (clean rests).
 
-**Still open:** crates dropped within about 50 units of the world origin still
-wedge into the z=0 floor (3 of 3), while drops 160 units away and on the patch
-rest correctly. Moving the world solid's mass centre from the origin to its
-volume centroid, as retail stores it, did not fix this and made patch drops
-fail, so it was reverted. Evidence: `.local/respawn/phase2-crate-*-20261120/`.
+**Still open: bad sessions, not the origin.** The earlier "near the origin"
+failure is a property of the TFO session, not of the drop position. Repeating
+one fixture's sequential crate drops (at (0,0), (-5,-45), (300,300) and (0,0)
+again, from z=64) in separate launches:
+
+- Every launch is all good or all bad. In a good one, every crate lands flat and
+  rests at z=0.5. In a bad one, every crate sinks through the floor on first
+  contact (z -2 to -5 at t=0.6 s), is thrown around for about 3 seconds, and
+  stops in an impossible pose: tilted 20 to 58 degrees above the floor, or
+  2.3 units into it. A bad launch repeats exactly, to 1/32 unit.
+- The same BSP flips between launches (byte-identical lumps): the current
+  fixture went good, bad, good. A copy with the floor moved +512 in x and no
+  patch went bad, then good, so bad drops 420 units from the origin fail too.
+  The earlier origin failures were bad launches.
+- Splitting the floor into 96 separate 256-unit brushes did not help: 3 of 6
+  launches were bad.
+- Retail Angel City in 4 launches (32 drops) never let a crate through: the
+  lowest rested at z 130.5, on the floor. These crates were dropped together
+  and pile up (z about 130, 140 or 150), so a few rest leaning on another crate
+  (up to 36 degrees in one launch) and tilt alone does not judge them. Retail
+  launches also differ from each other: two matched to 1/32 unit, two did not.
+  So TFO has launch-dependent physics, but only the compiled floor lets crates
+  through in some launches.
+- The logs of good and bad launches show no difference. The compiled world
+  solid uses retail's conventions: mass centre at the origin and surface
+  deviation byte 227, as Angel City's first static solid has.
+
+Moving the world solid's mass centre to its volume centroid did not help and
+made patch drops fail, so it was reverted. Single launches cannot tell a fix
+from a good launch: test any change over at least six launches. Evidence:
+`.local/respawn/phase2-crate-*-20261120/`, including `phase2-crate-origin-20261120/`
+(fixtures `a` current, `b` moved floor, `c` split floor, `retail`).
 
 ## Portals
 

@@ -20,6 +20,10 @@ AI wrote:
 - changes to the `remap` compiler in `tools/remap/source/` (Titanfall 2
   lighting, collision, visibility, portals, meshes and BSP writing);
 - the Titanfall 2 entity definitions and prefabs in `install/gamepacks/`;
+- the port of the Apex Legends backend in `tools/remap/source/apex_legends/`
+  from [r5valkyrie/MRVN-Radiant](https://github.com/r5valkyrie/MRVN-Radiant),
+  and the changes made to it here (lightmap charts and page sizes, prop
+  editor copies); the backend itself is r5valkyrie's work;
 - build and CI wiring for the new tests (`CMakeLists.txt`, `.github/workflows/`).
 
 Everything else, including the Radiant editor, is the upstream human-written code.

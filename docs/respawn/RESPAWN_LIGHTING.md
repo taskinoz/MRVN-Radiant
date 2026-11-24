@@ -8,6 +8,22 @@ play in Northstar. Titanfall 1 shares the bake (see
 [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md)). Maps without lights, and the Apex
 writer, still emit placeholder records with atlas index `-1`.
 
+On 24 November 2026 a freshly rebuilt compiler (`remap.exe` SHA-256
+`6daec3b2309802af6ecfd17d2635a8a7e693b07d59325094c2dd1fcebf81ff94`) produced a
+roof/sun/realtime-light fixture and a separate one-light-class-per-room fixture
+with an unlit control. Both loaded, rendered, traced and shut down cleanly in the
+isolated Northstar harness profile; every supported local-light class rendered
+above the zero-ambient control. The captured evidence and its limits are recorded
+in [SOW_TF2.md](SOW_TF2.md); these are native load/render checks, not shader-level
+channel validation or brightness parity.
+
+The later one-hash integration build
+(`b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110`) passed the
+full compiler suite and replayed those three TF2 fixtures with identical lump
+payload hashes; only BSP header timestamps differ. That is compiler-output
+evidence, not a new native session. The native captures above remain bound to
+`6daec3b2…`.
+
 ## Attribution
 
 Binary schema facts were checked against **snake-biscuits/bsp_tool** commit
@@ -179,13 +195,15 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
 - **RTL pages (0x7A):** 63 int16 hardware-light indices, with unused entries
   zero-filled. Hardware indices count world lights excluding type 5 (ambient).
   Coliseum's slot 0 is hardware light 0, its gameplay sun.
-- **Which lights get slots:** in Coliseum and Glitch only suns (flags 24) and
-  point/spot lights with flags 28 appear in RTL pages. Lights with flag 4
-  (`"realtime" "0"` in the `.ent`) never do, so they are treated as baked-only.
-  Six more maps show that flags 56, 12, 40 and 76 also take slots; see
-  [TF2 light flags and RTL slots](#tf2-light-flags-and-rtl-slots-21-november-2026).
+- **Which lights get slots:** retail flags are key bit fields
+  (`analyze_rtl.py`, 2,297/2,298 records across six maps): 4 legacy falloff or
+  32 `_pbr_falloff 1`, +8 realtime, +16 when `realtime_shadows` is 0 or absent,
+  +64 when it is 2. Suns are 24. Every realtime local light can take an RTL
+  slot; baked lights (no +8) never do. `"shadow" "0"` no longer removes slots
+  or changes flags.
 - **RTL C:** nearly all zero in retail and written as zero here.
-- **SKY B:** alpha is 255 on every charted retail texel. The converter's shader
+- **SKY B:** alpha is 255 on every charted TF2 retail texel; TF1 instead stores
+  baked sun occlusion there (0 sunlit, 255 blocked or facing away). The converter's shader
   analysis identifies RGB as a world-space bent sky vector. The shader applies
   the ambient world light through it, so the vector's length carries sky
   visibility. Retail's mean length of about 0.78 is consistent with this.
@@ -199,7 +217,8 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   99.3%.
 - **Light probes:** the layout is given in `lightbake.h`. Retail values are
   directional ambient with W around 0.004–0.035 (p95 0.13), sun visibility as a
-  0–1 fraction, graded 0–255 weights, and small hardware light indices. The
+  0–1 fraction, weights that are 255 on 99.4% of references, and small hardware
+  light indices. About 70% of references are baked local lights. The
   parent record (0x04) is (first probe, probe count, first reference, reference
   count, tree nodes); Glitch's 16,183 + 32,085 probes match its probe lump size.
 
@@ -215,6 +234,9 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   giving `(cos p cos y, cos p sin y, sin p)`. Spot `stopdot`/`stopdot2` are the
   cosines of `_inner_cone`/`_cone`.
 - **Order:** ambient (5), suns (3), spots (2), points (1).
+- **LEVEL_INFO:** the writer copies the last sun record's normal into
+  `unk2`, matching the sampled retail maps; a map with no sun keeps the
+  placeholder.
 - **Brightness in practice:** Glitch's short-range realtime points use
   `_light "255 175 94 5100"`, which gives intensity 20 over 150 units. Even so,
   E1M1's 199 closely spaced Quake lights at a ×10 scale overexposed the whole map
@@ -223,8 +245,9 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
   October). A worldspawn `_lightscale` key multiplies every point and spot
   light. The earlier "flat" report came from the old 0.2.1 build, which had no
   baked lights.
-- **`_pbr_falloff 1`:** these lights store intensity ×100000. They are not
-  modelled; such lights are treated as `_pbr_falloff 0`.
+- **`_pbr_falloff 1`:** these lights store intensity ×100000. The writer emits
+  that scale and flag 32 (baked), 40, 56 or 104 as appropriate, after applying
+  `_lightscale` to the underlying intensity.
 
 ### What the compiler does
 
@@ -264,7 +287,8 @@ Implemented in `tools/remap/source/respawn/lightbake.h` (tested by
    surroundings with walkable probes; TF2 in Northstar looked alike with both.
    `tfo_harness.py` takes `"view_commands": ["thirdperson"]` for this. Each
    probe gets directional ambient, a bent sky vector, sun visibility from four
-   jittered rays, and up to four visible realtime lights. A KD tree with leaves
+   jittered rays, and up to four visible local lights (realtime or baked, at
+    weight 255 as in retail). A KD tree with leaves
    of at most 8 indexes them; the optional probe BSP accelerator (0x06/0x07) is
    left empty, since the converter found the engine falls back to the KD tree.
 7. Quake/Valve 220 brush faces (the editor's `quake3` brush type) now get their
@@ -282,73 +306,15 @@ How the menu stage is lit:
   and ambient plus nearby realtime lights.
 - **Coliseum's rig:** this mirrors retail Coliseum. Its stage probes see the menu
   sun and link several menu spotlights at weight 255.
-- **Light flags (21 November):** flags are now built from keys as retail
-  does (`analyze_rtl.py lights`): 4, or 32 for `_pbr_falloff 1`; +8 realtime;
-  +16 when `realtime_shadows` is 0 or absent; +64 for `realtime_shadows 2`.
-  Every realtime point/spot light takes RTL slots with a baked mask. The
-  `shadow` key no longer changes flags or removes slots; before, `shadow 0`
-  lights (56) and `realtime_shadows 2` lights (104) got no slots and so lit no
-  world surfaces. TF1 writes 6 baked, 30 realtime and 14 for
-  `realtime_shadows` 1 or 2 (before, `shadow 0` became 14).
-- **PBR lights:** `_pbr_falloff 1` records store intensity ×100000. The light
-  scale step used to overwrite this, leaving PBR spots at their raw intensity.
+- **Spotlight flags:** flags come from entity keys, not `"shadow"`: 4 legacy
+  falloff or 32 PBR, +8 realtime, +16 when `realtime_shadows` is 0 or absent,
+  +64 when it is 2. All realtime lights can take RTL slots and be linked from
+  probes; baked lights are probe-only.
+- **PBR lights:** `_pbr_falloff 1` records store intensity ×100000 after
+  `_lightscale`.
 - **Entity routing:** Titanfall 2 entities now go through `Titanfall2::EmitEntity`,
   which writes lights and environments to `_env.ent`, as retail does. Previously
   they all went into the BSP entity lump through the Titanfall 1 router.
-
-### TF2 light flags and RTL slots (21 November 2026)
-
-Measured with `tools/respawn/analyze_rtl.py` on Angel City, Colony02, Glitch,
-Homestead, LF Stacks and Relic02. `rtl` decodes the slots of 35% of the world
-meshes and ray-casts 1,500 (texel, light) pairs per flag group. `lights` lists
-the record fields per type and flags.
-
-- **Flags are bit fields set by entity keys** (exact for 2,297 of 2,298 matched
-  records):
-  - 4: legacy falloff, `_pbr_falloff 0`.
-  - 32: `_pbr_falloff 1`, with intensity ×100000.
-  - 8: `realtime 1`.
-  - 16: realtime with `realtime_shadows 0`, a baked shadow mask.
-  - 64: `realtime_shadows 2`.
-
-  So the values are 4 and 32 (static), 28 and 56 (realtime with a mask),
-  12 and 40 (`realtime_shadows 1`), and 76 and 104 (`realtime_shadows 2`). Suns
-  are 24. **`shadow 0` changes nothing:** such lights are 28 or 56 and are still
-  culled and masked like the others.
-- **Slots:** suns and every realtime point/spot light seen (flags 28, 56, 12, 40
-  and 76) appear in RTL pages, with masks. The two flag-104 spotlights per map
-  never reach a world texel; they light the menu stage, so whether 104 takes
-  slots is not established. A light whose ray to the texel is clear gets a slot
-  in 0.38–0.98 of cases (it competes with the sun for four slots and with the
-  63-light page cap). Blocked, 0.04–0.38. RTL B averages 124–248 on clear rays and
-  10–173 on blocked ones (sub-texel samples). Slots are not always packed: 77–94%
-  of texels fill them in order.
-- **Record tail** (the 12 bytes v1 lacks) is `(_emitter_radius, 0,
-  _specular_intensity)`. It matches 2,297 of 2,298 records.
-- **LEVEL_INFO sun** is the last type-3 light's normal, which is also shadow
-  environment 1's sun (8 of 8 maps). In Angel City and Coliseum that is the
-  menu sun.
-- **Probe light references include baked lights.** Baked lights (flags 4 and 32)
-  account for 72% of the used references in Angel City and 69% in Colony02.
-  Weights are 255 on 99.4% of them.
-
-What remap writes differs:
-
-1. **`shadow 0` → 56 and `realtime_shadows 2` → 104, with no slot**
-   (`shadowMask = false`). Retail 56 means a PBR light with a baked mask, and its
-   rs-2 lights (76) have slots. Lights compiled this way probably light no world
-   surface, as all-255 RTL did in TF1. That was not checked in game.
-2. **The PBR intensity scale is lost.** `CollectLight` multiplies the record by
-   100000, then `EmitLighting` overwrites `record.intensity` with
-   `light.intensity × _lightscale`. E1M1's `_pbr_falloff 1` menu spots come out
-   at 0.02–3.0, where retail stores 784–400000. Bit 32 is never set.
-3. **`realtime_shadows 1` has no flag:** it gets 28 instead of 12 or 40.
-4. **The tail is fixed** at (0,0,1) for spots and 0 for points; retail reads
-   the two keys.
-5. **LEVEL_INFO sun** is left at the placeholder (0.1, 0.8, -0.6).
-6. **Probes** only reference realtime lights, so baked lights never light
-   characters directly. Retail weights are almost always 255; remap's are
-   fractional, with 255 on 75%.
 
 ### Verification so far
 
@@ -359,6 +325,16 @@ What remap writes differs:
   sky ambient. Probe lumps are consistent, probes link to the nearby realtime
   light (never the static one), and probe sun visibility follows the roof.
   Compiled tangents follow the retail direction and handedness convention.
+- **TF2 alpha-shadow and environment-volume regressions**
+  (`compiler_regression.py`): an opaque caster and an alpha-tested caster emit
+  separate opaque/alpha shadow meshes while the compile-only sky shell stays
+  out of both streams. A two-environment fixture gives the stage and gameplay
+  disjoint local-light probe links and empty stage shadow-mesh ranges. Native
+  1.31.13 harness runs loaded both maps cleanly; the environment-volume run
+  showed a clear warm/cool player-colour split, while the alpha run's shadow
+  contrast stayed near the capture noise floor. See
+  `.local/respawn/tf2-alpha-shadow-20261124/native-run/native-evidence.json` and
+  `.local/respawn/tf2-env-volume-20261124/native-run/native-evidence.json`.
 - **Quake E1M1** (198 lights): one 1024² page and 8 RTL pages. Bake time is
   about 0.3 s. Mask averages are 224–236. Lit vs unlit agrees with the
   independent Python vertex reference on 82.6% of vertices; that reference used

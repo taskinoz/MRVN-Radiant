@@ -160,71 +160,84 @@
 #define R2_LUMP_SHADOW_MESHES                   0x7F
 
 // Apex Legends
-#define R5_LUMP_ENTITIES                        0x00
-#define R5_LUMP_PLANES                          0x01
-#define R5_LUMP_TEXTURE_DATA                    0x02
-#define R5_LUMP_VERTICES                        0x03
-#define R5_LUMP_LIGHTPROBE_PARENT_INFOS         0x04
-#define R5_LUMP_SHADOW_ENVIRONMENTS             0x05
-#define R5_LUMP_MODELS                          0x0E
-#define R5_LUMP_SURFACE_NAMES                   0x0F
-#define R5_LUMP_CONTENTS_MASKS                  0x10
-#define R5_LUMP_SURFACE_PROPERTIES              0x11
-#define R5_LUMP_BVH_NODES                       0x12
-#define R5_LUMP_BVH_LEAF_DATA                   0x13
-#define R5_LUMP_PACKED_VERTICES                 0x14
-#define R5_LUMP_ENTITY_PARTITIONS               0x18
-#define R5_LUMP_VERTEX_NORMALS                  0x1E
-#define R5_LUMP_GAME_LUMP                       0x23
-#define R5_LUMP_UNKNOWN_37                      0x25
-#define R5_LUMP_UNKNOWN_38                      0x26
-#define R5_LUMP_UNKNOWN_39                      0x27
-#define R5_LUMP_PAKFILE                         0x28
-#define R5_LUMP_CUBEMAPS                        0x2A
-#define R5_LUMP_UNKNOWN_43                      0x2B
-#define R5_LUMP_WORLD_LIGHTS                    0x36
-#define R5_LUMP_WORLD_LIGHT_PARENT_INFOS        0x37
-#define R5_LUMP_VERTEX_UNLIT                    0x47
-#define R5_LUMP_VERTEX_LIT_FLAT                 0x48
-#define R5_LUMP_VERTEX_LIT_BUMP                 0x49
-#define R5_LUMP_VERTEX_UNLIT_TS                 0x4A
-#define R5_LUMP_VERTEX_BLINN_PHONG              0x4B
-#define R5_LUMP_VERTEX_RESERVED_5               0x4C
-#define R5_LUMP_VERTEX_RESERVED_f               0x4D
-#define R5_LUMP_VERTEX_RESERVED_7               0x4E
-#define R5_LUMP_MESH_INDICES                    0x4F
-#define R5_LUMP_MESHES                          0x50
-#define R5_LUMP_MESH_BOUNDS                     0x51
-#define R5_LUMP_MATERIAL_SORT                   0x52
-#define R5_LUMP_LIGHTMAP_HEADERS                0x53
-#define R5_LUMP_TWEAK_LIGHTS                    0x55
-#define R5_LUMP_UNKNOWN_97                      0x61
-#define R5_LUMP_LIGHTMAP_DATA_SKY               0x62
-#define R5_LUMP_CSM_AABB_NODES                  0x63
-#define R5_LUMP_CSM_OBJ_REFERENCES              0x64
-#define R5_LUMP_LIGHTPROBES                     0x65
-#define R5_LUMP_STATIC_PROP_LIGHTPROBE_INDICES  0x66
-#define R5_LUMP_LIGHTPROBE_TREE                 0x67
-#define R5_LUMP_LIGHTPROBE_REFERENCES           0x68
-#define R5_LUMP_CELL_BSP_NODES                  0x6A
-#define R5_LUMP_CELLS                           0x6B
-#define R5_LUMP_PORTALS                         0x6C
-#define R5_LUMP_PORTAL_VERTICES                 0x6D
-#define R5_LUMP_PORTAL_EDGES                    0x6E
-#define R5_LUMP_PORTAL_VERTEX_EDGES             0x6F
-#define R5_LUMP_PORTAL_VERTEX_REFERENCES        0x70
-#define R5_LUMP_PORTAL_EDGE_REFERENCES          0x71
-#define R5_LUMP_PORTAL_INTERSECT_EDGE           0x72
-#define R5_LUMP_PORTAL_INTERSECT_VERTEX         0x73
-#define R5_LUMP_PORTAL_INTERSECT_HEADER         0x74
-#define R5_LUMP_OCCLUSION_MESH_VERTICES         0x75
-#define R5_LUMP_OCCLUSION_MESH_INDICES          0x76
-#define R5_LUMP_CELL_AABB_NODES                 0x77
-#define R5_LUMP_OBJ_REFERENCES                  0x78
-#define R5_LUMP_OBJ_REFERENCE_BOUNDS            0x79
-#define R5_LUMP_LIGHTMAP_DATA_RTL_PAGE          0x7A
-#define R5_LUMP_LEVEL_INFO                      0x7B
-#define R5_LUMP_SHADOW_MESH_OPAQUE_VERTICES     0x7C
-#define R5_LUMP_SHADOW_MESH_ALPHA_VERTICES      0x7D
-#define R5_LUMP_SHADOW_MESH_INDICES             0x7E
-#define R5_LUMP_SHADOW_MESHES                   0x7F
+#define R5_LUMP_ENTITIES						0x00
+#define R5_LUMP_PLANES							0x01
+#define R5_LUMP_TEXTURE_DATA					0x02
+#define R5_LUMP_VERTICES						0x03  // Render vertices AND collision vertices (float3)
+#define R5_LUMP_COLLISION_VERTICES				0x03  // Alias: BVH collision float vertices (when bvhFlags=0)
+#define R5_LUMP_LIGHTPROBE_PARENT_INFOS			0x04
+#define R5_LUMP_SHADOW_ENVIRONMENTS				0x05
+#define R5_LUMP_MODELS							0x0E
+#define R5_LUMP_SURFACE_NAMES					0x0F
+#define R5_LUMP_CONTENTS_MASKS					0x10
+#define R5_LUMP_SURFACE_PROPERTIES				0x11
+#define R5_LUMP_BVH_NODES						0x12
+#define R5_LUMP_BVH_LEAF_DATA					0x13
+#define R5_LUMP_PACKED_VERTICES					0x14
+// 0x15-0x16 — Engine never loads these. No loader calls, no references.
+// #define R5_LUMP_COLL_HEIGHTFIELDS			0x15  // Heightfield collision definitions
+// #define R5_LUMP_COLL_HEIGHTFIELD_SAMPLES		0x16  // Heightfield height samples
+#define R5_LUMP_ENTITY_PARTITIONS				0x18
+#define R5_LUMP_VERTEX_NORMALS					0x1E
+#define R5_LUMP_GAME_LUMP						0x23
+#define R5_LUMP_CELL_AABB_NUM_OBJ_REFS_TOTAL	0x25  // Cumulative obj ref count per cell AABB node
+#define R5_LUMP_CSM_AABB_NUM_OBJ_REFS_TOTAL		0x26  // Cumulative obj ref count per CSM AABB node
+#define R5_LUMP_CELL_AABB_FADEDISTS				0x27  // Fade distances for cell AABB objects
+// 0x28, 0x2B-0x30 — Engine never loads these. No loader calls, no references.
+// #define R5_LUMP_PAKFILE						0x28
+#define R5_LUMP_CUBEMAPS						0x2A
+// #define R5_LUMP_CUBEMAPS_AMBIENT_RCP		0x2B
+// #define R5_LUMP_WATER_BODIES				0x2C  // Water body definitions
+// #define R5_LUMP_WATER_NODES					0x2D  // Water body BVH nodes
+// #define R5_LUMP_WATER_BODY_VERTS			0x2E  // Water mesh vertices
+// #define R5_LUMP_WATER_BODY_INDICES			0x2F  // Water mesh indices
+// #define R5_LUMP_WATER_WAVE_DATA				0x30  // Water wave simulation data
+#define R5_LUMP_WORLD_LIGHTS					0x36
+#define R5_LUMP_WORLD_LIGHT_PARENT_INFOS		0x37
+#define R5_LUMP_VERTEX_UNLIT					0x47
+#define R5_LUMP_VERTEX_LIT_FLAT					0x48
+#define R5_LUMP_VERTEX_LIT_BUMP					0x49
+#define R5_LUMP_VERTEX_UNLIT_TS					0x4A
+#define R5_LUMP_VERTEX_BLINN_PHONG				0x4B
+#define R5_LUMP_VERTEX_RESERVED_5				0x4C
+#define R5_LUMP_VERTEX_RESERVED_f				0x4D
+#define R5_LUMP_VERTEX_RESERVED_7				0x4E
+#define R5_LUMP_MESH_INDICES					0x4F
+#define R5_LUMP_MESHES							0x50
+#define R5_LUMP_MESH_BOUNDS						0x51
+#define R5_LUMP_MATERIAL_SORT					0x52
+#define R5_LUMP_LIGHTMAP_HEADERS				0x53
+#define R5_LUMP_TWEAK_LIGHTS					0x55
+// 0x60-0x61 — Engine never loads these. No loader calls, no references.
+// #define R5_LUMP_SOUND_PROBES				0x60  // Sound probe data for audio propagation
+// #define R5_LUMP_LIGHTMAP_DATA_SKY_COMPRESSED	0x61  // Compressed sky lightmap data
+#define R5_LUMP_LIGHTMAP_DATA_SKY				0x62
+#define R5_LUMP_CSM_AABB_NODES					0x63
+#define R5_LUMP_CSM_OBJ_REFERENCES				0x64
+#define R5_LUMP_LIGHTPROBES						0x65
+#define R5_LUMP_STATIC_PROP_LIGHTPROBE_INDICES	0x66
+#define R5_LUMP_LIGHTPROBE_TREE					0x67
+#define R5_LUMP_LIGHTPROBE_REFERENCES			0x68
+#define R5_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS	0x69
+#define R5_LUMP_CELL_BSP_NODES					0x6A
+#define R5_LUMP_CELLS							0x6B
+#define R5_LUMP_PORTALS							0x6C
+#define R5_LUMP_PORTAL_VERTICES					0x6D
+#define R5_LUMP_PORTAL_EDGES					0x6E
+#define R5_LUMP_PORTAL_VERTEX_EDGES				0x6F
+#define R5_LUMP_PORTAL_VERTEX_REFERENCES		0x70
+#define R5_LUMP_PORTAL_EDGE_REFERENCES			0x71
+#define R5_LUMP_PORTAL_EDGE_INTERSECT_EDGE		0x72
+#define R5_LUMP_PORTAL_EDGE_INTERSECT_AT_VERTEX	0x73
+#define R5_LUMP_PORTAL_EDGE_INTERSECT_HEADER	0x74
+#define R5_LUMP_OCCLUSION_MESH_VERTICES			0x75
+#define R5_LUMP_OCCLUSION_MESH_INDICES			0x76
+#define R5_LUMP_CELL_AABB_NODES					0x77
+#define R5_LUMP_OBJ_REFERENCES					0x78
+#define R5_LUMP_OBJ_REFERENCE_BOUNDS			0x79
+#define R5_LUMP_LIGHTMAP_DATA_RTL_PAGE			0x7A
+#define R5_LUMP_LEVEL_INFO						0x7B
+#define R5_LUMP_SHADOW_MESH_OPAQUE_VERTICES		0x7C
+#define R5_LUMP_SHADOW_MESH_ALPHA_VERTICES		0x7D
+#define R5_LUMP_SHADOW_MESH_INDICES				0x7E
+#define R5_LUMP_SHADOW_MESHES					0x7F

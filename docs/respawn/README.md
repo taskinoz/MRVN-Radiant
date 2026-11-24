@@ -7,6 +7,9 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 ## Start here
 
+- [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md): 24 November 2026
+  scope-of-work index for completing TF1/TFO, TF2 and Apex compatibility. It
+  links the branch-integration and per-game task documents.
 - [RESPAWN_MAP_SUPPORT_AUDIT.md](RESPAWN_MAP_SUPPORT_AUDIT.md): 17 November 2026
   TF1/R1Delta, TFO and TF2 engine/game-file review, support matrix and measured limits.
 
@@ -19,6 +22,7 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 | Note | Covers |
 | --- | --- |
+| [RESPAWN_APEX_S3.md](RESPAWN_APEX_S3.md) | Apex S0–S3 compiler: r5valkyrie backend port, S3 native tests, season comparison, open work |
 | [RESPAWN_APEX_FORK_REVIEW.md](RESPAWN_APEX_FORK_REVIEW.md) | Pinned r5valkyrie fork review, initial Apex metadata fixes and season/schema limits |
 | [RESPAWN_TF2_LUMPS.md](RESPAWN_TF2_LUMPS.md) | Cubemaps, probe BSP, CSM objects, collision primitives and noded triangle collision |
 | [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md) | Titanfall 1 lighting, tangents, cubemaps, VPhysics, portals and testing in Titanfall Online |

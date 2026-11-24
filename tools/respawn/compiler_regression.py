@@ -450,6 +450,77 @@ LIT_FIXTURE = (
 )
 
 
+# Five sealed rooms, each 512 units wide and 1,024 units apart. Ambient is zero
+# and every floor is roofed, so the dark room is a native control and each lit
+# room isolates one world-light class.
+TF2_LIGHT_CLASS_ROOMS = {"dark": 0, "baked_point": 1024, "realtime_point": 2048,
+                         "spot": 3072, "pbr_spot": 4096}
+
+
+def _tf2_light_class_room(cx):
+    return "\n".join([
+        box((cx - 256, -256, -16), (cx + 256, 256, 0), "bump"),
+        box((cx - 256, -256, 256), (cx + 256, 256, 272), "bump"),
+        box((cx - 256, -256, 0), (cx - 192, 256, 256), "bump"),
+        box((cx + 192, -256, 0), (cx + 256, 256, 256), "bump"),
+        box((cx - 192, -256, 0), (cx + 192, -192, 256), "bump"),
+        box((cx - 192, 192, 0), (cx + 192, 256, 256), "bump"),
+    ])
+
+
+TF2_LIGHT_CLASS_FIXTURE = (
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
+    + "\n".join(_tf2_light_class_room(cx) for cx in TF2_LIGHT_CLASS_ROOMS.values()) + "\n}\n"
+    + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",
+             _light="255 255 255 50", _ambient="0 0 0 0")
+    + entity(classname="light", origin=f'{TF2_LIGHT_CLASS_ROOMS["baked_point"]} 0 96',
+             _light="255 255 255 255", _distance="256", realtime="0")
+    + entity(classname="light", origin=f'{TF2_LIGHT_CLASS_ROOMS["realtime_point"]} 0 96',
+             _light="255 255 255 255", _distance="256")
+    + entity(classname="light_spot", origin=f'{TF2_LIGHT_CLASS_ROOMS["spot"]} 0 200', pitch="-90",
+             angles="90 0 0", _light="255 255 255 400", _distance="400", _cone="45", _inner_cone="20")
+    + entity(classname="light_spot", origin=f'{TF2_LIGHT_CLASS_ROOMS["pbr_spot"]} 0 200', pitch="-90",
+             angles="90 0 0", _light="255 255 255 50", _distance="400", _cone="45", _inner_cone="20",
+             _pbr_falloff="1")
+)
+
+
+# Two sunlit boxes with matched geometry: one opaque, one alpha-tested. The
+# compile-only sky shell must not enter either shadow stream.
+TF2_ALPHA_SHADOW_FIXTURE = (
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
+    + box((-512, -512, -16), (512, 512, 0), "bump") + "\n"
+    + box((-32, -32, 256), (32, 32, 288), "bump") + "\n"
+    + box((992, -32, 256), (1056, 32, 288), "alpha_caster") + "\n"
+    + box((-512, -512, 768), (1536, 512, 800), "sky_shell") + "\n}\n"
+    + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",
+             _light="255 255 255 50", _ambient="0 0 0 0")
+)
+
+
+# Two open-top bays, 5,000 units apart. Environment 1 applies only inside its
+# trigger volume; its local light gives stage probes a distinct hardware link.
+TF2_ENV_VOLUME_FIXTURE = (
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
+    + box((-256, -256, -16), (256, 256, 0), "bump") + "\n"
+    + box((4744, -256, -16), (5256, 256, 0), "bump") + "\n"
+    + box((-512, -512, 768), (5504, 512, 800), "sky_shell") + "\n}\n"
+    + entity(classname="light_environment", origin="0 0 512", pitch="-60", angles="60 30 0",
+             _light="255 180 100 600", _ambient="220 90 40 120")
+    + entity(classname="light_environment", lightEnvironmentIndex="*1", origin="5000 0 512",
+             pitch="-50", angles="50 120 0", _light="100 180 255 600", _ambient="40 100 255 120")
+    + entity(classname="light_environment_volume", lightEnvironmentIndex="*1", origin="5000 0 0",
+             **{f"*trigger_brush_0_plane_{i}": f"{n} 1024" for i, n in enumerate(
+                 ("-1 0 0", "1 0 0", "0 -1 0", "0 1 0", "0 0 -1", "0 0 1"))})
+    + entity(classname="info_target_clientside", script_name="menu_scene_ref",
+             origin="5000 0 0", angles="0 -90 0")
+    + entity(classname="light", origin="0 -200 128", _light="255 100 50 300",
+             _distance="256", realtime="0")
+    + entity(classname="light", origin="5000 -200 128", _light="50 100 255 300",
+             _distance="256", realtime="0")
+)
+
+
 def tangent_checks(bsp, titanfall1=False):
     """Bump-lit tangents follow retail. TF2: unit, along +dP/du, bit 31 = mirrored,
     second word zero. TF1: plain tangent and bitangent normal indices, the
@@ -790,6 +861,88 @@ def lit_fixture_checks(bsp):
         raise RuntimeError("roof does not reduce sky ambient")
 
 
+def tf2_light_class_checks(bsp):
+    """Check the one-class-per-room fixture's world-light types and flags."""
+    with bsp.open("rb") as stream:
+        stream.seek(16 + 0x36 * 16)
+        offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+        stream.seek(offset)
+        lights = list(struct.iter_unpack("<12f3i7f3i3f", stream.read(length)))
+        stream.seek(16 + 0x7B * 16)
+        offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+        stream.seek(offset)
+        level = struct.unpack("<4I3f", stream.read(length))
+    found = [(light[13], light[22]) for light in lights]
+    expected = [(5, 0), (3, 24), (2, 28), (2, 56), (1, 4), (1, 28)]
+    if found != expected:
+        raise RuntimeError(f"light-class world lights: {found}, expected {expected}")
+    suns = [light for light in lights if light[13] == 3]
+    if not suns or any(abs(a - b) > 1e-5 for a, b in zip(level[4:7], suns[-1][6:9])):
+        raise RuntimeError("LEVEL_INFO sun vector must be the last sun normal")
+    return found
+
+
+def tf2_alpha_shadow_checks(bsp):
+    """Check opaque and alpha-tested world sun-shadow mesh emission."""
+    def lump(index):
+        with bsp.open("rb") as stream:
+            stream.seek(16 + index * 16)
+            offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+            stream.seek(offset)
+            return stream.read(length)
+    opaque_vertices = list(struct.iter_unpack("<3f", lump(0x7C)))
+    alpha_vertices = list(struct.iter_unpack("<5f", lump(0x7D)))
+    meshes = list(struct.iter_unpack("<IIhh", lump(0x7F)))
+    sorts = list(struct.iter_unpack("<4hi", lump(0x52)))
+    opaque = [m for m in meshes if m[2] == 1 and m[3] == -1]
+    alpha = [m for m in meshes if m[2] == 0 and 0 <= m[3] < len(sorts)]
+    if not opaque or not alpha:
+        raise RuntimeError(f"alpha-shadow mesh classes: {meshes}")
+    if not any(abs(v[2] - 288) < 0.01 for v in opaque_vertices):
+        raise RuntimeError("opaque caster missing from opaque shadow vertices")
+    if not any(abs(v[2] - 288) < 0.01 for v in alpha_vertices):
+        raise RuntimeError("alpha caster missing from alpha shadow vertices")
+    if any(v[2] >= 768 for v in opaque_vertices) or any(v[2] >= 768 for v in alpha_vertices):
+        raise RuntimeError("compile-only sky shell entered the shadow streams")
+    return {"opaque_meshes": len(opaque), "alpha_meshes": len(alpha),
+            "opaque_vertices": len(opaque_vertices), "alpha_vertices": len(alpha_vertices)}
+
+
+def tf2_env_volume_checks(bsp):
+    """Check that two light environments keep their local lights and probes apart."""
+    def lump(index):
+        with bsp.open("rb") as stream:
+            stream.seek(16 + index * 16)
+            offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+            stream.seek(offset)
+            return stream.read(length)
+    lights = list(struct.iter_unpack("<12f3i7f3i3f", lump(0x36)))
+    envs = list(struct.iter_unpack("<6i3f", lump(0x05)))
+    probes = list(struct.iter_unpack("<16h4B4hI", lump(0x65)))
+    refs = list(struct.iter_unpack("<3fIi", lump(0x68)))
+    found = [(light[13], light[22]) for light in lights]
+    expected = [(5, 0), (5, 0), (3, 24), (3, 24), (1, 4), (1, 4)]
+    if found != expected:
+        raise RuntimeError(f"environment-volume world lights: {found}, expected {expected}")
+    if len(envs) != 2 or envs[0][2] != 0 or envs[0][5] != envs[1][2]:
+        raise RuntimeError(f"environment-volume shadow mesh ranges: {envs}")
+
+    def probe_near(x, y, z):
+        ref = min(refs, key=lambda r: (r[0] - x) ** 2 + (r[1] - y) ** 2 + (r[2] - z) ** 2)
+        return probes[ref[3]]
+
+    stage = probe_near(5005, 0, 64)
+    gameplay = probe_near(5, 0, 64)
+    # Hardware indices: gameplay sun 0, stage sun 1, gameplay point 2, stage point 3.
+    if stage[15] == 0 or 3 not in stage[20:24] or 2 in stage[20:24]:
+        raise RuntimeError(f"stage probe lacks only environment-1 links: {stage}")
+    if gameplay[15] == 0 or 2 not in gameplay[20:24] or 3 in gameplay[20:24]:
+        raise RuntimeError(f"gameplay probe lacks only environment-0 links: {gameplay}")
+    return {"world_lights": found, "shadow_environments": envs,
+            "stage_probe_links": list(stage[20:24]),
+            "gameplay_probe_links": list(gameplay[20:24])}
+
+
 def physics_checks(bsp, inventory, brushes, model_index=0, z_bounds=None, brush_clients=True):
     """Check TF1 world/entity IVP ledges, outward triangles and watertight edges.
 
@@ -1000,8 +1153,11 @@ def apex_levelinfo_fixtures(folder, command, reports, game):
     """Original asset-free v47 metadata/reference controls across a 64-object boundary."""
     model_root = folder.parent / 'assets/models/compat'
     model_root.mkdir(parents=True, exist_ok=True)
+    # A flat triangle has no Y extent, so its world AABB fails MinMax::valid()
+    # and the prop is skipped by the visibility tree. Use a tetrahedron so the
+    # fixture exercises the real 3D prop namespace.
     (model_root / 'apex-prop.obj').write_text(
-        'v 0 0 0\nv 8 0 0\nv 0 0 4\nf 1 2 3\n', encoding='ascii')
+        'v 0 0 0\nv 8 0 0\nv 0 0 4\nv 0 2 0\nf 1 2 3\nf 1 3 4\n', encoding='ascii')
     for count in (1, 70):
         path = folder / f'level-info-{count}.map'
         world = '{\n"classname" "worldspawn"\n' + '\n'.join(
@@ -1509,6 +1665,40 @@ def main():
                 raise RuntimeError('High-sample sky lighting failed structural validation')
             lit_fixture_checks(sampled_path.with_suffix('.bsp'))
             reports.append({'game': game, 'fixture': 'lit-sky-samples', 'issues': []})
+            if game == "titanfall2":
+                class_path = folder / "light-classes.map"
+                class_path.write_text(TF2_LIGHT_CLASS_FIXTURE, encoding="utf-8")
+                with (folder / "light-classes.log").open("wb") as log:
+                    subprocess.run(command[:-1] + [str(class_path)], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                class_bsp = class_path.with_suffix(".bsp")
+                class_report = validate(class_bsp)
+                if class_report["issues"]:
+                    raise RuntimeError(f"light-class fixture: {class_report['issues']}")
+                tf2_light_class_checks(class_bsp)
+                reports.append({"game": game, "fixture": "light-classes", "issues": []})
+                alpha_path = folder / "tf2-alpha-shadow.map"
+                alpha_path.write_text(TF2_ALPHA_SHADOW_FIXTURE, encoding="utf-8")
+                with (folder / "tf2-alpha-shadow.log").open("wb") as log:
+                    subprocess.run(command[:-1] + [str(alpha_path)], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                alpha_bsp = alpha_path.with_suffix(".bsp")
+                alpha_report = validate(alpha_bsp)
+                if alpha_report["issues"]:
+                    raise RuntimeError(f"alpha-shadow fixture: {alpha_report['issues']}")
+                tf2_alpha_shadow_checks(alpha_bsp)
+                reports.append({"game": game, "fixture": "tf2-alpha-shadow", "issues": []})
+                env_path = folder / "tf2-env-volume.map"
+                env_path.write_text(TF2_ENV_VOLUME_FIXTURE, encoding="utf-8")
+                with (folder / "tf2-env-volume.log").open("wb") as log:
+                    subprocess.run(command[:-1] + [str(env_path)], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                env_bsp = env_path.with_suffix(".bsp")
+                env_report = validate(env_bsp)
+                if env_report["issues"]:
+                    raise RuntimeError(f"environment-volume fixture: {env_report['issues']}")
+                tf2_env_volume_checks(env_bsp)
+                reports.append({"game": game, "fixture": "tf2-env-volume", "issues": []})
             from decompile_bsp import decompile, rebuild, compile_scene
             project = folder / 'recovered-project'
             decompile(bsp, project)

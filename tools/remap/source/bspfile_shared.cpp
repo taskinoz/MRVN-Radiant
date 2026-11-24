@@ -172,7 +172,8 @@ void Shared::MakeMeshes(const entity_t &e) {
         for (const side_t &side : brush.sides) {
             // Skip bevels & check flags
             if (side.bevel
-             || side.shaderInfo->compileFlags & C_NODRAW) {
+             || side.shaderInfo->compileFlags & C_NODRAW
+             || (g_game->bspVersion == 47 && side.shaderInfo->compileFlags & C_SKY)) {
                 continue;
             }
 
@@ -200,6 +201,7 @@ void Shared::MakeMeshes(const entity_t &e) {
 
                 Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
                 mesh.shaderInfo = side.shaderInfo;
+                mesh.noCollision = brush.noCollision;
                 Shared::Island_t  island;
 
                 Vector3 normal = side.plane.normal();
@@ -271,7 +273,8 @@ void Shared::MakeMeshes(const entity_t &e) {
         mesh_t patchMesh = patch->mesh;
 
         // Collision-only patches (nodraw) have no render material.
-        if (CHECK_FLAG(patch->shaderInfo->compileFlags, C_NODRAW)) {
+        if (CHECK_FLAG(patch->shaderInfo->compileFlags, C_NODRAW)
+         || (g_game->bspVersion == 47 && CHECK_FLAG(patch->shaderInfo->compileFlags, C_SKY))) {
             patch = patch->next;
             continue;
         }

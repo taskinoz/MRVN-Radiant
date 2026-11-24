@@ -12,6 +12,11 @@ external lump files), providing a useful retail reference for compiler output.
 Colony loaded and completed an empty harness run with both Titanfall1 content
 mods enabled; that run did not check collision or visual appearance.
 
+The one-hash integration compiler
+(`b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110`) passes all
+37 v29 compiler regressions, but the R1Delta/TFO native results recorded below
+were produced by earlier builds and have not been replayed under that exact hash.
+
 ## Testing in Titanfall Online
 
 ```powershell
@@ -198,9 +203,8 @@ prop object ids follow straight after the world meshes, not TF2's 64-aligned bas
 - Every used byte names a realtime point or spot light (flags 30 or 14), never
   the sun (hardware 0, shadowed by CSM) or a baked light (flags 6).
 - Slot *k* is used on 99–100% of texels reached by more than *k* shadowed
-  realtime lights, and almost never otherwise. Slot order is neither by index
-  nor by contribution. (This note originally said blocked lights get no slot;
-  that holds only for flag 14 lights. See the next section.)
+  realtime lights, and almost never otherwise. Lights blocked from a texel get
+  no slot. Slot order is neither by index nor by contribution.
 - So these are TF2's RTL A slots with absolute indices and no page. Retail TF1
   orders realtime lights straight after the ambient and sun (Angel City: 200 of
   676 lights) so their indices fit in a byte.
@@ -219,52 +223,6 @@ lit nothing on TF1 world surfaces. In a covered room with two realtime lights,
 TFO and R1Delta now show orange and blue pools on the floor and walls, while the
 same BSP with the plane reset to 255 renders black in TFO
 (`.local/respawn/tfo-light-isolation-20261120/run-rtl-room-{new,old,new-r1}`).
-
-### Which lights get a slot, and SKY B alpha (21 November 2026)
-
-`tools/respawn/analyze_rtl.py rtl <bsp>` rasterises every lit world triangle
-into its lightmap page and tests each texel's slots against the light records
-and against ray casts through the opaque world meshes (static props are not
-occluders). Run on all five retail TF1 maps (Angel City, Colony, Fracture,
-Lagoon, Relic; 0.37–1.3 million texels each, 1,000–1,500 ray samples per light
-group), it corrects the "blocked lights get no slot" statement above:
-
-| Light | Entity keys (all five maps) | Slot when in reach | P(slot), clear ray | P(slot), blocked ray |
-| --- | --- | --- | --- | --- |
-| flags 30, point | `light`, `realtime 1` | 98.6–99.7% | 0.98–1.00 | 0.98–1.00 |
-| flags 30, spot | `light_spot`, `realtime 1`, `realtime_shadows 0` | 97.9–99.2% | 0.98–1.00 | 0.98–0.99 |
-| flags 14, spot | `light_spot`, `realtime 1`, `realtime_shadows 1` | 25–39% | 0.80–0.95 | 0.06–0.14 |
-
-"In reach" means inside the record's radius, in front of the surface
-(dot(normal, toLight) > 0) and inside the outer cone (stopdot2). Slots outside
-that reach are border/gutter texels.
-
-- **Flag 30 lights are assigned purely geometrically.** Occlusion is ignored, so
-  they light texels behind walls; TF1 stores no shadow mask for them.
-- **Flag 14 lights (`realtime_shadows 1`) only get texels they can see.** These
-  are the dynamically shadowed spots. The `shadow` key does not decide the flag:
-  `shadow 0` spots occur with flags 30, 14 and 6.
-- **The flag is set by keys:** 2 | 4 for every point/spot, + 8 if `realtime 1`,
-  + 16 if also `realtime_shadows` is 0 or absent. That gives 6, 14 and 30. TF2
-  uses the same 8 and 16 bits (see [RESPAWN_LIGHTING.md](RESPAWN_LIGHTING.md#tf2-light-flags-and-rtl-slots-21-november-2026)).
-- **Overflow (more than four lights in reach):** the four kept are neither the
-  four lowest indices (4%) nor the four strongest by contribution (32%, 1,218
-  Angel City texels). Ordering is only loosely ascending: slots are in
-  ascending index order on 78–86% of texels with two or more.
-- **SKY B alpha is baked sun occlusion in TF1**, unlike TF2 (always 255). It is
-  0 where the sun reaches the texel and 255 where it is blocked or the face looks
-  away. About 96% of charted texels take one of the 17 values
-  round(255·k/16), so k counts 16 sub-samples. Angel City: rays to the sun that
-  are blocked give 255 on 96% of texels; clear rays give 0 on 64% (and 0 or an
-  intermediate value on 82%). Fracture, Lagoon and Relic agree; Colony is
-  noisier, probably because of props and sky geometry the occluder set lacks.
-  **remap writes 255 on every TF1 texel.** In retail terms that is "fully
-  shadowed", although TFO still draws CSM sun shadows on remap maps. How the
-  engine combines the two is not known; plausibly the baked value applies only
-  beyond the CSM range.
-- **Light probes reference baked lights.** In Angel City, 30,123 of 41,936 used
-  probe light references name baked (flags 6) lights. remap's probes only
-  reference realtime lights (see the TF2 note).
 
 ## Vertices and material sorts
 
@@ -447,11 +405,38 @@ rejects negative zeros in any VPhysics solid. Controls that ruled out other
 causes: world contents set to retail's 33570819 (no change), the TF1 content
 mods enabled (no change), and the floor moved down 4 or 32 units (clean rests).
 
-**Still open:** crates dropped within about 50 units of the world origin still
-wedge into the z=0 floor (3 of 3), while drops 160 units away and on the patch
-rest correctly. Moving the world solid's mass centre from the origin to its
-volume centroid, as retail stores it, did not fix this and made patch drops
-fail, so it was reverted. Evidence: `.local/respawn/phase2-crate-*-20261120/`.
+**Still open: bad sessions, not the origin.** The earlier "near the origin"
+failure is a property of the TFO session, not of the drop position. Repeating
+one fixture's sequential crate drops (at (0,0), (-5,-45), (300,300) and (0,0)
+again, from z=64) in separate launches:
+
+- Every launch is all good or all bad. In a good one, every crate lands flat and
+  rests at z=0.5. In a bad one, every crate sinks through the floor on first
+  contact (z -2 to -5 at t=0.6 s), is thrown around for about 3 seconds, and
+  stops in an impossible pose: tilted 20 to 58 degrees above the floor, or
+  2.3 units into it. A bad launch repeats exactly, to 1/32 unit.
+- The same BSP flips between launches (byte-identical lumps): the current
+  fixture went good, bad, good. A copy with the floor moved +512 in x and no
+  patch went bad, then good, so bad drops 420 units from the origin fail too.
+  The earlier origin failures were bad launches.
+- Splitting the floor into 96 separate 256-unit brushes did not help: 3 of 6
+  launches were bad.
+- Retail Angel City in 4 launches (32 drops) never let a crate through: the
+  lowest rested at z 130.5, on the floor. These crates were dropped together
+  and pile up (z about 130, 140 or 150), so a few rest leaning on another crate
+  (up to 36 degrees in one launch) and tilt alone does not judge them. Retail
+  launches also differ from each other: two matched to 1/32 unit, two did not.
+  So TFO has launch-dependent physics, but only the compiled floor lets crates
+  through in some launches.
+- The logs of good and bad launches show no difference. The compiled world
+  solid uses retail's conventions: mass centre at the origin and surface
+  deviation byte 227, as Angel City's first static solid has.
+
+Moving the world solid's mass centre to its volume centroid did not help and
+made patch drops fail, so it was reverted. Single launches cannot tell a fix
+from a good launch: test any change over at least six launches. Evidence:
+`.local/respawn/phase2-crate-*-20261120/`, including `phase2-crate-origin-20261120/`
+(fixtures `a` current, `b` moved floor, `c` split floor, `retail`).
 
 ## Portals
 
@@ -637,47 +622,6 @@ falling through floors in normal play. Compiled maps failed more often (often al
 native drop results need repeats, and one failing run does not show a
 collision defect. The harness's `drop_samples` option logs drop positions every
 0.2 seconds.
-
-## Raw-lump facts behind the validator (21 November 2026)
-
-Measured on six retail TF1 maps (Angel City, beta Angel City, Colony,
-Fracture, Lagoon, Relic) and the TFO lobby. `validate_records.py` checks each.
-
-- **ENTITIES:** worldspawn first, once; every entity has one classname. Retail
-  ends with exactly one NUL. remap writes no NUL and its maps still load, so a
-  missing NUL is only a warning (`warnings` in the report).
-- **ENTITY_PARTITIONS:** always `01* env fx script snd spawn\0`, single spaces,
-  NUL-terminated.
-- **GAME_LUMP:** one `prps` entry, flags 0, sprp **version 12**, directory
-  offsets BSP-absolute even in sidecars. The payload is the name table, a u32
-  leaf count (always 0) with u16 leaves, three u32 (placements, then two
-  unknown counts with second ≤ first ≤ placements), then 84-byte placements
-  laid out as `repair_tf1_port.py`'s `OLD_PROP`, model index straight after the
-  angles. The two u16 after the model index reach 65535 with no leaves, so they
-  are not leaf ranges. Lighting origin and the word at byte 68 hold stale bits
-  (often non-finite) and are not checked. Every model name is used.
-  LEVEL_INFO's prop count equals the placement count.
-- **remap's v29 sprp writer differs:** it writes two words after the leaf count
-  and one trailing word. With props, the first origin lands in the header and
-  every placement is four bytes early. The validator rejects this (header counts
-  out of order); remap's empty-prop output is byte-identical to retail. Static
-  props in compiled TF1 maps are unverified in game.
-- **STATIC_PROP_LIGHTPROBE_INDICES:** one u32 per prop. The upper halves are
-  always zero, so the schema is now `I` rather than two `H` per prop.
-- **PAKFILE:** a stored zip (method 0, no flags or extra fields), its local
-  headers start at byte 0 and the end-of-central-directory record ends the lump
-  with a 32-byte `XZP1 0` comment. Checks: EOCD, central directory, local headers
-  and CRCs in range, no compressed, ZIP64, unsafe or duplicate names.
-- **LIGHTMAP_DATA_SKY / REAL_TIME_LIGHTS:** every header is type 1. SKY is
-  exactly 8 bytes and RTL exactly 4 bytes per header texel (sum of width ×
-  height) in all maps. In every RTL texel used bytes come before 255s, and each
-  byte *b* names WORLD_LIGHTS[*b* + 1], always a point (1) or spot (2) light;
-  record 0 is the sky ambient (5) and 1 the sun (3). The light check needs that
-  leading ambient (the baseline has none and writes only 255).
-- **VERTEX_BLINN_PHONG / VERTEX_UNLIT_TS:** empty in every sample. Blinn-Phong
-  uses the writer's 44-byte layout (indices, UV, colour, lightmap UV, tangent
-  quaternion); no mesh flag selects it. Lit-bump and unlit-TS tangent words are
-  plain VERTEX_NORMALS indices in v29, and all retail ones are in range.
 
 ## Still missing
 

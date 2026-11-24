@@ -203,7 +203,10 @@ what assets a given map may redistribute stays with its author.
 The unresolved TFO crate-height result was a compiler defect. Negative-zero
 IVP coordinates on a z=0 floor made crates bounce and wedge into it. The same
 fixture now rests 8 of 8 sequential crate drops upright, as retail Angel City
-does. Drops within about 50 units of the world origin still wedge; see
+does in that launch. Later repeats showed the remaining failures depend on the
+launch, not on the position: in about half of all launches every crate sinks
+into the floor on first contact, wherever it lands, while retail Angel City rested
+every crate in 4 launches. See
 [VPhysics](RESPAWN_TF1_LUMPS.md#vphysics-physics_collide) for the controls.
 
 ## Compiler parity inventory

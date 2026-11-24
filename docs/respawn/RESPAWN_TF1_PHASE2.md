@@ -14,64 +14,6 @@ pillar/node fixtures route in both runtimes; live R1/TFO CRC observations agree
 with the changed fixture's offline result. Broader AI and full release gates
 remain open.
 
-## 21 November: R1Delta acceptance round
-
-R1Delta is now the acceptance benchmark; TFO results are secondary because
-TFORevive is unfinished and has its own collision issues. Every fixture below
-was compiled by this branch and run in R1Delta 3.0.5. Evidence stays local under
-`.local/respawn/r1-*-20261121/`.
-
-| Area | Fixture | R1Delta result |
-| --- | --- | --- |
-| Physics | `prepare_tf1_physics.py`: ramps, curved patches, a 3-barrel stack, a long fall onto an 8-unit slab, throws at 800 and 2500 u/s into a wall, rotated drops | 11 of 12 stations pass in all 4 runs, with identical heights each time; the 12th (a tumbling throw) is still rolling at 25 s, as VPhysics barrels have almost no rolling resistance |
-| Static props | `prepare_tf1_props.py`: three `prop_static` barrels | Rays stop on the upright, yawed and tipped barrels (z 47.7, 47.7, 31.2) |
-| Vertex formats | `prepare_tf1_vertex_formats.py` | Lit-bump and unlit draw; lit-flat and unlit-TS drew black before the conversion below |
-| Lighting | `prepare_tf1_lighting.py` (mp_common materials only) | Sun with a sharp pillar shadow, baked point light (flag 6) and realtime point light (flag 30) all draw; the flag-14 spotlight pool is not distinguishable from ambient in the reviewed view |
-| Water | `prepare_tf1_water.py --pools` | Two pools get separate water records and wet/dry cells; a box floats at 128.6 (surface 128) and 157.1 (surface 160); the dry control rests at 0.47 |
-| Collision | masks, transformed brushes, transformed patches | All rays and hulls pass |
-| Modes | `prepare_tf1_modes.py` via ARES `r1_harness.py` | tdm, ctf, lts, cp and exfil all start and report their mode; cp initializes three hardpoints with terminals |
-
-Compiler fixes found by this round:
-
-- **Static props:** remap's sprp v12 header had two words after the leaf table
-  plus a trailing word, and placements put the leaf fields before the model
-  index. Every placement was four bytes early. Both now match retail, with
-  Angel City's defaults.
-- **Light flags:** set from keys as retail (`analyze_rtl.py`): TF1 writes 6
-  baked, 30 realtime and 14 for `realtime_shadows` 1/2. TF2 builds
-  4/32 + 8 + 16 + 64 from `_pbr_falloff`, `realtime` and `realtime_shadows`;
-  `shadow 0` no longer removes RTL slots. PBR intensity keeps its ×100000.
-- **Probes** link baked lights too (about 70% of retail references), at
-  weight 255.
-- **TF1 SKY B alpha** holds baked sun occlusion (0 sunlit, 255 blocked).
-- **LEVEL_INFO sun vector** is the last sun's normal in both games (it was a
-  placeholder).
-- **Entities:** text ends with a NUL; `info_spawnpoint_flag` stays in the BSP
-  lump and `env_fog_controller` goes to `_env.ent`, as in all five retail maps.
-- **Brush models without drawn faces** (nodraw triggers) get real bounds. They
-  had inverted ones and R1Delta stopped with "backwards mins/maxs".
-- **Vertex formats:** v29 writes non-water lit-flat as lit-bump and unlit-TS
-  as unlit, with a warning. A surface only draws when its vertex format suits
-  its material's shader: a lightmapped VMT on unlit vertices is still black.
-- **Empty-world physics stub:** its ledges no longer name retail CM brushes.
-
-Tools: `validate_records.py` now checks ENTITIES, ENTITY_PARTITIONS, GAME_LUMP
-(sprp v12), PAKFILE, SKY/RTL sizes and slots, Blinn-Phong and model bounds.
-`build_tf1_package.py --base-vpk` reports what mp_common really provides
-(a custom map mounts no other map VPK; `concrete_floor_01` is only in Angel
-City's), and `--asset-source` collects missing VMTs/VTFs. `r1_harness.py`
-gains drop velocities/angles, settle checks, trace masks and `--asset-files`.
-
-Findings that are not compiler changes:
-
-- **Patches compile as their control grid** in TF1, TF2 and Apex: render,
-  collision and physics all use the 3×3 control points, so a curved patch is
-  faceted (the half-cylinder's surface is at 128, not the Bezier 64). This is
-  deliberate for Source ports and decompiled maps; Bezier tessellation would
-  need an opt-in.
-- Only Hardpoint has been played to capture and score; the other modes are
-  checked at startup only. Human matches in R1Delta remain the release gate.
-
 ## 20 November: v29 sun shadow output
 
 A prop-free sunlit fixture exposed inverted bounds in the generated v29 CSM
@@ -203,7 +145,10 @@ what assets a given map may redistribute stays with its author.
 The unresolved TFO crate-height result was a compiler defect. Negative-zero
 IVP coordinates on a z=0 floor made crates bounce and wedge into it. The same
 fixture now rests 8 of 8 sequential crate drops upright, as retail Angel City
-does. Drops within about 50 units of the world origin still wedge; see
+does in that launch. Later repeats showed the remaining failures depend on the
+launch, not on the position: in about half of all launches every crate sinks
+into the floor on first contact, wherever it lands, while retail Angel City rested
+every crate in 4 launches. See
 [VPhysics](RESPAWN_TF1_LUMPS.md#vphysics-physics_collide) for the controls.
 
 ## Compiler parity inventory

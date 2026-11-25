@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
+#include <climits>
 #include <map>
 #include <set>
 #include <tuple>

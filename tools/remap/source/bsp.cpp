@@ -31,6 +31,7 @@
 /* dependencies */
 #include "remap.h"
 #include "bspfile_abstract.h"
+#include "respawn/stage_timer.h"
 
 
 
@@ -609,6 +610,15 @@ int BSPMain( Args& args ){
 		while ( args.takeArg( "-tempname" ) ) {
 			strcpy( tempSource, args.takeNext() );
 		}
+		while ( args.takeArg( "-nolightmaps" ) ) {
+			noLightmaps = true;
+		}
+		while ( args.takeArg( "-nolightprobes" ) ) {
+			noLightProbes = true;
+		}
+		while ( args.takeArg( "-singlelightprobe" ) ) {
+			singleLightProbe = true;
+		}
 		while ( args.takeArg( "-nowater" ) ) {
 			Sys_Printf( "Disabling water\n" );
 			nowater = true;
@@ -862,11 +872,14 @@ int BSPMain( Args& args ){
 	LoadShaderInfo();
 
 	/* load original file from temp spot in case it was renamed by the editor on the way in */
-	if ( !strEmpty( tempSource ) ) {
-		LoadMapFile( tempSource, false, g_autocaulk );
-	}
-	else{
-		LoadMapFile( mapFileName, false, g_autocaulk );
+	{
+		REMAP_STAGE( "LoadMapFile" );
+		if ( !strEmpty( tempSource ) ) {
+			LoadMapFile( tempSource, false, g_autocaulk );
+		}
+		else{
+			LoadMapFile( mapFileName, false, g_autocaulk );
+		}
 	}
 
 	/* div0: inject command line parameters */
@@ -890,8 +903,11 @@ int BSPMain( Args& args ){
 	/* process in game advertisements */
 	//ProcessAdvertisements();
 
-	/* finish and write bsp */
-	EndBSPFile( true );
+	/* finish and write bsp, unless the game's compile function already did */
+	if ( !g_compileHandledEndBSP ) {
+		REMAP_STAGE( "EndBSPFile" );
+		EndBSPFile( true );
+	}
 
 	/* remove temp map source file if appropriate */
 	if ( !strEmpty( tempSource ) ) {

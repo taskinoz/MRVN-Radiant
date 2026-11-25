@@ -24,6 +24,7 @@
 #pragma once
 
 #include "remap.h"
+#include "respawn/lightmap.h"
 #include <set>
 
 
@@ -49,7 +50,8 @@ namespace Shared {
     struct Mesh_t {
         MinMax                 minmax;
         shaderInfo_t          *shaderInfo;
-        int                    lightmapPage;
+        int                    lightmapPage = -1;
+        bool                   noCollision = false;
         std::vector<Vertex_t>  vertices;
         std::vector<uint16_t>  triangles;
     };
@@ -75,6 +77,14 @@ namespace Shared {
     inline std::vector<visRef_t>  visRefs;
     inline visNode_t              visRoot;
     inline std::vector<Island_t>  islands;
+
+    /* Lightmaps */
+    inline float        luxelSize = 16.0f;       // world units per lightmap texel; worldspawn "_remap_luxelsize"
+    inline unsigned     lightmapPageSize = 1024;     // worldspawn "_remap_lightmap_pagesize"
+    constexpr unsigned  lightmapGutter = 2;      // texels kept clear around each chart
+    inline bool                    lightmapsEnabled = false;  // set by writers that bake lightmaps
+    inline bool                    lightmapByMaterial = false;  // worldspawn "_remap_lightmap_by_material"
+    inline Respawn::LightmapAtlas  lightmapAtlas;
     /* Functions */
     void MakeMeshes(const entity_t &e);
     void MakeVisReferences();

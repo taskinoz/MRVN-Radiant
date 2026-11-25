@@ -439,3 +439,49 @@ void Error( const char *error, ... ){
 
 	exit( 1 );
 }
+
+
+/* Phase/progress reporting (see inout.h). */
+static struct {
+	int totalPhases = 0;
+	const char **phaseNames = nullptr;
+	int progressTotal = 1;
+	int progressLastPct = -1;
+	char progressLabel[64] = {};
+} s_phases;
+
+void Sys_ConsoleInit( const char *mapName, int totalPhases, const char *phaseNames[] ){
+	s_phases.totalPhases = totalPhases;
+	s_phases.phaseNames = phaseNames;
+	Sys_Printf( "--- Compiling %s ---\n", mapName );
+}
+
+void Sys_ConsoleShutdown( double totalSeconds ){
+	Sys_Printf( "--- Compile complete (%.2fs) ---\n", totalSeconds );
+}
+
+void Sys_PhaseBegin( int phase ){
+	if ( s_phases.phaseNames != nullptr && phase >= 0 && phase < s_phases.totalPhases )
+		Sys_Printf( "--- [%d/%d] %s ---\n", phase + 1, s_phases.totalPhases, s_phases.phaseNames[phase] );
+}
+
+void Sys_PhaseEnd(){
+}
+
+void Sys_ProgressBegin( const char *label, int total ){
+	s_phases.progressTotal = total > 0 ? total : 1;
+	s_phases.progressLastPct = -1;
+	snprintf( s_phases.progressLabel, sizeof( s_phases.progressLabel ), "%s", label );
+}
+
+void Sys_ProgressUpdate( int current ){
+	const int pct = std::clamp( current * 100 / s_phases.progressTotal, 0, 100 );
+	if ( s_phases.progressLastPct >= 0 && pct / 25 == s_phases.progressLastPct / 25 )
+		return;
+	s_phases.progressLastPct = pct;
+	Sys_FPrintf( SYS_VRB, "  %s %3d%% (%d/%d)\n", s_phases.progressLabel, pct, current, s_phases.progressTotal );
+}
+
+void Sys_ProgressEnd(){
+	Sys_FPrintf( SYS_VRB, "  %s done\n", s_phases.progressLabel );
+}

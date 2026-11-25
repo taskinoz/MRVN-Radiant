@@ -420,6 +420,7 @@ enum class EImplicitMap {
 
 struct shaderInfo_t {
     String512                  shader;
+    std::string                surfaceProp;           /* $surfaceprop, for TF1 VPhysics */
     int                        surfaceFlags;
     int                        contentFlags;
     int                        compileFlags;
@@ -619,6 +620,8 @@ struct brush_t {
     shaderInfo_t        *contentShader;
     shaderInfo_t        *celShader;            /* :) */
 
+    bool                 noCollision = false;  /* render-only brush (entity key _nocollision) */
+
     /* ydnar: gs mods */
     int                  lightmapSampleSize;   /* jal : entity based _lightmapsamplesize */
     float                lightmapScale;
@@ -627,6 +630,7 @@ struct brush_t {
     indexMap_t          *im;
 
     int                  contentFlags;
+    bool                 recoveredContents = false; // exact primitive mask supplied by scene recovery
     int                  compileFlags;         /* ydnar */
     bool                 detail;
     bool                 opaque;
@@ -1343,6 +1347,8 @@ inline int FindFloatPlane(const Vector3 &normal, float dist, int numPoints, cons
 bool PlaneEqual(const plane_t &p, const Plane3f &plane);
 bool SnapNormal(Vector3 &normal);
 void AddBrushBevels();
+void AddBrushBevels(brush_t& brush);
+bool AddBrushBevels(brush_t& brush, std::size_t maxSides);
 
 /* portals.c */
 bool PortalPassable(const portal_t *p);
@@ -1582,6 +1588,7 @@ inline int           numShaderInfo;
 
 inline String512     mapName;  /* ydnar: per-map custom shaders for larger lightmaps */
 inline CopiedString  mapShaderFile;
+inline bool  g_compileHandledEndBSP;  /* the game's compile function already wrote the BSP */
 
 /* can't code */
 inline bool  doingBSP;
@@ -1727,6 +1734,8 @@ inline bool   noStyles;
 // inline int minSampleSize = DEFAULT_LIGHTMAP_MIN_SAMPLE_SIZE;
 inline float  noVertexLighting;
 inline bool   noLightmaps;
+inline bool   noLightProbes;
+inline bool   singleLightProbe;
 inline bool   noGridLighting;
 
 inline bool  noTrace;

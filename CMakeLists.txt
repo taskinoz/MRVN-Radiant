@@ -37,7 +37,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Compile flags
 # TODO: use target_compile_options etc. instead of set(CMAKE_..._FLAGS ...)
-set(CMAKE_CXX_FLAGS_RELEASE "-Os")
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /DNDEBUG")
+else()
+    set(CMAKE_CXX_FLAGS_RELEASE "-Os")
+endif()
 set(CMAKE_C_FLAGS_RELEASE "")
 
 if(UNIX)
@@ -117,7 +121,9 @@ else() # Msys / Linux
     pkg_check_modules(JPEG libjpeg REQUIRED)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+if(BUILD_RADIANT OR BUILD_PLUGINS)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+endif()
 find_package(Threads REQUIRED)
 
 # Global include dirs

@@ -25,9 +25,13 @@
 
 #include "../bspfile_shared.h"
 #include "qmath.h"
+#include <array>
 #include <cstdint>
+#include <unordered_map>
 #include "../remap.h"
 #include "../lump_names.h"
+#include "../respawn/lightbake.h"
+#include "../respawn/convex_coverage.h"
 
 
 void LoadR1BSPFile(rbspHeader_t *header, const char *filename);
@@ -49,12 +53,13 @@ namespace Titanfall {
     void         EmitPlane(const Plane3 &plane);
     void         EmitEntityPartitions();
     uint32_t     EmitTextureData(shaderInfo_t shader);
+    void         ClearVertexIndices();
     uint32_t     EmitVertex(Vector3 &vertex);
     uint32_t     EmitVertexNormal(Vector3 &normal);
     void         EmitVertexUnlit(Shared::Vertex_t &vertex);
     void         EmitVertexLitFlat(Shared::Vertex_t &vertex);
-    void         EmitVertexLitBump(Shared::Vertex_t &vertex);
-    void         EmitVertexUnlitTS(Shared::Vertex_t &vertex);
+    void         EmitVertexLitBump(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent);
+    void         EmitVertexUnlitTS(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent);
     void         EmitVertexBlinnPhong(Shared::Vertex_t &vertex);
     void         EmitMeshes(const entity_t &e);
     uint16_t     EmitOcclusionMeshVertex(Vector3 vertex);
@@ -62,7 +67,7 @@ namespace Titanfall {
     std::size_t  EmitObjReferences(Shared::visNode_t &node);
     int          EmitVisChildrenOfTreeNode(Shared::visNode_t node);
     void         EmitVisTree();
-    uint16_t     EmitMaterialSort(uint32_t index, int offset, int count);
+    uint16_t     EmitMaterialSort(uint32_t index, int offset, int count, int lightmapHeader = -1);
     void         EmitCollisionGrid(entity_t &e);
     void         EmitModelGridCell(entity_t &e);
     void         EmitBrush(brush_t &e);
@@ -71,6 +76,9 @@ namespace Titanfall {
     void         EmitLevelInfoWorldspawn();
     void         EmitLevelInfo();
     void         EmitStubs();
+    void         EmitPhysicsModel(const entity_t &e, int modelIndex);
+    void         FinishPhysics();
+    void         AssignWaterCells();
     void         EmitExtraEntity(entity_t &e);
 
     void         LoadLumpsAndEntities( rbspHeader_t *header, const char *filename );
@@ -122,18 +130,23 @@ namespace Titanfall {
         char path[128];
     };
 
+    // sprp v12 after the name table: a u32-counted u16 leaf table (empty in
+    // every retail map, so no leaves follow), then placements and two unknown
+    // counts with unk1 <= unk0 <= numProps. Retail has no trailing word.
     struct GameLumpPropHeader_t {
-        uint32_t unk0;
+        uint32_t leafCount;
         uint32_t numProps;
+        uint32_t unk0;
         uint32_t unk1;
     };
 
+    // Retail v12 placements put the model index straight after the angles.
     struct GameLumpProp_t {
         Vector3 origin;
         Vector3 angles;
+        int16_t modelName;
         int16_t firstLeaf;
         int16_t numLeaves;
-        int16_t modelName;
         int8_t  solid;
         int8_t  flags;
         int16_t skin;
@@ -150,18 +163,16 @@ namespace Titanfall {
         int32_t collisionFlagsAdd;
         int32_t collisionFlagsRemove;
     };
-
-    struct GameLumpUnknownHeader_t {
-        uint32_t unknown;
-    };
+    static_assert(sizeof(GameLumpProp_t) == 84, "TF1 sprp v12 placements are 84 bytes");
 
     // 0x42
     struct TricollTriangle_t{
-        int32_t unk : 5;
-        int32_t idx0 : 9;
-        int32_t idx1 : 9;
-        int32_t idx2 : 9;
+        uint32_t idx0 : 10; // base vertex
+        uint32_t idx1 : 7;  // positive delta from base
+        uint32_t idx2 : 7;  // positive delta from base
+        uint32_t unk : 8;   // edge/bevel flags, retained by readers
     };
+    static_assert(sizeof(TricollTriangle_t) == 4, "Packed tricoll words are 4 bytes");
 
     // 0x45
     struct TricollHeader_t {
@@ -170,7 +181,7 @@ namespace Titanfall {
         int16_t texdata;
         int16_t numVerts;
         int16_t numTris;
-        int16_t numBevelIndexes;
+        uint16_t numBevelIndexes;
         int32_t firstVert;
         int32_t firstTri;
         int32_t firstNode;
@@ -178,6 +189,7 @@ namespace Titanfall {
         Vector3 org;
         float scale;
     };
+    static_assert(sizeof(TricollHeader_t) == 44, "Tricoll headers are 44 bytes");
 
     // 0x47
     struct VertexUnlit_t {
@@ -231,10 +243,10 @@ namespace Titanfall {
     struct Mesh_t {
         uint32_t  triOffset;
         uint16_t  triCount;
-        uint16_t  vertexOffset;
-        uint16_t  vertexCount;
+        uint16_t  vertexOffset;  // relative to material-sort vertexOffset
+        uint16_t  vertexCount;   // last local vertex index (inclusive)
         uint8_t   vertexType;
-        uint8_t   unused;
+        int8_t    cubemap;       // CUBEMAPS index, -1 for unlit meshes
         uint32_t  const0;
         uint16_t  unk1;
         uint16_t  unk2;
@@ -246,9 +258,9 @@ namespace Titanfall {
     // 0x51
     struct MeshBounds_t {
         Vector3   origin;
-        uint32_t  unk0;
+        float     radius;
         Vector3   extents;
-        uint32_t  unk1;
+        float     tanYaw;
     };
 
     // 0x52
@@ -256,7 +268,7 @@ namespace Titanfall {
         int16_t  textureData;
         int16_t  lightmapHeader;
         int16_t  cubemap;
-        int16_t  unk;
+        uint16_t vertexSpan;  // v29: last minus first local vertex across this sort
         int32_t  vertexOffset;
     };
 
@@ -306,7 +318,7 @@ namespace Titanfall {
     // 0x5C
     struct CMBrush_t {
         Vector3   origin;
-        uint8_t   unknown;
+        uint8_t   nonDiscardPlaneCount;
         uint8_t   planeCount;
         uint16_t  index;
         Vector3   extents;
@@ -334,6 +346,14 @@ namespace Titanfall {
         uint16_t  flags;  // TODO: CellFlags enum
         int16_t   leafWaterData;  // -1 for none
     };
+
+    // 0x24: one per water volume; cells reference it
+    struct LeafWaterData_t {
+        float     surfaceZ;
+        float     minZ;
+        int32_t   textureData;  // the surface's material
+    };
+    static_assert(sizeof(LeafWaterData_t) == 12, "Leaf water data is 12 bytes");
 
     // 0x6C
     struct Portal_t {
@@ -408,11 +428,14 @@ namespace Titanfall {
         inline std::vector<GameLumpPath_t>        gameLumpPaths;
         inline GameLumpPropHeader_t               gameLumpPropHeader;
         inline std::vector<GameLumpProp_t>        gameLumpProps;
-        inline GameLumpUnknownHeader_t            gameLumpUnknownHeader;
         inline std::vector<char>                  textureDataData;
         inline std::vector<uint32_t>              textureDataTable;
         inline std::vector<TricollTriangle_t>     tricollTriangles;
         inline std::vector<TricollHeader_t>       tricollHeaders;
+        inline std::vector<int>                   tricollHeaderContents;  // not written; drives keydata vtric entries
+        inline std::vector<uint16_t>              tricollBevelStarts;
+        inline std::vector<uint32_t>              tricollBevelIndices;
+        inline std::vector<CMBound_t>             tricollNodes;  // 0x44: packed header bounds, see EmitPatchCollision
         inline std::vector<VertexUnlit_t>         vertexUnlitVertices;
         inline std::vector<VertexLitFlat_t>       vertexLitFlatVertices;
         inline std::vector<VertexLitBump_t>       vertexLitBumpVertices;
@@ -420,6 +443,7 @@ namespace Titanfall {
         inline std::vector<VertexBlinnPhong_t>    vertexBlinnPhongVertices;
         inline std::vector<uint16_t>              meshIndices;
         inline std::vector<Mesh_t>                meshes;
+        inline std::vector<int>                   meshCompileFlags;
         inline std::vector<MeshBounds_t>          meshBounds;
         inline std::vector<MaterialSort_t>        materialSorts;
         inline std::vector<CMGrid_t>              cmGrid;
@@ -431,19 +455,36 @@ namespace Titanfall {
         inline std::vector<uint16_t>              cmBrushSideProperties;
         inline std::vector<int32_t>               cmUniqueContents;
         inline std::vector<CMBrush_t>             cmBrushes;
+        // CM brush index of each entity brush, written as VPhysics ledge client data.
+        inline std::unordered_map<const brush_t*, uint32_t> cmBrushOfSource;
         inline std::vector<uint16_t>              cmBrushSidePlaneOffsets;
         inline std::vector<CMBrushSideTexVec_t>   cmBrushSideTexVecs;
         inline std::vector<Vector3>               occlusionMeshVertices;
         inline std::vector<uint16_t>              occlusionMeshIndices;
         inline std::vector<CellAABBNode_t>        cellAABBNodes;
+        inline std::vector<MinMax>                cellBounds;  // each cell's own volume; access roots can be larger
         inline std::vector<uint16_t>              objReferences;
         inline std::vector<ObjReferenceBounds_t>  objReferenceBounds;
         inline std::vector<LevelInfo_t>           levelInfo;  // Only one entry! used a vector to keep load / save code simple
+
+        inline std::vector<uint8_t>  physicsCollide;  // VPhysics models, see titanfall_physics.cpp
+        inline std::vector<LeafWaterData_t>  leafWaterData;
+        inline std::vector<std::vector<Respawn::CoverageSolid>> leafWaterVolumes;  // compiler-only, parallel to leafWaterData
 
         // Stubs
         inline std::vector<uint8_t>  physicsCollide_stub;
         inline std::vector<uint8_t>  worldLights_stub;
         inline std::vector<uint8_t>  lightmapHeaders_stub;
+
+        // Lightmap bake inputs, recorded by EmitMeshes when Shared::lightmapsEnabled
+        struct LightmapVertexRange {
+            bool           bump;   // vertexLitBumpVertices, otherwise vertexLitFlatVertices
+            std::size_t    first;
+            std::size_t    count;
+            std::uint32_t  page;
+        };
+        inline std::vector<Respawn::Bake::Chart>  lightmapCharts;
+        inline std::vector<LightmapVertexRange>   lightmapVertexRanges;
         inline std::vector<uint8_t>  lightMapDataSky_stub;
         inline std::vector<uint8_t>  csmAABBNodes_stub;
         inline std::vector<CellBspNode_t>      cellBSPNodes_stub;

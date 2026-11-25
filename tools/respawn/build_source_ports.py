@@ -1,0 +1,1425 @@
+"""Port a Source engine map (Half-Life 2, Team Fortress 2, ...) to a Titanfall 2 Northstar mod.
+
+Reads the compiled BSP's brush list, which keeps every original brush, and its
+displacements, entities and textures. Writes an editable Valve 220 .map, then
+compiles and packages it like the Minecraft ports.
+"""
+import argparse
+from collections import Counter
+import hashlib
+import io
+import json
+import math
+from pathlib import Path
+import re
+import shutil
+import struct
+import subprocess
+import zipfile
+
+import numpy as np
+from PIL import Image
+
+from build_minecraft_ports import MESH_BUDGET, build_loadscreen, visibility_coverage, write_dds_bc1
+from build_quake_materials import solid, write_dds
+from compiler_regression import entity
+from inspect_bsp import inspect
+from minecraft_scenery import SKY_LEVEL, sky_dome
+from pack_vpk import pack_files
+from rpak import RPak
+from source_engine import (BSP, Content, CONTENTS_GRATE, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, CONTENTS_WINDOW, Model,
+                           SURF_HINT, SURF_NODRAW, SURF_SKIP, SURF_SKY, SURF_SKY2D, angle_matrix, material_info, read_vtf,
+                           vtf_size, VERTEXES, EDGES, SURFEDGES, FACES)
+from validate_records import load_records, validate
+import stbsp
+
+VERSION = '0.1.0'
+ASSET_ROOT = 'world/source_ports/'
+MESH_CLUSTER = 3072
+MAX_TEXTURE = 1024
+SPAWN_SPACING = 160
+# Mesh grid cells up to the whole map; Source maps are far larger than the Minecraft ports.
+MAX_MESH_CLUSTER = 262144
+LUXEL_SIZE = 16
+MAX_LUXEL_SIZE = 128
+# Converted maps tested in game have used at most six lightmap pages (Drop-Off: four of 2048 pixels);
+# more is untested, so bigger maps get coarser lightmaps instead.
+LIGHTMAP_PAGE = 2048
+MAX_LIGHTMAP_PAGES = 6
+# Displacement collision grid size (control points per side); remap collides each grid quad separately.
+DISPLACEMENT_COLLISION = 5
+# Brush entities that stand still in the original; doors and breakables are left out, so their openings are open.
+NONSOLID = '_ns'  # material suffix of render-only (non-colliding) brushes
+# Brush entities that render but never collide in Source.
+RENDER_ONLY_ENTITIES = {'func_illusionary'}
+STATIC_BRUSH_ENTITIES = {'func_brush', 'func_wall', 'func_lod', 'func_detail', 'func_wall_toggle'}
+TOOL_MATERIALS = {'tools/toolsclip': '_clip', 'tools/toolsplayerclip': '_clip', 'tools/toolsblack': '_black'}
+# Ground NPC nodes are on walkable floor; HL2 has no multiplayer spawns to use.
+NODE_CLASSES = {'info_node', 'info_node_hint'}
+CS_SPAWNS = {'info_player_terrorist': 2, 'info_player_counterterrorist': 3}
+
+
+def sanitize(name):
+    return re.sub(r'[^a-z0-9_/]', '_', name.lower().replace('\\', '/'))
+
+
+def tangents(normal):
+    """Two axes with t1 x t2 = normal."""
+    n = np.array(normal, float)
+    helper = np.array((0, 0, 1.0)) if abs(n[2]) < .9 else np.array((1.0, 0, 0))
+    t1 = np.cross(helper, n); t1 /= np.linalg.norm(t1)
+    return t1, np.cross(n, t1)
+
+
+def valve_face(normal, dist, material, s, t):
+    """Valve 220 brush face: three points whose winding gives the outward normal."""
+    p1 = np.array(normal, float)*dist; t1, t2 = tangents(normal)
+    points = (p1, p1+t2*1024, p1+t1*1024)
+    return (' '.join('( %.4f %.4f %.4f )' % tuple(p) for p in points)+f' {material} '
+            f'[ {s[0]:.6g} {s[1]:.6g} {s[2]:.6g} {s[3]:.6g} ] [ {t[0]:.6g} {t[1]:.6g} {t[2]:.6g} {t[3]:.6g} ] 0 1 1')
+
+
+def valve_box(lo, hi, material, texels_per_unit=.25):
+    faces = []
+    for axis in range(3):
+        for sign, d in ((-1, -lo[axis]), (1, hi[axis])):
+            n = [0, 0, 0]; n[axis] = sign
+            u = [0.0]*4; v = [0.0]*4
+            # Axial projection like Quake's: drop the face axis.
+            a, b = [(1, 2), (0, 2), (0, 1)][axis]
+            u[a] = texels_per_unit; v[b] = -texels_per_unit
+            faces.append(valve_face(n, d, material, u, v))
+    return '{\n'+'\n'.join(faces)+'\n}'
+
+
+def cubemap_direction_lookup(faces, directions):
+    """Sample a Source skybox (rt bk lf ft up dn images) along unit directions (..., 3)."""
+    x, y, z = directions[..., 0], directions[..., 1], directions[..., 2]
+    ax, ay, az = np.abs(x), np.abs(y), np.abs(z)
+    out = np.zeros(directions.shape[:-1]+(3,), np.float32)
+    # Engine st_to_vec for rt bk lf ft up dn, inverted: face, mask, s, t.
+    cases = (('rt', (ax >= ay) & (ax >= az) & (x > 0), -y/ax, z/ax),
+             ('bk', (ax >= ay) & (ax >= az) & (x <= 0), y/ax, z/ax),
+             ('lf', (ay > ax) & (ay >= az) & (y > 0), x/ay, z/ay),
+             ('ft', (ay > ax) & (ay >= az) & (y <= 0), -x/ay, z/ay),
+             ('up', (az > ax) & (az > ay) & (z > 0), -y/az, -x/az),
+             ('dn', (az > ax) & (az > ay) & (z <= 0), -y/az, x/az))
+    for name, mask, s, t in cases:
+        image = faces[name]; h, w = image.shape[:2]
+        u = np.clip(((s+1)/2*w).astype(int), 0, w-1); v = np.clip(((1-t)/2*h).astype(int), 0, h-1)
+        out[mask] = image[v[mask], u[mask], :3]
+    return out
+
+
+def source_sky_texture(faces, size=2048):
+    """The skybox's upper hemisphere in sky_dome's azimuthal projection."""
+    axis = (np.arange(size)+.5)/size*2-1
+    u, v = np.meshgrid(axis, axis)
+    r = np.minimum(np.hypot(u, v), 1); theta = r*math.pi/2
+    scale = np.sin(theta)/np.maximum(r, 1e-6)
+    directions = np.stack((u*scale, v*scale, np.cos(theta)), -1)
+    rgb = cubemap_direction_lookup(faces, directions)
+    rgb = np.clip(rgb*SKY_LEVEL, 0, 255).astype(np.uint8)
+    return Image.fromarray(np.dstack([rgb, np.full((size, size), 255, np.uint8)]), 'RGBA')
+
+
+def load_skybox(content, skyname):
+    faces = {}
+    for base in dict.fromkeys((skyname.removesuffix('_hdr'), skyname)):
+        try:
+            for face in ('rt', 'bk', 'lf', 'ft', 'up', 'dn'):
+                shader, values = material_info(content, 'skybox/'+base+face)
+                faces[face] = np.asarray(read_vtf(content.read('materials/'+values['$basetexture'].replace('\\', '/')+'.vtf')))
+            return faces
+        except (KeyError, ValueError):
+            faces = {}
+    return None
+
+
+def mip_levels(image):
+    levels = []; im = image
+    while True:
+        levels.append((im.width, im.height, im.tobytes()))
+        if im.width == 1 and im.height == 1: return levels
+        im = im.resize((max(1, im.width//2), max(1, im.height//2)), Image.Resampling.BOX)
+
+
+def choose_spawns(bsp, middle):
+    """Four spawns per team: Source team spawns where the map has them, else NPC nodes at opposite ends."""
+    teams = {2: [], 3: []}
+    for e in bsp.entities:
+        if e.get('classname') == 'info_player_teamspawn' and e.get('TeamNum') in ('2', '3'):
+            teams[int(e['TeamNum'])].append(tuple(map(float, e['origin'].split())))
+        # Counter-Strike: Source and CS:GO spawns.
+        elif e.get('classname') in CS_SPAWNS:
+            teams[CS_SPAWNS[e['classname']]].append(tuple(map(float, e['origin'].split())))
+    if all(teams.values()):
+        return {t: spread(p, p[0]) for t, p in teams.items()}
+    nodes = np.array([tuple(map(float, e['origin'].split())) for e in bsp.entities if e.get('classname') in NODE_CLASSES])
+    if len(nodes) < 8:
+        nodes = np.array([tuple(map(float, e['origin'].split())) for e in bsp.entities if e.get('classname') == 'info_player_start'])
+    if not len(nodes): raise ValueError('no spawn candidates; pass --spawns')
+    flat = nodes[:, :2]-flat_mean(nodes)
+    axis = np.linalg.svd(flat, full_matrices=False)[2][0]
+    along = flat@axis
+    ends = (nodes[along.argmin()], nodes[along.argmax()])
+    return {t: spread([tuple(p) for p in nodes], tuple(end)) for t, end in zip((2, 3), ends)}
+
+
+def flat_mean(nodes):
+    return nodes[:, :2].mean(0)
+
+
+def spread(points, target, count=4):
+    chosen = []
+    for p in sorted(points, key=lambda p: math.dist(p[:2], target[:2])):
+        if all(math.dist(p[:2], q[:2]) >= SPAWN_SPACING for q in chosen): chosen.append(p)
+        if len(chosen) == count: break
+    return chosen
+
+
+class Materials:
+    """Source materials to Titanfall 2 ones, keyed by base texture so cubemap patches share one."""
+
+    def __init__(self, bsp, content, prefix, templates=None):
+        self.bsp = bsp; self.content = content; self.prefix = prefix
+        self.textures = {}; self.missing = Counter(); self.invisible = set(); self.nonsolid = set()
+        # extract_material_templates.py output: with it, $translucent and $alphatest
+        # textures draw blended and alpha-tested instead of opaque or invisible.
+        self.templates = templates; self.kinds = {}
+
+    def see_through(self, values):
+        """'translucent', 'cutout' or None for a Source material's keys."""
+        if not self.templates: return None
+        if values.get('$translucent') == '1': return 'translucent'
+        if values.get('$alphatest') == '1': return 'cutout'
+        return None
+
+    def render_only(self, name):
+        """A non-colliding variant of a material, for Source func_illusionary and non-solid brushes."""
+        base = name[len(self.prefix):]
+        if base.startswith('_'): return name  # nodraw, sky and clip stay as they are
+        self.nonsolid.add(base); return name+NONSOLID
+
+    def name(self, texinfo_index):
+        if texinfo_index < 0: return self.prefix+'_nodraw'
+        info = self.bsp.texinfo[texinfo_index]
+        if info.flags & (SURF_SKY | SURF_SKY2D): return self.prefix+'_skyhole'
+        material = (info.material or '').lower().replace('\\', '/')
+        if material in TOOL_MATERIALS: return self.prefix+TOOL_MATERIALS[material]
+        if material.startswith('tools/') or info.flags & (SURF_NODRAW | SURF_HINT | SURF_SKIP):
+            return self.prefix+'_nodraw'
+        texdata = next(t for t in self.bsp.texdata if t[0] == info.material)
+        try:
+            shader, values = material_info(self.content, material)
+        except KeyError:
+            self.missing[material] += 1; shader, values = None, {}
+        kind = self.see_through(values)
+        if shader == 'water' or not kind and values.get('$translucent') == '1' and 'glass' in material:
+            # Clear glass stays solid but unseen: an opaque pane would hide the room.
+            self.invisible.add(material); return self.prefix+'_nodraw'
+        base = sanitize(values.get('$basetexture', material))
+        if kind: self.kinds[base] = kind
+        self.textures.setdefault(base, (values.get('$basetexture'), texdata[1], texdata[2], values))
+        return self.prefix+base
+
+    def build(self, out, args, sky_image, void_colour):
+        assets = out/'assets'; files = []; shader = []
+        def texture(name, levels):
+            path = 'texture/'+self.prefix+name+'.rpak'
+            write_dds_bc1(assets/Path(path).with_suffix('.dds'), levels)
+            files.append({'_type': 'txtr', '_path': path, '$disableStreaming': True}); return path
+        flats = {'1': texture('_normal', solid((128, 128, 255, 255))), '2': texture('_gloss', solid((18, 18, 18, 255))),
+                 '3': texture('_spec', solid((5, 5, 5, 255)))}
+        images = {'_sky': sky_image, '_sky_void': Image.new('RGBA', (64, 64), void_colour), '_black': Image.new('RGBA', (16, 16), (0, 0, 0, 255))}
+        for name, (vtf, width, height, values) in sorted(self.textures.items()):
+            try:
+                # Source 2 ports pass exported images instead of VTF names.
+                if isinstance(vtf, Path): image = Image.open(vtf).convert('RGBA')
+                else: image = read_vtf(self.content.read('materials/'+vtf.replace('\\', '/').lower()+'.vtf'))
+                if values.get('tint'): image = Image.fromarray(np.clip(np.asarray(image)*np.array(values['tint']), 0, 255).astype(np.uint8))
+            except (KeyError, ValueError, AttributeError, OSError):
+                self.missing[name] += 1; image = Image.new('RGBA', (64, 64), (128, 128, 128, 255))
+            if self.kinds.get(name) == 'translucent' and image.getextrema()[3][0] == 255:
+                # Blended without any transparency (often a missing glass texture): faint glass instead of a grey wall.
+                image = Image.blend(image, Image.new('RGBA', image.size, (200, 215, 225, 255)), 0.5); image.putalpha(70)
+            if min(image.size) < 4:
+                # A pak with a BC1 texture smaller than one 4x4 block never finishes loading.
+                image = image.resize((max(4, image.width), max(4, image.height)), Image.Resampling.NEAREST)
+            if image.getextrema()[3][0] < 255 and name not in self.kinds:
+                # Without templates, alpha-tested fences and decals become opaque.
+                backing = Image.new('RGBA', image.size, (60, 60, 60, 255)); backing.alpha_composite(image); image = backing
+            images[name] = (image, width, height)
+        for name in ('_nodraw', '_skyhole', '_clip'):
+            shader.append(f'textures/{self.prefix}{name}\n{{\n $compileflag nodraw\n'+(' $contentflag playerclip\n' if name == '_clip' else '')+'}\n')
+        for name, entry in sorted(images.items()):
+            image, width, height = entry if isinstance(entry, tuple) else (entry, entry.width, entry.height)
+            # Remap divides texinfo texels by this image's size, so it keeps the BSP's texture size.
+            png = assets/('textures/'+self.prefix+name+'.png'); png.parent.mkdir(parents=True, exist_ok=True)
+            if name in self.kinds:
+                # The lightmapper reads alpha-tested shadows from this image's alpha.
+                image.convert('RGBA').resize((width, height), Image.Resampling.NEAREST).save(png)
+            else:
+                Image.new('RGB', (width, height)).save(png)
+            scale = min(1, MAX_TEXTURE/max(image.size))
+            if scale < 1: image = image.resize((int(image.width*scale), int(image.height*scale)), Image.Resampling.LANCZOS)
+            kind = self.kinds.get(name)
+            if kind:
+                # BC1 has no alpha channel to blend or test.
+                path = 'texture/'+self.prefix+name+'.rpak'
+                write_dds(assets/Path(path).with_suffix('.dds'), mip_levels(image.convert('RGBA')), True)
+                files.append({'_type': 'txtr', '_path': path, '$disableStreaming': True}); albedo = path
+                write_see_through(assets, files, self.templates, kind, self.prefix+name, image.size, albedo, flats)
+            else:
+                albedo = texture(name, mip_levels(image.convert('RGBA')))
+            for suffix in (() if kind else ('_colpass_wld', '_wld')):
+                src = args.material_template.with_name(args.material_template.name+suffix)
+                spec = json.loads(src.with_suffix('.json').read_text())
+                spec.update(name=self.prefix+name+('_colpass' if suffix.startswith('_colpass') else ''), width=image.width, height=image.height)
+                spec['$textures'] = {'0': albedo, **flats}
+                spec['$colpassMaterial'] = '0x0' if suffix.startswith('_colpass') else 'material/'+self.prefix+name+'_colpass_wld.rpak'
+                dst = assets/('material/'+self.prefix+name+suffix+'.rpak'); dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
+                files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
+            flags = {'translucent': ' $compileflag trans\n', 'cutout': ' $compileflag alphashadow\n'}.get(kind, '')
+            shader.append(f'textures/{self.prefix}{name}\n{{\n $shadertype LitBumpGeneric\n'+(' $compileflag sky\n' if name.startswith('_sky') else '')+flags+'}\n')
+            if name in self.nonsolid:
+                # The same textures under a second name whose shader has no collision.
+                for suffix in ('_colpass_wld', '_wld'):
+                    src = assets/('material/'+self.prefix+name+suffix+'.rpak')
+                    if not src.with_suffix('.json').exists(): continue  # translucent ones have no colpass
+                    spec = json.loads(src.with_suffix('.json').read_text())
+                    spec['name'] = self.prefix+name+NONSOLID+('_colpass' if suffix.startswith('_colpass') else '')
+                    if not suffix.startswith('_colpass'):
+                        spec['$colpassMaterial'] = 'material/'+self.prefix+name+NONSOLID+'_colpass_wld.rpak'
+                    dst = assets/('material/'+self.prefix+name+NONSOLID+suffix+'.rpak')
+                    dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(src.with_suffix('.uber'), dst.with_suffix('.uber'))
+                    files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
+                shutil.copyfile(png, assets/('textures/'+self.prefix+name+NONSOLID+'.png'))
+                shader.append(f'textures/{self.prefix}{name}{NONSOLID}\n{{\n $shadertype LitBumpGeneric\n $contentflag nonsolid\n{flags}}}\n')
+        shaders = assets/'shaders'; shaders.mkdir(parents=True, exist_ok=True)
+        (shaders/'source_ports.shader').write_text('\n'.join(shader))
+        pak = 'source_'+args.name
+        manifest = {'version': 7, 'name': pak, 'keepDevOnly': True, 'assetsDir': str(assets), 'outputDir': str(out/'pak-build'),
+                    'compressLevel': 0, 'hasDynamicLibrary': False, 'files': files}
+        (out/'build-rpak.json').write_text(json.dumps(manifest, indent=2))
+        with (out/'repak.log').open('wb') as log:
+            subprocess.run([str(args.repak.resolve()), str(out/'build-rpak.json')], cwd=out, stdout=log, stderr=subprocess.STDOUT, check=True)
+        return RPak(out/'pak-build'/(pak+'.rpak'))
+
+
+def write_see_through(assets, files, templates, kind, material, size, albedo, flats):
+    """Translucent or alpha-tested world material from extract_material_templates.py output."""
+    def clone(key, name, textures, extra={}):
+        spec = json.loads((templates/(key+'.json')).read_text())
+        spec.update(name=name, width=size[0], height=size[1], **extra); spec['$textures'] = textures
+        dst = assets/('material/'+name+'_wld.rpak'); dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.with_suffix('.json').write_text(json.dumps(spec, indent=2)); shutil.copyfile(templates/(key+'.uber'), dst.with_suffix('.uber'))
+        files.append({'_type': 'matl', '_path': dst.relative_to(assets).as_posix()})
+        return dst.relative_to(assets).as_posix()
+    if kind == 'translucent':
+        return clone('translucent_wld', material, {'0': albedo, **flats})
+    # Alpha-tested depth passes, or the holes cast shadows and fill the depth prepass.
+    depth = {f'$depth{K}Material': clone(f'cutout_{k}_wld', 'depth/'+material+'_'+k, {'0': albedo})
+             for k, K in (('shadow', 'Shadow'), ('prepass', 'Prepass'), ('vsm', 'VSM'))}
+    colpass = clone('cutout_colpass_wld', material+'_colpass', {'0': albedo, **flats}, depth)
+    return clone('cutout_wld', material, {'0': albedo, **flats}, {**depth, '$colpassMaterial': colpass})
+
+
+def prop_material(materials, candidates):
+    """Material for a prop mesh, or None for additive ones, and for cutout and translucent ones without templates."""
+    for name in candidates:
+        try: shader, values = material_info(materials.content, name)
+        except KeyError: continue
+        kind = materials.see_through(values)
+        if values.get('$additive') == '1' or not kind and any(values.get(k) == '1' for k in ('$translucent', '$alphatest')): return None
+        vtf = values.get('$basetexture')
+        try: width, height = vtf_size(materials.content.read('materials/'+vtf.replace('\\', '/').lower()+'.vtf'))
+        except (KeyError, AttributeError): width, height = 64, 64
+        base = sanitize(vtf or name)
+        materials.textures.setdefault(base, (vtf, width, height, values))
+        if kind: materials.kinds[base] = kind
+        return materials.prefix+base
+    materials.missing[candidates[0] if candidates else '?'] += 1
+    return None
+
+
+def prop_charts(positions, normals, uvs, triangles):
+    """Split triangles into lightmap charts: connected faces sharing a dominant axis, projected along it."""
+    a, b, c = (positions[triangles[:, k]] for k in range(3))
+    face = np.cross(b-a, c-a)
+    axis = np.abs(face).argmax(1); label = axis*2+(face[np.arange(len(face)), axis] < 0)
+    parent = {}
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for tri, l in zip(triangles, label):
+        roots = [find((v, l)) for v in tri]
+        for r in roots[1:]: parent[r] = roots[0]
+    charts = {}
+    for tri, l in zip(triangles, label):
+        charts.setdefault(find((tri[0], l)), []).append((tri, l))
+    out = []
+    for members in charts.values():
+        index = {}; verts = []; tris = []
+        drop = members[0][1]//2; keep = [k for k in range(3) if k != drop]
+        for tri, _ in members:
+            for v in tri:
+                if v not in index:
+                    index[v] = len(verts)
+                    verts.append((positions[v], normals[v], uvs[v], positions[v][keep]/16))
+            tris += [index[v] for v in tri]
+        out.append((verts, tris))
+    return out
+
+
+def face_charts(bsp, model, offset, materials):
+    """Render-only charts from a brush model's compiled faces.
+
+    Non-solid entity brushes (func_illusionary) are not listed in the BSP's leaves,
+    so their brushes cannot be recovered; their faces are the reliable source."""
+    import struct as _struct
+    lumps = bsp.lumps
+    if not hasattr(bsp, '_face_cache'):
+        points = np.frombuffer(lumps[VERTEXES], np.float32).reshape(-1, 3)
+        edges = np.frombuffer(lumps[EDGES], np.uint16).reshape(-1, 2)
+        surfedges = np.frombuffer(lumps[SURFEDGES], np.int32)
+        faces = list(_struct.iter_unpack('<HBBihhhh4Bif2i2iiHHI', lumps[FACES]))
+        bsp._face_cache = (points, edges, surfedges, faces)
+    points, edges, surfedges, faces = bsp._face_cache
+    first, count = bsp.models[model][10], bsp.models[model][11]
+    charts = []
+    for face in faces[first:first+count]:
+        planenum, side, _, firstedge, numedges, texinfo, dispinfo = face[:7]
+        if texinfo < 0 or dispinfo >= 0: continue
+        material = materials.name(texinfo)
+        if material[len(materials.prefix):].startswith('_'): continue  # nodraw, sky, invisible glass and water
+        info = bsp.texinfo[texinfo]
+        width, height = next((t[1], t[2]) for t in bsp.texdata if t[0] == info.material)
+        normal = np.array(bsp.planes[planenum][0], float) * (-1 if side else 1)
+        polygon = [points[edges[e][0]] if e >= 0 else points[edges[-e][1]] for e in surfedges[firstedge:firstedge+numedges]]
+        polygon = [np.asarray(v, float)+offset for v in polygon]
+        keep = [k for k in range(3) if k != int(np.abs(normal).argmax())]
+        verts = []
+        for v in polygon:
+            u = (np.dot(v-offset, info.s[:3])+info.s[3])/width; t = (np.dot(v-offset, info.t[:3])+info.t[3])/height
+            verts.append((v, normal, (u, t), v[keep]/16))
+        # Source faces wind clockwise seen from the front, as Respawn front faces do.
+        tris = [k for i in range(1, len(polygon)-1) for k in (0, i, i+1)]
+        charts.append((material, verts, tris))
+    return charts
+
+
+def write_props(path, charts):
+    """RSM1: per chart a material, vertices (xyz, normal, uv, colour, lightmap uv) and triangles."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('wb') as f:
+        f.write(struct.pack('<4sI', b'RSM1', len(charts)))
+        for material, verts, tris in charts:
+            name = ('textures/'+material).encode('ascii')
+            f.write(struct.pack('<I', len(name))+name+struct.pack('<2I', len(verts), len(tris)))
+            for p, n, uv, lm in verts:
+                f.write(struct.pack('<8f', *p, *n, *uv)+b'\xff\xff\xff\xff'+struct.pack('<2f', *lm))
+            f.write(struct.pack(f'<{len(tris)}I', *tris))
+
+
+def convert_props(bsp, materials, skybox_box):
+    """Static props as render charts plus nodraw collision brushes from their physics hulls."""
+    models = {}; charts = []; brushes = []; skipped = Counter()
+    for name, origin_, angles, solid, skin in bsp.static_props():
+        if skybox_box and all(skybox_box[0][k] <= origin_[k] <= skybox_box[1][k] for k in range(3)):
+            skipped['3D skybox prop'] += 1; continue
+        if name not in models:
+            try: models[name] = Model(materials.content, name)
+            except (KeyError, ValueError, struct.error) as error:
+                models[name] = None; skipped['unreadable model'] += 1
+        model = models[name]
+        if model is None: continue
+        rotation = angle_matrix(*angles); offset = np.array(origin_)
+        positions = model.vertices[:, :3]@rotation.T+offset
+        normals = model.vertices[:, 3:6]@rotation.T
+        for material_index, triangles in model.meshes:
+            material = prop_material(materials, model.material(material_index, skin))
+            if material is None: skipped['cutout or translucent mesh'] += 1; continue
+            # Source and Respawn both wind front faces clockwise (retail RSM recoveries agree).
+            for verts, tris in prop_charts(positions, normals, model.vertices[:, 6:8], triangles):
+                charts.append((material, verts, tris))
+        if solid:
+            for hull in model.hulls:
+                faces = []
+                for n, d in hull:
+                    n = rotation@n; faces.append(valve_face(n, d+n@offset, materials.prefix+'_nodraw', (1, 0, 0, 0), (0, 1, 0, 0)))
+                brushes.append('{\n'+'\n'.join(faces)+'\n}')
+    return charts, brushes, skipped
+
+
+def brush_text(bsp, brush, materials, offset=(0, 0, 0), clip=False, nonsolid=False):
+    faces = []
+    for side in brush.sides:
+        if side.bevel: continue
+        dist = side.dist+sum(n*o for n, o in zip(side.normal, offset))
+        if clip: material = materials.prefix+'_clip'
+        else: material = materials.name(side.texinfo)
+        if nonsolid: material = materials.render_only(material)
+        if side.texinfo >= 0:
+            info = bsp.texinfo[side.texinfo]
+            s = (*info.s[:3], info.s[3]-sum(a*o for a, o in zip(info.s, offset)))
+            t = (*info.t[:3], info.t[3]-sum(a*o for a, o in zip(info.t, offset)))
+        else:
+            s, t = (1, 0, 0, 0), (0, 1, 0, 0)
+        faces.append(valve_face(side.normal, dist, material, s, t))
+    return '{\n'+'\n'.join(faces)+'\n}'
+
+
+def displacement_patch(bsp, disp, materials):
+    info = bsp.texinfo[disp.texinfo]
+    width, height = next((t[1], t[2]) for t in bsp.texdata if t[0] == info.material)
+    n = len(disp.rows); corners = disp.corners; lines = []
+    # A patch faces along rows x columns; swap them where that points into the face.
+    swap = np.dot(np.cross(np.subtract(corners[1], corners[0]), np.subtract(corners[3], corners[0])), disp.normal) < 0
+    for i in range(n):
+        points = []
+        for j in range(n):
+            y, x = (j, i) if swap else (i, j)
+            # Texture coordinates come from the flat face, as in Source.
+            a = [c0+(c1-c0)*y/(n-1) for c0, c1 in zip(corners[0], corners[1])]
+            b = [c3+(c2-c3)*y/(n-1) for c3, c2 in zip(corners[3], corners[2])]
+            base = [p+(q-p)*x/(n-1) for p, q in zip(a, b)]
+            u = (sum(p*q for p, q in zip(info.s[:3], base))+info.s[3])/width
+            v = (sum(p*q for p, q in zip(info.t[:3], base))+info.t[3])/height
+            points.append('( %.3f %.3f %.3f %.6g %.6g )' % (*disp.rows[y][x], u, v))
+        lines.append('( '+' '.join(points)+' )')
+    return '{\npatchDef2\n{\n'+materials.name(disp.texinfo)+f'\n( {n} {n} 0 0 0 )\n(\n'+'\n'.join(lines)+'\n)\n}\n}'
+
+
+def displacement_collision(disp, material, size=DISPLACEMENT_COLLISION):
+    """A coarser nodraw copy of a displacement for collision: one collision piece per quad of the full grid overflows remap."""
+    n = len(disp.rows); corners = disp.corners
+    if n <= size: return None
+    swap = np.dot(np.cross(np.subtract(corners[1], corners[0]), np.subtract(corners[3], corners[0])), disp.normal) < 0
+    picks = [round(k*(n-1)/(size-1)) for k in range(size)]
+    lines = []
+    for i in picks:
+        row = [disp.rows[j][i] if swap else disp.rows[i][j] for j in picks]
+        lines.append('( '+' '.join('( %.3f %.3f %.3f 0 0 )' % tuple(p) for p in row)+' )')
+    return '{\npatchDef2\n{\n'+material+f'\n( {size} {size} 0 0 0 )\n(\n'+'\n'.join(lines)+'\n)\n}\n}'
+
+
+def origin(e):
+    return tuple(map(float, e.get('origin', '0 0 0').split()))
+
+
+def light_entities(bsp):
+    text = ''; sun = None
+    for e in bsp.entities:
+        cls = e.get('classname')
+        if cls == 'light_environment' and sun is None:
+            sun = e
+            text += entity(classname='light_environment', origin=e.get('origin', '0 0 0'), angles=e.get('angles', '0 0 0'),
+                           pitch=e.get('pitch', '-45'), _light=e.get('_light', '255 255 255 200'),
+                           _ambient=e.get('_ambient', '128 128 128 20'), lightEnvironmentIndex='*0', shadows='1')
+        elif cls in ('light', 'light_spot'):
+            brightness = float((e.get('_light', '255 255 255 200').split()+['200'])[3])
+            # Source lights fall off with distance squared, normalised at 100 units.
+            zero = float(e.get('_zero_percent_distance') or 0) or min(2048, max(256, 100*math.sqrt(brightness/2)))
+            fifty = float(e.get('_fifty_percent_distance') or 0) or zero*.3
+            keys = dict(classname=cls, origin=e['origin'], _light=e.get('_light', '255 255 255 200'), realtime='0',
+                        _zero_percent_distance=f'{zero:g}', _fifty_percent_distance=f'{fifty:g}')
+            # Source's quadratic/linear coefficients are inverse attenuation, not a broad
+            # polynomial fade. Preserve them for the static baker (normalized at 100 units).
+            if not float(e.get('_zero_percent_distance') or 0) and not float(e.get('_fifty_percent_distance') or 0):
+                coefficients = [max(0.0, float(e.get(key, default))) for key, default in
+                                (('_constant_attn', '0'), ('_linear_attn', '0'), ('_quadratic_attn', '1'))]
+                if sum(coefficients) > 0:
+                    keys['_source_attenuation'] = ' '.join(f'{v:g}' for v in coefficients)
+            if cls == 'light_spot':
+                keys.update(angles=e.get('angles', '0 0 0'), pitch=e.get('pitch', '-90'), _cone=e.get('_cone', '45'),
+                            _inner_cone=e.get('_inner_cone', '30'), _exponent=e.get('_exponent', '1'))
+            text += entity(**keys)
+    if sun is None:
+        text += entity(classname='light_environment', origin='0 0 0', angles='-60 45 0', pitch='-60',
+                       _light='255 250 240 300', _ambient='170 190 210 60', lightEnvironmentIndex='*0', shadows='1')
+    return text
+
+
+def menu_stage(prefix, z, floor):
+    """A plain floor under its own small dome, for the menu Titan; the gameplay dome hides it."""
+    brushes = [valve_box((-2064, -2064, z-96), (2064, 2064, z), prefix+floor, .5)]
+    brushes += sky_dome(prefix+'_sky', prefix+'_sky_void', (0, 0), 2040, z, floor=False)
+    return brushes
+
+
+def load_surf_config(path):
+    """Validate map-authored timing bounds and spawn points before compiling anything."""
+    if path is None:
+        return None
+    config = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    def vector(value):
+        if not isinstance(value, list) or len(value) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) for v in value):
+            raise ValueError('surf config vectors must contain three finite numbers')
+        return value
+    def box(zone):
+        lo, hi = vector(zone['mins']), vector(zone['maxs'])
+        if any(a >= b for a, b in zip(lo, hi)):
+            raise ValueError('surf config bounds must have mins < maxs')
+    box({'mins': config['startMins'], 'maxs': config['startMaxs']})
+    point = vector(config['startOrigin'])
+    if not all(a <= v <= b for a, v, b in zip(config['startMins'], point, config['startMaxs'])):
+        raise ValueError('surf reset origin must be inside the start zone')
+    yaw = config['startYaw']
+    if type(yaw) not in (int, float) or not math.isfinite(yaw):
+        raise ValueError('surf startYaw must be finite')
+    for zone in config.get('finishZones', []):
+        box(zone)
+    checkpoints = config.get('checkpointOrigins', [])
+    for i, point in enumerate(checkpoints):
+        vector(point)
+        if any(math.dist(point, other) <= 16 for other in checkpoints[:i]):
+            raise ValueError('surf checkpoint destinations must be distinct')
+    if checkpoints and not config.get('finishZones'):
+        raise ValueError('staged surf maps require an explicit finish zone')
+    overrides = config.get('teleportTargetOverrides', {})
+    if not isinstance(overrides, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not k or not v for k, v in overrides.items()):
+        raise ValueError('surf teleport target overrides must map nonempty target names')
+    for team, points in config.get('spawns', {}).items():
+        if team not in ('2', '3') or not points:
+            raise ValueError('surf spawns must specify nonempty teams 2 and 3')
+        for point in points:
+            vector(point)
+            # assemble() raises spawn origins by 16 units.
+            if not all(a <= v <= b for a, v, b in zip(config['startMins'], [*point[:2], point[2]+16], config['startMaxs'])):
+                raise ValueError('surf spawns must be inside the start zone')
+    if config.get('spawns') and set(config['spawns']) != {'2', '3'}:
+        raise ValueError('surf spawns must include both teams')
+    return config
+
+
+def surf_map_export(config):
+    """Emit only validated numeric fields; map metadata cannot inject Squirrel code."""
+    def vector(v):
+        return '< ' + ', '.join(f'{n:g}' for n in v) + ' >'
+    fields = [f'{key} = {vector(config[key])}' for key in ('startMins', 'startMaxs', 'startOrigin')]
+    fields.append(f'startYaw = {float(config["startYaw"]):.1f}')
+    if 'finishZones' in config:
+        zones = ', '.join('{ mins = '+vector(z['mins'])+', maxs = '+vector(z['maxs'])+' }' for z in config['finishZones'])
+        fields.append('finishZones = [ '+zones+' ]')
+    if 'checkpointOrigins' in config:
+        fields.append('checkpointOrigins = [ '+', '.join(vector(v) for v in config['checkpointOrigins'])+' ]')
+    return ' getroottable().MRVN_SurfMap <- { '+', '.join(fields)+' }\n'
+
+
+def utopia_jail_threshold_repairs(bsp):
+    """Cap the nodraw support exposed by omitting Utopia's rotating exit door.
+
+    Continue each original floor band across its 64-unit threshold, preserving
+    the source side materials and UV vectors rather than inventing a texture.
+    """
+    if bsp.path.stem.lower() != 'surf_utopia_v3':
+        return []
+    if not any(e.get('classname') == 'func_door_rotating' and e.get('targetname') == 'jail_exit_door'
+               and origin(e) == (0.0, 1184.0, -10240.0) for e in bsp.entities):
+        return []
+    world = bsp.model_brushes(0)
+    support = any(bsp.brush_bounds(bsp.brushes[i]) == ([0.0, 1152.0, -10272.0], [192.0, 1216.0, -10256.0]) for i in world)
+    if not support:
+        return []
+    repairs = []
+    for x0, x1 in [(0, 16), (16, 32), (32, 64), (64, 80), (80, 192)]:
+        candidate = next((bsp.brushes[i] for i in world
+                          if (lambda bounds: bounds[0][0] <= x0 and bounds[1][0] >= x1 and
+                              bounds[0][1] < 1120 < bounds[1][1] and bounds[1][1] == 1152 and
+                              bounds[0][2] == -10256 and bounds[1][2] == -10240)(bsp.brush_bounds(bsp.brushes[i]))), None)
+        if candidate is None:
+            raise ValueError('Utopia jail threshold floor layout changed; repair needs review')
+        lo, hi = (x0, 1152, -10256), (x1, 1216, -10240)
+        sides = []
+        for side in candidate.sides:
+            axis = next((a for a in range(3) if abs(side.normal[a]) == 1 and sum(abs(v) for v in side.normal) == 1), None)
+            if axis is None:
+                raise ValueError('Utopia threshold floor must be axial')
+            sides.append(side._replace(dist=hi[axis] if side.normal[axis] > 0 else -lo[axis]))
+        repairs.append(candidate._replace(sides=sides))
+    return repairs
+
+
+def build(args):
+    args.surf_config_data = load_surf_config(getattr(args, 'surf_config', None))
+    if args.surf_config_data and args.surf is False:
+        raise ValueError('--surf-config requires surf support')
+    out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
+    bsp = BSP(args.bsp)
+    content = Content(args.game_dir, bsp.pakfile)
+    prefix = ASSET_ROOT+args.name+'/'
+    materials = Materials(bsp, content, prefix, args.material_templates)
+    world = bsp.model_brushes(0)
+    skybox = bsp.skybox_brushes(world); skybox_box = None
+    if skybox:
+        bounds = np.array([sum(bsp.brush_bounds(bsp.brushes[i]), []) for i in skybox])
+        lo, hi = bounds[:, :3].min(0), bounds[:, 3:].max(0); skybox_box = (lo, hi)
+        skybox = {i for i in world if all(lo[a] <= v for a, v in enumerate(bsp.brush_bounds(bsp.brushes[i])[0]))
+                  and all(v <= hi[a] for a, v in enumerate(bsp.brush_bounds(bsp.brushes[i])[1]))}
+    brushes = []; skipped = Counter(); boxes = []
+    def add(index, offset=(0, 0, 0), render_only=False):
+        brush = bsp.brushes[index]; clip = False
+        if render_only: pass
+        elif brush.contents & (CONTENTS_SOLID | CONTENTS_WINDOW | CONTENTS_GRATE): pass
+        elif brush.contents & CONTENTS_PLAYERCLIP: clip = True
+        elif brush.contents == 0:
+            # Empty contents: visible but non-solid world brushes (Source's non-solid detail).
+            render_only = True; skipped['non-solid world brush (render only)'] += 1
+        else: skipped[f'contents {brush.contents:#x}'] += 1; return
+        lo, hi = bsp.brush_bounds(brush)
+        boxes.append([l+o for l, o in zip(lo, offset)]+[h+o for h, o in zip(hi, offset)])
+        brushes.append(brush_text(bsp, brush, materials, offset, clip, render_only))
+    for i in world:
+        if i in skybox: skipped['3D skybox'] += 1
+        else: add(i)
+    render_only_charts = []
+    for e in bsp.entities:
+        model = e.get('model', '')
+        if not model.startswith('*'): continue
+        if e.get('classname') in STATIC_BRUSH_ENTITIES and e.get('angles', '0 0 0') in ('0 0 0', ''):
+            for i in bsp.model_brushes(int(model[1:])): add(i, origin(e))
+        elif e.get('classname') in RENDER_ONLY_ENTITIES and e.get('angles', '0 0 0') in ('0 0 0', ''):
+            render_only_charts.extend(face_charts(bsp, int(model[1:]), np.array(origin(e)), materials))
+        else: skipped[e.get('classname')] += 1
+    threshold_repairs = utopia_jail_threshold_repairs(bsp)
+    for brush in threshold_repairs:
+        brushes.append(brush_text(bsp, brush, materials))
+        bounds = bsp.brush_bounds(brush)
+        boxes.append(bounds[0]+bounds[1])
+    charts, prop_brushes, prop_skipped = convert_props(bsp, materials, skybox_box) if args.props else ([], [], Counter())
+    skipped.update(prop_skipped); brushes += prop_brushes; charts += render_only_charts
+    patches = []; collision = []; contents_keys = []
+    for d in bsp.displacements():
+        coarse = displacement_collision(d, prefix+'_nodraw')
+        if coarse:
+            # Primitives are numbered brushes first, then patches, in map order.
+            contents_keys.append(f'"_remap_contents_{len(brushes)+len(patches)}" "0"'); collision.append(coarse)
+        patches.append(displacement_patch(bsp, d, materials))
+    displacement_count = len(patches); patches += collision
+    if charts: write_props(out/'assets/models/source_props.rsm', charts)
+    boxes = np.array(boxes); lo = boxes[:, :3].min(0); hi = boxes[:, 3:].max(0)
+    skyname = bsp.entities[0].get('skyname', 'sky_day01_01')
+    faces = load_skybox(content, skyname)
+    if faces:
+        sky_image = source_sky_texture(faces)
+        void = tuple(int(c*SKY_LEVEL) for c in faces['dn'][..., :3].reshape(-1, 3).mean(0))+(255,)
+    else:
+        sky_image = Image.new('RGBA', (64, 64), (150, 175, 205, 255)); void = (150, 175, 205, 255)
+    middle = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
+    if args.surf_config_data and args.surf_config_data.get('spawns'):
+        teams = {int(t): [tuple(p) for p in points] for t, points in args.surf_config_data['spawns'].items()}
+    elif args.spawns:
+        teams = {2: spread(nodes_or_all(bsp), args.spawns[:2]), 3: spread(nodes_or_all(bsp), args.spawns[2:])}
+    else:
+        teams = choose_spawns(bsp, middle)
+    print(f'{args.name}: {len(brushes)} brushes, {displacement_count} displacements, {len(materials.textures)} textures; skipped {dict(skipped)}', flush=True)
+    converted = ('''Brush geometry, displacements (as patches), static props with their physics
+collision, textures, lights and the 2D skybox are converted. Dynamic and physics
+props, cutout or translucent prop parts (foliage, wires), the 3D skybox, water,
+doors, breakables, decals, overlays and normal maps are not.
+''')
+    metadata = {'brushes': len(brushes), 'displacements': displacement_count, 'textures': len(materials.textures),
+                'skipped': dict(skipped), 'invisible_glass': sorted(materials.invisible), 'missing_materials': dict(materials.missing),
+                'geometry_repairs': len(threshold_repairs), 'static_props': len(bsp.static_props()), 'prop_charts': len(charts), 'prop_collision_brushes': len(prop_brushes)}
+    return assemble(args, out, materials, dict(brushes=brushes, patches=patches, keys=contents_keys, charts=charts, boxes=boxes),
+                    lo, hi, sky_image, void, teams, light_entities(bsp), args.bsp, converted, metadata, teleports(bsp, (args.surf_config_data or {}).get('teleportTargetOverrides')), pushes(bsp))
+
+
+def fit_dome(boxes, centre, base, lo, hi, margin=1000):
+    """Radius and height of the half-ellipsoid sky dome that clears every brush box by `margin`.
+
+    A hemisphere sized by the map's width alone cut through surf_utopia, which fills the
+    Source world's corners and is as tall as it is wide. Of the widths that clear it, the one
+    with the smallest larger semi-axis is kept, so the dome stays as near the map as it can."""
+    width = max(16000, math.hypot(hi[0]-lo[0], hi[1]-lo[1])/2+4000)
+    if boxes is None or not len(boxes): return width, width
+    boxes = np.asarray(boxes, float)
+    corners = np.array([(boxes[:, 3*i], boxes[:, 1+3*j], boxes[:, 2+3*k]) for i in (0, 1) for j in (0, 1) for k in (0, 1)])
+    r = np.hypot(corners[:, 0]-centre[0], corners[:, 1]-centre[1]).ravel()+margin
+    h = (corners[:, 2]-base).ravel()+margin
+    # Keep the dome inside the +-32768 coordinate range where a width that does exists.
+    limit = 32768-64-max(abs(centre[0]), abs(centre[1]))
+    start = max(width, r.max()+1)
+    widths = [a for a in np.linspace(start, start*1.6, 97) if a <= limit] or [start]
+    best = None
+    for a in widths:
+        c = max(width, float(np.max(h/np.sqrt(1-(r/a)**2))))
+        if best is None or max(a, c) < max(best): best = (float(a), c)
+    return best
+
+
+def trigger_script_data(teleports, pushes):
+    adds = ''; brush_ids = {}
+    def brush_range(brushes):
+        nonlocal adds
+        key = repr(brushes)
+        if key not in brush_ids:
+            first = sum(len(v) for v in brush_ids.values())
+            for planes in brushes:
+                normals = ', '.join(f'< {n[0]:.6g}, {n[1]:.6g}, {n[2]:.6g} >' for n, _ in planes)
+                dists = ', '.join(f'{d:.1f}' for _, d in planes)  # floats: Squirrel won't pass array<int>
+                adds += f' AddBrush( [ {normals} ], [ {dists} ] )\n'
+            brush_ids[key] = list(range(first, first+len(brushes)))
+        ids = brush_ids[key]
+        return (ids[0], ids[-1]+1) if ids else (0, 0)
+    for lo, hi, d, yaw, n, brushes in teleports:
+        a, b = brush_range(brushes)
+        adds += (f' AddTeleport( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, '
+                 f'< {d[0]:g}, {d[1]:g}, {d[2]:g} >, {yaw:g}, {n}, {a}, {b} )\n')
+    for lo, hi, v, brushes in pushes:
+        a, b = brush_range(brushes)
+        adds += f' AddPush( < {lo[0]:g}, {lo[1]:g}, {lo[2]:g} >, < {hi[0]:g}, {hi[1]:g}, {hi[2]:g} >, < {v[0]:.4g}, {v[1]:.4g}, {v[2]:.4g} >, {a}, {b} )\n'
+    return adds
+
+
+def assemble(args, out, materials, world, lo, hi, sky_image, void, teams, lights, source, converted, metadata, teleports=(), pushes=()):
+    surf = getattr(args, 'surf', None)
+    if surf is None: surf = bool(getattr(args, 'surf_config_data', None)) or Path(source).stem.lower().startswith('surf_')
+    """Sky dome, menu stage, spawns and lights around converted world geometry; compile, validate and package the mod."""
+    prefix = materials.prefix; brushes = world['brushes']
+    centre = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
+    sky_base = lo[2]-2000
+    radius, height = fit_dome(world.get('boxes'), centre, sky_base, lo, hi)
+    sky = sky_dome(prefix+'_sky', prefix+'_sky_void', centre, radius, sky_base, floor=False, height=height)
+    sky.append(valve_box((centre[0]-radius, centre[1]-radius, sky_base-64), (centre[0]+radius, centre[1]+radius, sky_base), prefix+'_sky_void'))
+    floor = (Counter(m for b in brushes for m in re.findall(r' (\S+) \[ [^\]]*\] \[ [^\]]*\]', b)
+                     if not m.endswith(('_nodraw', '_clip', '_skyhole'))).most_common(1) or [(prefix+'_black', 0)])[0][0].removeprefix(prefix)
+    menu_z = sky_base+height+2000
+    stage = menu_stage(prefix, menu_z, floor)
+    middle = ((lo[0]+hi[0])/2, (lo[1]+hi[1])/2)
+    pak = materials.build(out, args, sky_image, void)
+    kill_z = args.kill_z if args.kill_z is not None else lo[2]-256
+    text = lights
+    text += entity(classname='mrvn_mp_menu', origin=f'0 0 {menu_z:g}', angles='0 -90 0', lightEnvironmentIndex='1')
+    spawninfo = []
+    for team, sites in teams.items():
+        for p in sites:
+            p = (p[0], p[1], p[2]+16)
+            yaw = (args.surf_config_data['startYaw'] if getattr(args, 'surf_config_data', None) else
+                   round(math.degrees(math.atan2(middle[1]-p[1], middle[0]-p[0]))))
+            spawninfo.append({'team': team, 'origin': p, 'yaw': yaw})
+            for cls in ('info_spawnpoint_human', 'info_spawnpoint_human_start'):
+                text += entity(classname=cls, origin=' '.join(f'{v:g}' for v in p), angles=f'0 {yaw} 0', teamnum=str(team))
+    text += entity(classname='info_player_start', origin=' '.join(f'{v:g}' for v in spawninfo[0]['origin']))
+    level = 'mp_source_'+args.name; path = out/(level+'.map')
+    (out/'spawns.json').write_text(json.dumps(spawninfo, indent=2))
+    def world_entity(cluster, luxel):
+        return '\n'.join(['{', '"classname" "worldspawn"', '"_lightmapscale" "16"', f'"_remap_luxelsize" "{luxel:g}"',
+                          '"_remap_lightmap_by_material" "1"', f'"_remap_lightmap_pagesize" "{LIGHTMAP_PAGE}"', '"_bouncescale" "1"',
+                          '"_skyocclusion" "1"', '"_skyminvisibility" "0.2"', '"_skysamples" "256"', '"_skyfixedpattern" "1"', f'"_meshcluster" "{cluster}"',
+                          *(['"_remap_props" "models/source_props.rsm"'] if world['charts'] else []), *world['keys'], *brushes,
+                          *world['patches'], *sky, *stage, '}'])+'\n'
+    cluster = args.mesh_cluster; luxel = args.luxel_size
+    while True:
+        path.write_text(world_entity(cluster, luxel)+text)
+        with (out/'compile.log').open('wb') as log:
+            subprocess.run([str(args.remap.resolve()), '-game', 'titanfall2', '-fs_basepath', str(out), '-bsp', str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+        meshes = len(load_records(path.with_suffix('.bsp'), inspect(path.with_suffix('.bsp')))[80])
+        pages = int(re.findall(r'(\d+) lightmap pages', (out/'compile.log').read_text(errors='ignore'))[-1])
+        print(f'{meshes} world meshes at cluster size {cluster}, {pages} lightmap pages at {luxel:g} units per luxel', flush=True)
+        if meshes <= MESH_BUDGET and pages <= MAX_LIGHTMAP_PAGES: break
+        # Meshes split by material and lightmap page: coarser cells first, then fewer lightmap pages.
+        if pages > MAX_LIGHTMAP_PAGES and luxel < MAX_LUXEL_SIZE: luxel = round(luxel*math.sqrt(pages/MAX_LIGHTMAP_PAGES)*1.1)
+        elif cluster < MAX_MESH_CLUSTER: cluster *= 2
+        elif luxel < MAX_LUXEL_SIZE: luxel *= 2
+        else: raise ValueError(f'{meshes} meshes and {pages} lightmap pages exceed the budgets')
+    report = validate(path.with_suffix('.bsp')); (out/'validation.json').write_text(json.dumps(report, indent=2))
+    if report['issues']: raise ValueError(report['issues'])
+    coverage = visibility_coverage(load_records(path.with_suffix('.bsp'), inspect(path.with_suffix('.bsp'))))
+    (out/'visibility-coverage.json').write_text(json.dumps(coverage, indent=2))
+    stbsp.write(out/(level+'.stbsp'), [(n, a['guid']) for a, n in pak.materials() if not n.endswith('_colpass') and not n.startswith('depth/')], lo[:2], hi[:2])
+    modname = 'MRVN.Source'+args.name.title().replace('_', ''); mod = out/modname; maps = mod/'mod/maps'; maps.mkdir(parents=True)
+    members = {}
+    for part in ('env', 'fx', 'script', 'snd', 'spawn'):
+        p = out/(level+'_'+part+'.ent')
+        if not p.exists(): p.write_bytes(b'ENTITIES01\n\0')
+    for p in out.glob(level+'*'):
+        if p.suffix in ('.bsp', '.ent', '.stbsp'):
+            shutil.copyfile(p, maps/p.name); members['maps/'+p.name] = p.read_bytes()
+    pack_files(members, mod/'vpk', 'client_'+level+'.bsp.pak000')
+    scripts = mod/'mod/scripts/vscripts/mp/levels'; scripts.mkdir(parents=True)
+    # Teleport triggers (jump maps' resets and course doors) are checked by script: no trigger brushes are compiled.
+    # "<-" is Squirrel's slot operator, so vector literals open with a space.
+    # Each trigger's brushes are listed once (AddBrush), then referenced by index range.
+    adds = trigger_script_data(teleports, pushes)
+    # For the Surf game mode (MRVN.Surf): the start room, as a box around the spawns, and a hook
+    # called on every teleport. Shared through the root table so the map works without the mode.
+    surf_export = surf_teleport = ''
+    if surf:
+        pts = np.array([s['origin'] for s in spawninfo])
+        smin = pts.min(0)-(384, 384, 64); smax = pts.max(0)+(384, 384, 512)
+        o = spawninfo[0]['origin']
+        config = getattr(args, 'surf_config_data', None)
+        if config is None:
+            config = dict(startMins=smin.tolist(), startMaxs=smax.tolist(), startOrigin=list(o), startYaw=spawninfo[0]['yaw'])
+            # Preserve Utopia's three tested end platforms and upper portal recess.
+            if level == 'mp_source_surf_utopia':
+                config['finishZones'] = [dict(mins=[-14352, -1024, -7700], maxs=[-13824, 1024, -6088]),
+                                         dict(mins=[-14352, -2048, -4484], maxs=[-13952, 2048, -4100])]
+        surf_export = surf_map_export(config)
+        surf_teleport = ('    // A teleport ends any surf: stand the pilot up at the destination.\n'
+                         '    if ( player in file.rampTimes )\n'
+                         '     StopSurfing( player )\n'
+                         '    if ( "MRVN_SurfTeleported" in getroottable() )\n'
+                         '     getroottable().MRVN_SurfTeleported( player, file.destinations[k], touchOrigin )\n')
+    (scripts/(level+'.nut')).write_text(('untyped\n' if surf else '')+'''global function CodeCallback_MapInit
+struct
+{
+ array<vector> mins
+ array<vector> maxs
+ array<vector> destinations
+ array<float> yaws
+ array<int> choices
+ array<int> brushFirst
+ array<int> brushEnd
+ array<vector> pushMins
+ array<vector> pushMaxs
+ array<vector> pushVelocities
+ array<int> pushBrushFirst
+ array<int> pushBrushEnd
+ array<vector> planeNormals
+ array<float> planeDists
+ array<int> planeEnds
+ table<entity, float> rampTimes
+ table<entity, vector> rampVelocities
+ table<entity, float> traceUntil
+ table<entity, vector> lastVel
+ table<entity, vector> teleportOrigins
+ table<entity, vector> lastOrigin
+ table<entity, float> lastTime
+} file
+void function CodeCallback_MapInit()
+{
+ ClassicMP_SetLevelIntro( ClassicMP_DefaultNoIntro_Setup, ClassicMP_DefaultNoIntro_GetLength() )
+ ClassicMP_ForceDisableEpilogue( true )
+ Riff_ForceTitanAvailability( eTitanAvailability.Never )
+TELEPORTS thread KillFallenPilots()
+SURF
+}
+// A convex trigger brush: its planes, outward normals, in world space.
+void function AddBrush( array<vector> normals, array<float> dists )
+{
+ for ( int i = 0; i < normals.len(); i++ )
+ {
+  file.planeNormals.append( normals[i] )
+  file.planeDists.append( dists[i] )
+ }
+ file.planeEnds.append( file.planeNormals.len() )
+}
+// Whether a standing pilot's hull (32x32x72, origin at the feet) overlaps any of brushes
+// [first, end); with none listed, the bounding box test alone decides.
+bool function TouchesBrushes( vector o, int first, int end )
+{
+ if ( first == end )
+  return true
+ vector c = o + <0, 0, 36>
+ for ( int b = first; b < end; b++ )
+ {
+  int p = 0
+  if ( b > 0 )
+   p = file.planeEnds[b - 1]
+  bool inside = true
+  for ( ; p < file.planeEnds[b]; p++ )
+  {
+   vector n = file.planeNormals[p]
+   float reach = fabs( n.x ) * 16.0 + fabs( n.y ) * 16.0 + fabs( n.z ) * 36.0
+   if ( DotProduct( n, c ) - file.planeDists[p] > reach )
+   {
+    inside = false
+    break
+   }
+  }
+  if ( inside )
+   return true
+ }
+ return false
+}
+// Clip the pilot's swept hull against the original convex trigger planes.
+// A two-unit reset floor can be crossed entirely between the 50 ms checks.
+float function BrushSweepFraction( vector from, vector to, int first, int end )
+{
+ float best = 2.0
+ for ( int b = first; b < end; b++ )
+ {
+  int p = b > 0 ? file.planeEnds[b - 1] : 0
+  float enter = 0.0
+  float leave = 1.0
+  bool miss = false
+  for ( ; p < file.planeEnds[b]; p++ )
+  {
+   vector n = file.planeNormals[p]
+   float reach = fabs( n.x ) * 16.0 + fabs( n.y ) * 16.0 + fabs( n.z ) * 36.0 + 0.25
+   float a = DotProduct( n, from + < 0, 0, 36 > ) - file.planeDists[p] - reach
+   float z = DotProduct( n, to + < 0, 0, 36 > ) - file.planeDists[p] - reach
+   if ( a > 0.0 && z > 0.0 ) { miss = true; break }
+   if ( a <= 0.0 && z <= 0.0 ) continue
+   float t = a / ( a - z )
+   if ( a > z ) enter = max( enter, t )
+   else leave = min( leave, t )
+   if ( enter > leave ) { miss = true; break }
+  }
+  if ( !miss ) best = min( best, enter )
+ }
+ return best <= 1.0 ? best : -1.0
+}
+float function BoxSweepFraction( vector from, vector to, vector lo, vector hi )
+{
+ array<float> a = [ from.x, from.y, from.z ]
+ array<float> z = [ to.x, to.y, to.z ]
+ array<float> mins = [ lo.x, lo.y, lo.z ]
+ array<float> maxs = [ hi.x, hi.y, hi.z ]
+ float enter = 0.0
+ float leave = 1.0
+ for ( int axis = 0; axis < 3; axis++ )
+ {
+  float delta = z[axis] - a[axis]
+  if ( fabs( delta ) < 0.00001 )
+  {
+   if ( a[axis] < mins[axis] || a[axis] > maxs[axis] ) return -1.0
+   continue
+  }
+  float t0 = ( mins[axis] - a[axis] ) / delta
+  float t1 = ( maxs[axis] - a[axis] ) / delta
+  enter = max( enter, min( t0, t1 ) )
+  leave = min( leave, max( t0, t1 ) )
+  if ( enter > leave ) return -1.0
+ }
+ return enter
+}
+void function AddTeleport( vector mins, vector maxs, vector destination, float yaw, int choices, int brushFirst, int brushEnd )
+{
+ // Players touch a trigger when their hull overlaps it; origins are at the feet.
+ file.mins.append( mins - <16.25, 16.25, 72.25> )
+ file.maxs.append( maxs + <16.25, 16.25, 0.25> )
+ file.destinations.append( destination )
+ file.yaws.append( yaw )
+ // The first of `choices` consecutive entries with this box; one is picked at random.
+ file.choices.append( choices )
+ file.brushFirst.append( brushFirst )
+ file.brushEnd.append( brushEnd )
+}
+void function AddPush( vector mins, vector maxs, vector velocity, int brushFirst, int brushEnd )
+{
+ file.pushMins.append( mins - <16, 16, 72> )
+ file.pushMaxs.append( maxs + <16, 16, 0> )
+ file.pushVelocities.append( velocity )
+ file.pushBrushFirst.append( brushFirst )
+ file.pushBrushEnd.append( brushEnd )
+}
+// trigger_push: while inside, the player moves at least the push speed along its direction.
+void function ApplyPushes( entity player, vector o )
+{
+ for ( int i = 0; i < file.pushMins.len(); i++ )
+ {
+  vector lo = file.pushMins[i]
+  vector hi = file.pushMaxs[i]
+  if ( o.x < lo.x || o.y < lo.y || o.z < lo.z || o.x > hi.x || o.y > hi.y || o.z > hi.z )
+   continue
+  if ( !TouchesBrushes( o, file.pushBrushFirst[i], file.pushBrushEnd[i] ) )
+   continue
+  vector push = file.pushVelocities[i]
+  float speed = Length( push )
+  vector dir = push / speed
+  vector v = player.GetVelocity()
+  float along = DotProduct( v, dir )
+  if ( along < speed )
+   player.SetVelocity( v + dir * ( speed - along ) )
+ }
+}
+void function KillFallenPilots()
+{
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   if ( !IsAlive( player ) )
+   {
+    if ( player in file.teleportOrigins ) delete file.teleportOrigins[player]
+    continue
+   }
+   vector o = player.GetOrigin()
+   vector previous = player in file.teleportOrigins ? file.teleportOrigins[player] : o
+   // External resets/respawns are discontinuities, not movement through the map.
+   if ( Distance( previous, o ) > max( 1024.0, Length( player.GetVelocity() ) * 0.15 ) ) previous = o
+   file.teleportOrigins[player] <- o
+   ApplyPushes( player, o )
+   int hit = -1
+   float nearest = 2.0
+   for ( int i = 0; i < file.mins.len(); i++ )
+   {
+    vector lo = file.mins[i]
+    vector hi = file.maxs[i]
+    // Cheap broad phase avoids temporary arrays for hundreds of distant triggers.
+    if ( ( previous.x < lo.x && o.x < lo.x ) || ( previous.x > hi.x && o.x > hi.x ) ||
+         ( previous.y < lo.y && o.y < lo.y ) || ( previous.y > hi.y && o.y > hi.y ) ||
+         ( previous.z < lo.z && o.z < lo.z ) || ( previous.z > hi.z && o.z > hi.z ) ) continue
+    float t = BoxSweepFraction( previous, o, lo, hi )
+    if ( t < 0.0 ) continue
+    if ( file.brushFirst[i] != file.brushEnd[i] )
+     t = BrushSweepFraction( previous, o, file.brushFirst[i], file.brushEnd[i] )
+    if ( t < 0.0 || t >= nearest ) continue
+    nearest = t
+    hit = i
+   }
+   if ( hit >= 0 )
+   {
+    int k = hit + RandomInt( file.choices[hit] )
+    vector touchOrigin = previous + ( o - previous ) * nearest
+    printl( "[surf] teleport " + player.GetPlayerName() + " " + previous + " -> " + file.destinations[k] + " trigger " + hit + " brush " + file.brushFirst[hit] + " touch " + touchOrigin + " v " + player.GetVelocity() )
+    player.SetOrigin( file.destinations[k] )
+    player.SetAngles( <0, file.yaws[k], 0> )
+    player.SetVelocity( <0, 0, 0> )
+    file.teleportOrigins[player] <- file.destinations[k]
+SURF_TELEPORT   }
+   else if ( o.z < KILL_Z )
+    player.TakeDamage( 10000, null, null, { damageSourceId = eDamageSourceId.fall } )
+  }
+  wait 0.05
+ }
+}
+
+'''.replace('KILL_Z', f'{kill_z:.1f}').replace('TELEPORTS', adds).replace('SURF_TELEPORT', surf_teleport).replace('SURF', surf_export+(' thread SurfRamps()' if surf else '')+(' thread SurfTrace()\n thread SurfEvents()' if surf and getattr(args, 'surf_trace', False) else ''))
+      + ((SURF_SCRIPT if getattr(args, 'rampbug_fix', False) else SURF_SCRIPT.replace(RAMPBUG_CALL, '')) if surf else '') + (SURF_TRACE_SCRIPT if surf and getattr(args, 'surf_trace', False) else ''))
+    paks = mod/'paks'; paks.mkdir(); pakname = 'source_'+args.name+'.rpak'
+    # Installed as <level>_patch.rpak, which the engine requests right after the level's pak, so it loads and unloads with the level. A Postload pak is never unloaded, but Coliseum, whose shader sets its materials use, is reloaded on every map change; the stale references crashed materialsystem_dx11 on the next map.
+    shutil.copyfile(out/'pak-build'/pakname, paks/(level+'_patch.rpak'))
+    aliases = {level+'.rpak': 'mp_coliseum.rpak'}
+    # The level asks for <level>_loadscreen.rpak; without a capture of its own it gets Coliseum's.
+    if getattr(args, 'loadscreen', None):
+        if not args.loadscreen_template: raise SystemExit('--loadscreen needs --loadscreen-template')
+        shutil.copyfile(build_loadscreen(out, args, level), paks/(level+'_loadscreen.rpak'))
+    else:
+        aliases[level+'_loadscreen.rpak'] = 'mp_coliseum_loadscreen.rpak'
+    (paks/'rpak.json').write_text(json.dumps({'Aliases': aliases}, indent=2))
+    display = args.display_name or args.name
+    resource = mod/'mod/resource'; resource.mkdir(parents=True)
+    description = getattr(args, 'description', None) or 'Port of '+source.stem
+    tokens = {level: display, level+'_ALLCAPS': display.upper(), level+'_CLASSIC': display,
+              level+'_CLASSIC_DESC': description, level+'_DESC': description}
+    body = ''.join(f'\t\t"{k}" "{v}"\n' for k, v in tokens.items())
+    (resource/(level+'_english.txt')).write_bytes(b'\xff\xfe'+('"lang"\n{\n\t"Language" "english"\n\t"Tokens"\n\t{\n'+body+'\t}\n}\n').encode('utf-16-le'))
+    (mod/'mod.json').write_text(json.dumps({'Name': modname, 'Version': VERSION, 'LoadPriority': 200, 'RequiredOnClient': True,
+        'Description': display+'. Local test port of a Source engine map', 'Localisation': ['resource/'+level+'_%language%.txt'],
+        'Scripts': [{'Path': 'mp/levels/'+level+'.nut', 'RunOn': 'SERVER && MP && MAP_'+level}]}, indent=2))
+    readme = f'''# {display}: Source engine to Titanfall 2 test port
+
+Source map: {source.name}. Original game assets belong to their owners (Valve).
+Local conversion by MRVN-Radiant, for local testing only: no redistribution licence is granted.
+
+Extract {modname} into R2Northstar/mods and run `map {level} tdm`.
+
+{converted}'''
+    (mod/'README.md').write_text(readme); (out/'README.md').write_text(readme)
+    metadata = {'level': level, 'source': str(source), 'input_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), **metadata,
+                'world_meshes': meshes, 'mesh_cluster': cluster, 'luxel_size': luxel, 'lightmap_pages': pages, 'teleports': len(teleports), 'pushes': len(pushes), 'surf': surf, 'kill_z': kill_z, 'engine_verified': False}
+    if getattr(args, 'surf_config_data', None):
+        metadata['surf_config'] = args.surf_config_data
+    (out/'conversion.json').write_text(json.dumps(metadata, indent=2))
+    with zipfile.ZipFile(out/(modname+'-'+VERSION+'.zip'), 'x', zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(mod.rglob('*')):
+            if p.is_file(): z.write(p, p.relative_to(out))
+    return metadata
+
+
+# Ramp bugs happen in Source surf too, so the fix is opt-in (--rampbug-fix).
+RAMPBUG_CALL = '''   if ( surfing && player in file.lastVel )
+    FixRampBug( player, o )
+'''
+SURF_SCRIPT = '''
+// Surf ramps. Standing, Titanfall counts a slope as ground well past Source's 45.6 degree
+// walkable limit: ground movement stops a pilot sliding along a 52 degree ramp within half a
+// second. Crouched, the same ramp is not ground (tested in Northstar): the pilot keeps their
+// speed along it and slides down it as in Source. So on anything steeper than Source's limit
+// pilots are crouched, with no ground friction, until a quarter second after leaving it.
+// Two Titanfall moves fight surfing there: auto-mantle (a rising ramp ahead reads as a wall
+// with a ledge, and the pilot is vaulted forward) and slides (crouching at speed on a frame
+// counted as ground starts one, with its forward boost). Both are cancelled on a ramp and the
+// previous frame's velocity restored; each cancel is logged as [surf].
+// Titanfall also moves a pilot up a rising ramp without turning the climb into velocity (play
+// trace on surf_utopia: rising 1,370 units/s while reporting -377), so pilots left ramps with no
+// upward speed. Source's ClipVelocity is applied instead: within reach of the ramp, the part of
+// the velocity going into it is removed every frame.
+// Ramp bugs: crossing the seam between two brushes of one ramp, Titanfall's per-brush collision
+// can catch the next brush's hidden back face (surf_utopia's curved ramp end: 2,686 units/s
+// forward became 459 in one tick, with nothing in the way). As surf servers' rampbug fixes do,
+// a big speed loss while surfing is undone unless a hull sweep along the last tick's motion
+// hits a real wall, floor or ceiling; it is logged as [surf].
+void function SurfRamps()
+{
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   bool surfing = player in file.rampTimes
+   if ( !IsAlive( player ) )
+   {
+    if ( surfing )
+     StopSurfing( player )
+    continue
+   }
+   vector o = player.GetOrigin()
+   if ( surfing && player in file.lastVel )
+    FixRampBug( player, o )
+   // A line from the feet: on a 52 degree ramp the surface under the centre is up to 21 units below them.
+   TraceResults r = TraceLine( o + <0, 0, 4>, o - <0, 0, 40>, player, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
+   if ( r.fraction < 1.0 && r.surfaceNormal.z > 0.05 && r.surfaceNormal.z < 0.7 )
+   {
+    if ( !surfing )
+    {
+     player.ForceCrouch()
+     player.SetGroundFrictionScale( 0.0 )
+    }
+    else if ( player.IsMantling() || player.IsTraversing() )
+    {
+     printl( "[surf] cancelled a mantle at " + o )
+     player.ClearTraverse()
+     player.SetVelocity( file.rampVelocities[player] )
+    }
+    else if ( player.IsSliding() && Length( player.GetVelocity() ) > Length( file.rampVelocities[player] ) + 40.0 )
+    {
+     printl( "[surf] cancelled a slide boost at " + o )
+     player.SetVelocity( file.rampVelocities[player] )
+    }
+    // The line starts 4 units above the feet and is 44 long; on the ramp the surface under the
+    // centre is at most 21 units below the feet.
+    if ( r.fraction * 44.0 - 4.0 < 24.0 )
+    {
+     vector v = player.GetVelocity()
+     float into = DotProduct( v, r.surfaceNormal )
+     if ( into < 0.0 )
+      player.SetVelocity( v - r.surfaceNormal * into )
+    }
+    file.rampTimes[player] <- Time()
+    file.rampVelocities[player] <- player.GetVelocity()
+    file.traceUntil[player] <- Time() + 3.0
+   }
+   else if ( surfing && Time() - file.rampTimes[player] > 0.25 )
+    StopSurfing( player )
+   if ( player in file.rampTimes )
+   {
+    file.lastVel[player] <- player.GetVelocity()
+    file.lastOrigin[player] <- o
+    file.lastTime[player] <- Time()
+   }
+  }
+  WaitFrame()
+ }
+}
+void function FixRampBug( entity player, vector o )
+{
+ vector prev = file.lastVel[player]
+ vector cur = player.GetVelocity()
+ if ( Length( prev ) - Length( cur ) < 400.0 )
+  return
+ float dt = Time() - file.lastTime[player]
+ vector from = file.lastOrigin[player]
+ // A teleport (the jail, a stage reset) also zeroes velocity: leave those alone.
+ if ( Distance( o, from ) > Length( prev ) * dt + 200.0 )
+  return
+ TraceResults h = TraceHull( from, from + prev * dt, < -16, -16, 0 >, < 16, 16, 48 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+ if ( h.fraction < 1.0 && ( h.surfaceNormal.z <= 0.05 || h.surfaceNormal.z >= 0.7 ) )
+  return
+ // Pilot gravity: free flight in the traces loses about 600 units/s of vertical speed a second.
+ vector fixed = prev - < 0, 0, 600.0 * dt >
+ if ( h.fraction < 1.0 )
+ {
+  float into = DotProduct( fixed, h.surfaceNormal )
+  if ( into < 0.0 )
+   fixed = fixed - h.surfaceNormal * into
+ }
+ printl( "[surf] fixed a ramp bug at " + o + ": " + cur + " -> " + fixed )
+ player.SetVelocity( fixed )
+}
+void function StopSurfing( entity player )
+{
+ delete file.rampTimes[player]
+ delete file.rampVelocities[player]
+ if ( player in file.lastVel )
+ {
+  delete file.lastVel[player]
+  delete file.lastOrigin[player]
+  delete file.lastTime[player]
+ }
+ player.UnforceCrouch()
+ player.SetGroundFrictionScale( 1.0 )
+ // Lifting the forced crouch leaves a Titanfall pilot crouched until they jump or crouch
+ // again, so stand them up as Northstar's bleedout does, if there is headroom to stand.
+ TraceResults h = TraceHull( player.GetOrigin(), player.GetOrigin() + <0, 0, 1>, < -16, -16, 0 >, < 16, 16, 72 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+ if ( !h.startSolid )
+  thread StandUp( player )
+}
+void function StandUp( entity player )
+{
+ player.EndSignal( "OnDestroy" )
+ player.ForceStand()
+ WaitFrame()
+ player.UnforceStand()
+}
+'''
+
+# --surf-trace: while a pilot is on a ramp or left one in the last 3 s, log their state ten
+# times a second as "[surftrace] time origin velocity ground crouched sliding mantling normal".
+# Demos crash Northstar 1.31 on stop, so this is how play-tested surf problems get diagnosed.
+SURF_TRACE_SCRIPT = '''
+void function SurfTrace()
+{
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   if ( !IsAlive( player ) || !( player in file.traceUntil ) || Time() > file.traceUntil[player] )
+    continue
+   vector o = player.GetOrigin()
+   TraceResults r = TraceLine( o + <0, 0, 4>, o - <0, 0, 40>, player, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
+   string n = "-"
+   if ( r.fraction < 1.0 )
+    n = string( r.surfaceNormal )
+   printl( "[surftrace] " + Time() + " o=" + o + " v=" + player.GetVelocity() + " g=" + player.IsOnGround() + " c=" + player.IsCrouched()
+    + " s=" + player.IsSliding() + " m=" + player.IsMantling() + " n=" + n )
+  }
+  wait 0.1
+ }
+}
+// Every frame near a ramp: a velocity change over 400 units/s in one frame is logged with what a
+// pilot-sized sweep along the previous frame's motion hits.
+void function SurfEvents()
+{
+ table<entity, vector> lastV
+ table<entity, vector> lastO
+ while ( true )
+ {
+  foreach ( entity player in GetPlayerArray() )
+  {
+   if ( !IsAlive( player ) || !( player in file.traceUntil ) || Time() > file.traceUntil[player] )
+   {
+    if ( player in lastV )
+    {
+     delete lastV[player]
+     delete lastO[player]
+    }
+    continue
+   }
+   vector o = player.GetOrigin()
+   vector v = player.GetVelocity()
+   if ( player in lastV && Length( v - lastV[player] ) > 400.0 )
+   {
+    vector from = lastO[player]
+    vector to = from + lastV[player] * 0.05
+    TraceResults h = TraceHull( from, to, < -16, -16, 0 >, < 16, 16, 48 >, player, TRACE_MASK_PLAYERSOLID, TRACE_COLLISION_GROUP_PLAYER )
+    string what = "nothing"
+    if ( h.fraction < 1.0 )
+    {
+     what = "hit n=" + h.surfaceNormal + " at=" + h.endPos + " frac=" + h.fraction
+     if ( IsValid( h.hitEnt ) )
+      what += " ent=" + h.hitEnt.GetClassName()
+    }
+    printl( "[surfevent] " + Time() + " o=" + o + " v " + lastV[player] + " -> " + v + " g=" + player.IsOnGround() + " c=" + player.IsCrouched()
+     + " s=" + player.IsSliding() + " m=" + player.IsMantling() + " w=" + player.IsWallRunning() + " sweep: " + what )
+   }
+   lastV[player] <- v
+   lastO[player] <- o
+  }
+  WaitFrame()
+ }
+}
+'''
+
+
+def trigger_bounds(bsp, e):
+    """World AABB of a brush model after the entity's Source rotation/translation."""
+    model = bsp.models[int(e['model'][1:])]
+    rotation = angle_matrix(*map(float, e.get('angles', '0 0 0').split()))
+    corners = np.array([(x,y,z) for x in (model[0],model[3]) for y in (model[1],model[4]) for z in (model[2],model[5])])
+    points = corners @ rotation.T + np.array(origin(e))
+    return points.min(0), points.max(0)
+
+
+def trigger_brushes(bsp, e):
+    """A brush entity's convex brushes as lists of world (normal, dist) planes.
+
+    Triggers are often not boxes: surf_utopia's are thin slabs along its slopes, whose
+    bounding boxes take in the air above the next ramp."""
+    if not hasattr(bsp, 'brushes'): return []
+    offset = np.array(origin(e)); out = []
+    rotation = angle_matrix(*map(float, e.get('angles', '0 0 0').split()))
+    for k in bsp.model_brushes(int(e['model'][1:])):
+        out.append([(tuple(float(v) for v in rotation @ side.normal), float(side.dist + np.dot(rotation @ side.normal, offset)))
+                    for side in bsp.brushes[k].sides])
+    return out
+
+
+def teleports(bsp, target_overrides=None):
+    """(mins, maxs, destination, yaw, choices, brushes) for each trigger_teleport with a destination."""
+    targets = {e.get('targetname'): e for e in bsp.entities if e.get('targetname')}
+    target_overrides = target_overrides or {}
+    for replacement in target_overrides.values():
+        if replacement not in targets:
+            raise ValueError('teleport override destination not found: '+replacement)
+    # Destinations a logic_case sets with "<trigger>,AddOutput,target <name>" (surf_utopia's jail
+    # picks a random cell this way); the trigger's own target is then a placeholder.
+    chosen = {}
+    for e in bsp.entities:
+        for key, value in e.items():
+            if not key.startswith('OnCase'): continue
+            m = re.match(r'([^,\x1b]+)[,\x1b]AddOutput[,\x1b]target (\S+?)[,\x1b]', value)
+            if m and m[2] in targets: chosen.setdefault(m[1], []).append(targets[m[2]])
+    out = []
+    for e in bsp.entities:
+        if e.get('classname') != 'trigger_teleport' or not e.get('model', '').startswith('*'): continue
+        dests = chosen.get(e.get('targetname'), [])
+        target = target_overrides.get(e.get('target'), e.get('target'))
+        if not dests and target in targets: dests = [targets[target]]
+        lo, hi = trigger_bounds(bsp, e); brushes = trigger_brushes(bsp, e)
+        # Consecutive entries with the same box are alternatives; the level script picks one at random.
+        for dest in dests:
+            yaw = float((dest.get('angles', '0 0 0').split()+['0', '0'])[1])
+            out.append((lo, hi, origin(dest), yaw, len(dests), brushes))
+    return out
+
+
+def pushes(bsp):
+    """(mins, maxs, velocity, brushes) for each player trigger_push (spawnflags 1) that starts enabled."""
+    out = []
+    for e in bsp.entities:
+        if e.get('classname') != 'trigger_push' or not e.get('model', '').startswith('*'): continue
+        if not int(e.get('spawnflags', '0')) & 1 or e.get('StartDisabled') == '1' or float(e.get('speed', '0')) <= 0: continue
+        lo, hi = trigger_bounds(bsp, e)
+        pitch, yaw = (float(v) for v in (e.get('pushdir', '0 0 0').split()+['0', '0'])[:2])
+        p, y = math.radians(pitch), math.radians(yaw)
+        # Source angles: positive pitch looks down.
+        direction = np.array((math.cos(p)*math.cos(y), math.cos(p)*math.sin(y), -math.sin(p)))
+        out.append((lo, hi, direction*float(e['speed']), trigger_brushes(bsp, e)))
+    return out
+
+
+def nodes_or_all(bsp):
+    return [origin(e) for e in bsp.entities if e.get('classname') in NODE_CLASSES | {'info_player_start', 'info_player_teamspawn'}]
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--bsp', type=Path, required=True)
+    p.add_argument('--game-dir', type=Path, action='append', required=True,
+                   help='Game content folder holding *_dir.vpk files, e.g. .../Half-Life 2/hl2; repeat for more')
+    p.add_argument('--name', required=True, type=lambda v: v if v.replace('_', '').isalnum() and v.islower() else p.error('--name must be lowercase letters, digits and _'),
+                   help='Map becomes mp_source_NAME')
+    for name in ('output', 'remap', 'repak', 'material-template'): p.add_argument('--'+name, type=Path, required=True)
+    p.add_argument('--material-templates', type=Path, help='Directory from extract_material_templates.py: translucent and alpha-tested materials draw as such')
+    p.add_argument('--display-name')
+    p.add_argument('--description', help='Map description shown in the lobby and loading screen (default: "Port of <bsp>")')
+    p.add_argument('--loadscreen', type=Path, help='1920x1080 image for the loading screen; without it the map shows the Coliseum one')
+    p.add_argument('--loadscreen-template', type=Path, help='Base path of a retail loadscreen _gen material .json/.uber pair')
+    p.add_argument('--spawns', type=float, nargs=4, metavar=('X1', 'Y1', 'X2', 'Y2'), help='Centre of each team\'s spawn area, Source units')
+    p.add_argument('--kill-z', type=float)
+    p.add_argument('--mesh-cluster', type=int, default=MESH_CLUSTER)
+    p.add_argument('--luxel-size', type=float, default=LUXEL_SIZE, help='World units per lightmap texel to start from')
+    p.add_argument('--surf', action=argparse.BooleanOptionalAction, default=None,
+                   help='No ground friction on slopes steeper than Source allows standing on, so surf ramps work (default: on for surf_ maps)')
+    p.add_argument('--surf-config', type=Path, help='JSON with explicit Surf start/finish zones, checkpoint destinations and optional spawns')
+    p.add_argument('--surf-trace', action='store_true', help='Log surfing pilot position, velocity and state to the console 10 times a second (play-test diagnosis)')
+    p.add_argument('--rampbug-fix', action='store_true', help='Undo ramp bugs (seam snags between ramp brushes), as surf servers\' rampbug plugins do; off by default, as in Source')
+    p.add_argument('--no-props', dest='props', action='store_false', help='Leave static props out')
+    print(json.dumps(build(p.parse_args()), indent=2))

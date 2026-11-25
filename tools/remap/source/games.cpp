@@ -79,6 +79,11 @@ struct game_titanfallonline : game_t {
             {"LitFlatGeneric", MASK_LIT_FLAT_GENERIC,                 0,                0,                  0,            0,                 0},
             {"LitBumpGeneric", MASK_LIT_BUMP_GENERIC,                 0,                0,                  0,            0,                 0},
             {"UnlitTSGeneric", MASK_UNLIT_TS_GENERIC,                 0,                0,                  0,            0,                 0},
+            // TF1's Water shader uses lit-flat vertices above the surface and
+            // an unlit, reverse-facing material below it (native mask 0x3008).
+            {"Water", MASK_LIT_FLAT_GENERIC | 0x3008, 0x600, CONTENTS_WATER, CONTENTS_SOLID, 0, 0},
+            {"WaterBeneath", MASK_UNLIT_GENERIC | 0x3008 | S_TF1_UNDERWATER_DRAW,
+                S_MESH_UNKNOWN | 0x600, 0, CONTENTS_SOLID, 0, 0},
         },
         // Surface Flags
         {
@@ -129,6 +134,10 @@ struct game_titanfallonline : game_t {
             {"sky",           C_SKY,          0},
             {"decal",       C_DECAL,          0},
             {"trans", C_TRANSLUCENT,          0},
+            {"alphashadow", C_ALPHASHADOW,    0},  /* alpha-tested: casts alpha shadows, hides no faces */
+            {"hint",         C_HINT,          0},
+            {"skip",         C_SKIP,          0},
+            {"areaportal", C_AREAPORTAL,       0},
         }
     }{}
 };
@@ -226,6 +235,10 @@ struct game_titanfall2 : game_t {
             {"sky",           C_SKY,          0},
             {"decal",       C_DECAL,          0},
             {"trans", C_TRANSLUCENT,          0},
+            {"alphashadow", C_ALPHASHADOW,    0},  /* alpha-tested: casts alpha shadows, hides no faces */
+            {"hint",         C_HINT,          0},
+            {"skip",         C_SKIP,          0},
+            {"areaportal", C_AREAPORTAL,       0},
         }
     }{}
 };
@@ -327,6 +340,7 @@ struct game_apexlegends : game_t {
             {"sky",           C_SKY,          0},
             {"decal",       C_DECAL,          0},
             {"trans", C_TRANSLUCENT,          0},
+            {"alphashadow", C_ALPHASHADOW,    0},  /* alpha-tested: casts alpha shadows, hides no faces */
         }
     }{}
 };

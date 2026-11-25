@@ -1321,8 +1321,8 @@ static bool SideInBrush( side_t& side, const brush_t& b ){
 		return true;
 	}
 
-	/* ignore culled sides and translucent brushes */
-	if ( side.culled || ( b.compileFlags & C_TRANSLUCENT ) ) {
+	/* ignore culled sides and translucent or alpha-tested brushes */
+	if ( side.culled || ( b.compileFlags & ( C_TRANSLUCENT | C_ALPHASHADOW ) ) ) {
 		return false;
 	}
 
@@ -1503,7 +1503,7 @@ static void CullSides( entity_t& e ){
 					}
 
 					/* cull face 1 */
-					if ( !side2.culled && !( side2.compileFlags & C_TRANSLUCENT ) && !( side2.compileFlags & C_NODRAW ) ) {
+					if ( !side2.culled && !( side2.compileFlags & ( C_TRANSLUCENT | C_ALPHASHADOW ) ) && !( side2.compileFlags & C_NODRAW ) ) {
 						side1.culled = true;
 						g_numCoinFaces++;
 					}
@@ -1513,7 +1513,7 @@ static void CullSides( entity_t& e ){
 					}
 
 					/* cull face 2 */
-					if ( !side1.culled && !( side1.compileFlags & C_TRANSLUCENT ) && !( side1.compileFlags & C_NODRAW ) ) {
+					if ( !side1.culled && !( side1.compileFlags & ( C_TRANSLUCENT | C_ALPHASHADOW ) ) && !( side1.compileFlags & C_NODRAW ) ) {
 						side2.culled = true;
 						g_numCoinFaces++;
 					}

@@ -56,7 +56,9 @@ void Titanfall::EmitEntity(const entity_t &e) {
     #define ENT_STARTS(x)      striEqualPrefix(classname, x)
     #define EDITORCLASS(x, y)  if (ENT_IS(y)) { e2.setKeyValue("classname", x); e2.setKeyValue("editorclass", y); }
     // env
-    if (ENT_IS("env_fog_controler")
+    // Retail spells it env_fog_controller; the old misspelling is still accepted.
+    if (ENT_IS("env_fog_controller")
+     || ENT_IS("env_fog_controler")
      || ENT_IS("sky_camera")) {
         dest = ENT_ENV;
     // fx
@@ -88,8 +90,9 @@ void Titanfall::EmitEntity(const entity_t &e) {
     } else if (ENT_IS("ambient_generic")) {
         dest = ENT_SND;
     // spawn
+    // Every retail TF1 map keeps its CTF flag spawns in the BSP entity lump.
     } else if (ENT_IS("info_frontline")
-            || ENT_STARTS("info_spawnpoint_")) {
+            || (ENT_STARTS("info_spawnpoint_") && !ENT_IS("info_spawnpoint_flag"))) {
         dest = ENT_SPAWN;
     // TODO: filter out editor only entities *just* before this else
     // e.g. prop_static, env_cubemap, info_lightprobe, light (static worldlights), etc.
@@ -208,7 +211,12 @@ void Titanfall::EmitTriggerBrushPlaneKeyValues(entity_t &e) {
     BeginModel()
     Creates a new model entry
 */
+namespace {
+const entity_t *modelEntity = nullptr;  // the entity between BeginModel and EndModel
+}
+
 void Titanfall::BeginModel(entity_t &entity) {
+    modelEntity = &entity;
     Sys_FPrintf( SYS_VRB, "   BeginModel: \"%s\"\n", entity.classname() );
 
     Titanfall::Model_t &model = Titanfall::Bsp::models.emplace_back();
@@ -231,9 +239,34 @@ void Titanfall::EndModel() {
     Titanfall::Model_t &model = Titanfall::Bsp::models.back();
     model.meshCount = (uint32_t)Titanfall::Bsp::meshes.size() - model.firstMesh;
 
-    for (Titanfall::MeshBounds_t &meshBounds : Titanfall::Bsp::meshBounds) {
+    for (std::size_t i = model.firstMesh; i < model.firstMesh + model.meshCount; ++i) {
+        const Titanfall::MeshBounds_t &meshBounds = Titanfall::Bsp::meshBounds.at(i);
         model.minmax.extend(meshBounds.origin - meshBounds.extents);
         model.minmax.extend(meshBounds.origin + meshBounds.extents);
+    }
+    // A brush entity with no drawn surface (a nodraw trigger) still needs real
+    // bounds: the engine rejects the inverted empty box ("backwards mins/maxs").
+    if (!model.meshCount && modelEntity) {
+        for (const brush_t &brush : modelEntity->brushes)
+            if (brush.minmax.mins.x() <= brush.minmax.maxs.x()) model.minmax.extend(brush.minmax);
+        for (const parseMesh_t *patch = modelEntity->patches; patch; patch = patch->next)
+            for (int i = 0; i < patch->mesh.width * patch->mesh.height; ++i)
+                model.minmax.extend(patch->mesh.verts[i].xyz);
+    }
+    if (model.minmax.mins.x() > model.minmax.maxs.x())  // nothing at all: a point, not an inverted box
+        model.minmax.extend(Vector3(0, 0, 0));
+    modelEntity = nullptr;
+
+    // R1Delta refuses TF1 maps past the Source coordinate limit ("Map coordinate
+    // extents are too large!!"); TFO loads them. Retail stays inside it.
+    if (g_game->bspVersion == 29 && Titanfall::Bsp::models.size() == 1 && model.meshCount) {
+        constexpr float limit = 16384.0f;
+        for (int axis = 0; axis < 3; ++axis)
+            if (model.minmax.mins[axis] < -limit || model.minmax.maxs[axis] > limit) {
+                Sys_Warning("World extends to %.0f..%.0f on axis %d, past +/-16384: R1Delta will not load it\n",
+                            model.minmax.mins[axis], model.minmax.maxs[axis], axis);
+                break;
+            }
     }
 
     Sys_FPrintf( SYS_VRB, "       numMeshes: %i\n", model.meshCount );

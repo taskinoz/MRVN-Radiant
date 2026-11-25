@@ -24,7 +24,10 @@
 
 #include "../remap.h"
 #include "../bspfile_abstract.h"
+#include "../respawn/lump_versions.h"
+#include "../respawn/stage_timer.h"
 #include <ctime>
+#include "mp_menu.h"
 
 
 
@@ -75,14 +78,14 @@ void WriteR2BSPFile(const char *filename) {
         SafeWrite(file, &message, sizeof(message));
     }
     {
-        char message[64];
+        char message[64]{};
         strncpy(message, StringOutputStream(64)("Version:        ", Q3MAP_VERSION).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
     {
         time_t t;
         time(&t);
-        char message[64];
+        char message[64]{};
         strncpy(message, StringOutputStream(64)("Time:           ", asctime(localtime(&t))).c_str(), 63);
         SafeWrite(file, &message, sizeof(message));
     }
@@ -93,9 +96,16 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_PLANES],            Titanfall::Bsp::planes);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA],      Titanfall::Bsp::textureData);
     AddLump(file, header.lumps[R2_LUMP_VERTICES],          Titanfall::Bsp::vertices);
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_PARENT_INFOS], Titanfall2::Bsp::lightprobeParentInfos);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_BSP_NODES],    Titanfall2::Bsp::lightprobeBspNodes);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_BSP_REF_IDS],  Titanfall2::Bsp::lightprobeBspRefIds);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_ENVIRONMENTS],   Titanfall2::Bsp::shadowEnvironments);
+    }
     AddLump(file, header.lumps[R2_LUMP_MODELS],            Titanfall::Bsp::models);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_NORMALS],    Titanfall::Bsp::vertexNormals);
     AddLump(file, header.lumps[R2_LUMP_ENTITY_PARTITIONS], Titanfall::Bsp::entityPartitions);
+    AddLump(file, header.lumps[R2_LUMP_PHYSICS_COLLIDE],   std::vector<int32_t>(Titanfall2::Bsp::physicsCollide.begin(), Titanfall2::Bsp::physicsCollide.end()));
     // GameLump
     {
         header.lumps[R2_LUMP_GAME_LUMP].offset = ftell(file);
@@ -120,9 +130,14 @@ void WriteR2BSPFile(const char *filename) {
         SafeWrite(file, Titanfall2::Bsp::gameLumpProps.data(), sizeof(Titanfall2::GameLumpProp_t) * Titanfall2::Bsp::gameLumpProps.size());
         SafeWrite(file, &Titanfall2::Bsp::gameLumpUnknownHeader, sizeof(Titanfall2::GameLumpUnknownHeader_t));
     }
+    AddLump(file, header.lumps[R2_LUMP_PAKFILE],                   Titanfall2::Bsp::pakfile);
+    AddLump(file, header.lumps[R2_LUMP_CUBEMAPS],                  Titanfall2::Bsp::cubemaps);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA_STRING_DATA],  Titanfall::Bsp::textureDataData);
     AddLump(file, header.lumps[R2_LUMP_TEXTURE_DATA_STRING_TABLE], Titanfall::Bsp::textureDataTable);
-    AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],              Titanfall2::Bsp::worldLights_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],          Titanfall2::Bsp::worldLights);
+    else
+        AddLump(file, header.lumps[R2_LUMP_WORLD_LIGHTS],          Titanfall2::Bsp::worldLights_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_VERTEX_UNLIT],              Titanfall::Bsp::vertexUnlitVertices);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_LIT_FLAT],           Titanfall::Bsp::vertexLitFlatVertices);
     AddLump(file, header.lumps[R2_LUMP_VERTEX_LIT_BUMP],           Titanfall::Bsp::vertexLitBumpVertices);
@@ -132,18 +147,43 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_MESHES],                    Titanfall::Bsp::meshes);
     AddLump(file, header.lumps[R2_LUMP_MESH_BOUNDS],               Titanfall::Bsp::meshBounds);
     AddLump(file, header.lumps[R2_LUMP_MATERIAL_SORT],             Titanfall::Bsp::materialSorts);
-    AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],          Titanfall2::Bsp::lightMapHeaders_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],      Titanfall2::Bsp::lightmapHeaders);
+    else
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_HEADERS],      Titanfall2::Bsp::lightMapHeaders_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CM_GRID],                   Titanfall::Bsp::cmGrid);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_TRIS],              Titanfall::Bsp::tricollTriangles);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_NODES],             Titanfall::Bsp::tricollNodes);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_HEADERS],           Titanfall::Bsp::tricollHeaders);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_BEVEL_STARTS],      Titanfall::Bsp::tricollBevelStarts);
+    AddLump(file, header.lumps[R2_LUMP_TRICOLL_BEVEL_INDICES],      Titanfall::Bsp::tricollBevelIndices);
     AddLump(file, header.lumps[R2_LUMP_CM_GRID_CELLS],             Titanfall::Bsp::cmGridCells);
     AddLump(file, header.lumps[R2_LUMP_CM_GEO_SETS],               Titanfall::Bsp::cmGeoSets);
     AddLump(file, header.lumps[R2_LUMP_CM_GEO_SET_BOUNDS],         Titanfall::Bsp::cmGeoSetBounds);
+    AddLump(file, header.lumps[R2_LUMP_CM_PRIMITIVES],             Titanfall::Bsp::cmPrimitives);
+    AddLump(file, header.lumps[R2_LUMP_CM_PRIMITIVE_BOUNDS],       Titanfall::Bsp::cmPrimitiveBounds);
     AddLump(file, header.lumps[R2_LUMP_CM_UNIQUE_CONTENTS],        Titanfall::Bsp::cmUniqueContents);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSHES],                Titanfall::Bsp::cmBrushes);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_PROPS],       Titanfall::Bsp::cmBrushSideProperties);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_PLANES],      Titanfall::Bsp::cmBrushSidePlaneOffsets);
     AddLump(file, header.lumps[R2_LUMP_CM_BRUSH_SIDE_TEX_VECS],    Titanfall::Bsp::cmBrushSideTexVecs);
-    AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],         Titanfall2::Bsp::lightMapDataSky_stub);  // stub
-    AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],            Titanfall::Bsp::csmAABBNodes_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightmapDataSky);
+    else
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_SKY],     Titanfall2::Bsp::lightMapDataSky_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],        Titanfall2::Bsp::csmAABBNodes);
+        AddLump(file, header.lumps[R2_LUMP_CSM_OBJ_REFERENCES],    Titanfall2::Bsp::csmObjReferences);
+    } else
+        AddLump(file, header.lumps[R2_LUMP_CSM_AABB_NODES],        Titanfall::Bsp::csmAABBNodes_stub);  // stub
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBES],           Titanfall2::Bsp::lightprobes);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_TREE],       Titanfall2::Bsp::lightprobeTree);
+        AddLump(file, header.lumps[R2_LUMP_LIGHTPROBE_REFERENCES], Titanfall2::Bsp::lightprobeReferences);
+        AddLump(file, header.lumps[R2_LUMP_STATIC_PROP_LIGHTPROBE_INDICES], Titanfall2::Bsp::staticPropLightprobeIndices);
+    }
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_REAL_TIME_LIGHTS], Titanfall2::Bsp::lightmapDataRtl);
     AddLump(file, header.lumps[R2_LUMP_CELL_BSP_NODES],            Titanfall::Bsp::cellBSPNodes_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_CELLS],                     Titanfall::Bsp::cells_stub);  // stub
     AddLump(file, header.lumps[R2_LUMP_PORTALS],                   Titanfall::Bsp::portals_stub);  // stub
@@ -160,18 +200,32 @@ void WriteR2BSPFile(const char *filename) {
     AddLump(file, header.lumps[R2_LUMP_CELL_AABB_NODES],           Titanfall::Bsp::cellAABBNodes);
     AddLump(file, header.lumps[R2_LUMP_OBJ_REFERENCES],            Titanfall::Bsp::objReferences);
     AddLump(file, header.lumps[R2_LUMP_OBJ_REFERENCE_BOUNDS],      Titanfall::Bsp::objReferenceBounds);
+    if (Titanfall2::Bsp::lightingBaked)
+        AddLump(file, header.lumps[R2_LUMP_LIGHTMAP_DATA_RTL_PAGE], Titanfall2::Bsp::lightmapRtlPages);
     AddLump(file, header.lumps[R2_LUMP_LEVEL_INFO],                Titanfall::Bsp::levelInfo);
+    if (Titanfall2::Bsp::lightingBaked) {
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESH_OPAQUE_VERTICES], Titanfall2::Bsp::shadowMeshVertices);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESH_ALPHA_VERTICES], Titanfall2::Bsp::shadowMeshAlphaVertices);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESH_INDICES],   Titanfall2::Bsp::shadowMeshIndices);
+        AddLump(file, header.lumps[R2_LUMP_SHADOW_MESHES],         Titanfall2::Bsp::shadowMeshes);
+    }
 
     /* emit bsp size */
     const int size = ftell(file);
     Sys_Printf("Wrote %.1f MB (%d bytes)\n", (float)size / (1024 * 1024), size);
 
     /* write the completed header */
-    fseek(file, 0, SEEK_SET);
+    for (std::size_t index = 0; index < 128; ++index) {
+        if (header.lumps[index].length)
+            header.lumps[index].lumpVer = LittleLong(Respawn::generatedLumpVersion(37, index));
+    }
+    if (fseek(file, 0, SEEK_SET) != 0)
+        Error("Cannot seek back to the BSP header; the output is incomplete");
     SafeWrite(file, &header, sizeof(header));
 
-    /* close the file */
-    fclose(file);
+    /* close the file; a failed flush (e.g. a full disk) must not pass silently */
+    if (fclose(file) != 0)
+        Error("Cannot flush the completed BSP; the output is incomplete");
 }
 
 
@@ -180,30 +234,64 @@ void WriteR2BSPFile(const char *filename) {
    Compiles a Titanfall 2 bsp file and sorts entities into ent files
 */
 void CompileR2BSPFile() {
+    Titanfall::ClearVertexIndices();
+    ExpandMPMenuPrefabs();
     Titanfall2::SetUpGameLump();
+
+    // Bake lightmaps only for maps that place lights; others keep the unlit stubs.
+    Shared::lightmapsEnabled = false;
+    for (const entity_t &entity : entities) {
+        if (Titanfall2::IsLightEntity(entity)) {
+            Shared::lightmapsEnabled = true;
+            break;
+        }
+    }
+    // Large maps fit their lightmaps on fewer, bigger pages.
+    if (!entities.empty() && entities[0].intForKey("_remap_lightmap_pagesize") > 0)
+        Shared::lightmapPageSize = std::min(4096, entities[0].intForKey("_remap_lightmap_pagesize"));
+    if (Shared::lightmapsEnabled)
+        Shared::lightmapAtlas.reset(Shared::lightmapPageSize, Shared::lightmapPageSize, Shared::lightmapGutter);
+    const entity_t *world = nullptr;
 
     // Cell/Portal planes
     Titanfall::Bsp::planes.emplace_back(Plane3f(0, 1, 0, 0));
     // TODO: set cmGrid.brushSidePlaneOffset here
 
+    REMAP_STAGE("CompileR2BSPFile (total)");
     for (entity_t &entity : entities) {
         const char *pszClassname = entity.classname();
+
+        if (entity.intForKey("_remap_preview")) continue; // editor-only recovered mesh proxy
 
         #define ENT_IS(classname) striEqual(pszClassname, classname)
         #define ENT_IS_PREFIX(classname) striEqualPrefix(pszClassname, classname)
 
         // NOTE: entities' classnames are editorclasses until we call EmitEntity
+        if (Titanfall2::IsLightEntity(entity))
+            Titanfall2::CollectLight(entity);
+        if (entity.classname_is("env_cubemap"))
+            Titanfall2::CollectCubemap(entity);
+
         if (ENT_IS("worldspawn")) { // "worldspawn" is most of the map, should always be the 1st entity
+            world = &entity;
             Titanfall::BeginModel(entity);
 
-            Shared::MakeMeshes(entity);
-            Shared::MakeVisReferences();
+            { REMAP_STAGE("MakeMeshes (world)"); Shared::MakeMeshes(entity); }
+            { REMAP_STAGE("MakeVisReferences"); Shared::MakeVisReferences(); }
 
-            Titanfall::EmitMeshes(entity);
+            const std::size_t firstMesh = Titanfall::Bsp::meshes.size();
+            { REMAP_STAGE("EmitMeshes (world)"); Titanfall::EmitMeshes(entity); }
+            Titanfall2::CheckWorldIndexBudget(firstMesh);
 
-            Titanfall::EmitCollisionGrid(entity);
+            { REMAP_STAGE("EmitCollisionGrid"); Titanfall::EmitCollisionGrid(entity); }
 
             Titanfall::EmitLevelInfoWorldspawn();
+
+            // Sky meshes render separately; their indices must not be treated
+            // as ordinary world/prop objects by the cell AABB traversal.
+            const uint32_t firstSky = Titanfall::Bsp::levelInfo.back().firstSkyMeshIndex;
+            Shared::visRefs.erase(std::remove_if(Shared::visRefs.begin(), Shared::visRefs.end(),
+                [firstSky](const Shared::visRef_t &ref) { return ref.index >= firstSky; }), Shared::visRefs.end());
 
             Titanfall::EndModel();
         /* props for gamelump */
@@ -219,7 +307,7 @@ void CompileR2BSPFile() {
             if( g_bExternalModels && ENT_IS_PREFIX("trigger_") ) {
                 Titanfall::EmitTriggerBrushPlaneKeyValues(entity);
             } else {
-                if( entity.brushes.size() ) {
+                if( entity.brushes.size() || entity.patches || entity.valueForKey("_remap_mesh")[0] ) {
                     Titanfall::BeginModel(entity);
                     Shared::MakeMeshes(entity);
                     Titanfall::EmitMeshes(entity);
@@ -229,25 +317,65 @@ void CompileR2BSPFile() {
             }
         }
 
-        Titanfall::EmitEntity(entity);
+        Titanfall2::EmitEntity(entity);
 
         #undef ENT_IS
     }
 
+    Titanfall::ClearVertexIndices(); // Geometry is complete; release lookup caches before lighting.
+
     // Write entity partitions we used
     Titanfall::EmitEntityPartitions();
 
-    // Generate vis tree for worldspawn, we do this here as we'll need portals once we reverse further
-    Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
+    // Build the default visibility tree; selective cells distribute these same refs.
+    { REMAP_STAGE("MakeVisTree"); Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f); }
+    if (Shared::visRefs.empty()) {
+        // A sky-only scene has no ordinary objects, but still needs finite
+        // cell access bounds. Do not reinsert sky meshes as object references.
+        Shared::visRoot.minmax = Titanfall::Bsp::models.at(0).minmax;
+    }
     //Shared::MergeVisTree(Shared::visRoot);
-    Titanfall::EmitVisTree();
+    if (!world) Error("TF2 BSP requires worldspawn");
 
     // Emit level info
     Titanfall2::EmitLevelInfo();
 
+    if (Shared::lightmapsEnabled && world) {
+        REMAP_STAGE("EmitLighting");
+        Titanfall2::EmitLighting(*world);
+    }
+    if (!Titanfall2::Bsp::lightingBaked) {
+        REMAP_STAGE("EmitCubemaps");
+        Titanfall2::EmitCubemaps(nullptr, nullptr);
+    }
+
     // Emit lumps we dont generate yet, but need for the map to load
-    Titanfall2::EmitStubs();
-    Titanfall::EmitStubs();
+    { REMAP_STAGE("EmitStubs"); Titanfall2::EmitStubs(); Titanfall::EmitStubs(); }
+    // Replace shared legacy portal placeholders only after EmitStubs initializes them.
+    { REMAP_STAGE("EmitVisibility"); Titanfall2::EmitVisibility(*world); }
+}
+
+
+/*
+   CheckWorldIndexBudget()
+   Warns when the world model may exceed the retail engine's index capacity
+*/
+void Titanfall2::CheckWorldIndexBudget(std::size_t firstMesh) {
+    // The retail engine compares world indices against 0x300000. Odd triangle
+    // counts are padded to pairs; this per-mesh estimate is inherited research,
+    // see docs/respawn/RESPAWN_GRAVEMIND.md and tools/respawn/audit_tf2_budget.py.
+    constexpr std::uint64_t capacity = 0x300000;
+    std::uint64_t padded = 0;
+    for (std::size_t i = firstMesh; i < Titanfall::Bsp::meshes.size(); i++) {
+        const std::uint64_t triangles = Titanfall::Bsp::meshes[i].triCount;
+        padded += 3 * (triangles + (triangles & 1));
+    }
+
+    Sys_Printf("%9llu estimated padded world indices (%.2f%% of retail capacity)\n",
+               (unsigned long long)padded, 100.0 * padded / capacity);
+    if (padded > capacity)
+        Sys_FPrintf(SYS_WRN, "WARNING: World model exceeds the retail Titanfall 2 index capacity of %llu\n",
+                    (unsigned long long)capacity);
 }
 
 
@@ -273,6 +401,9 @@ void Titanfall2::EmitEntity(const entity_t &e) {
     #define ENT_IS(x)          striEqual(classname, x)
     #define ENT_STARTS(x)      striEqualPrefix(classname, x)
     #define EDITORCLASS(x, y)  if (ENT_IS(y)) { e2.setKeyValue("classname", x); e2.setKeyValue("editorclass", y); }
+    // Compiled into CUBEMAPS; retail entity files have no env_cubemap.
+    if (ENT_IS("env_cubemap"))
+        return;
     // NOTE: we test for script entities last, as it's the most complex & edge-case ridden
     // TODO: filter out editor only entities (e.g. prop_static, env_cubemap, info_lightprobe, light (static worldlights), etc.)
     // !!! and make sure those entities still get used for the appropriate lumps !!!
@@ -542,6 +673,7 @@ void Titanfall2::EmitEntity(const entity_t &e) {
     StringOutputStream data;
     data << "{\n";
     for (const epair_t &pair : e2.epairs) {  // e2 to get editorclass changes
+        if (striEqualPrefix(pair.key.c_str(), "_remap_")) continue;
         data << "\"" << pair.key.c_str() << "\" \"" << pair.value.c_str() << "\"\n";
     }
     data << "}\n";

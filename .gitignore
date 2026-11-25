@@ -2,6 +2,13 @@
 .settings
 out
 
+# Python format research tools
+__pycache__/
+*.pyc
+
+# Local research tools, game samples and inventories
+/.local/
+
 # Editors
 .vscode
 .vs
@@ -10,6 +17,7 @@ out
 # CMake
 libs/assimp/out
 CMakeFiles
+Testing/
 cmake_install.cmake
 CMakeCache.txt
 Makefile
@@ -40,3 +48,9 @@ windeps
 libassimp.*
 install/radiant
 install/remap
+
+# Local Respawn research artefacts: RSX exports, crash dumps, caches
+/exported_files/
+/latest_crash/
+/rsx_cache_db.bin
+tools/respawn/__pycache__/

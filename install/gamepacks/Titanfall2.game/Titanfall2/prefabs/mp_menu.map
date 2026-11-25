@@ -1,0 +1,13 @@
+// MRVN multiplayer menu point prefab. Import into a map and move/rotate it.
+// One per map, outside the gameplay sky; surrounding scenery is authored separately.
+{
+"classname" "worldspawn"
+}
+{
+"classname" "mrvn_mp_menu"
+"origin" "0 0 8192"
+"angles" "0 -90 0"
+"camera_distance" "256"
+"camera_height" "40"
+"lightEnvironmentIndex" "1"
+}

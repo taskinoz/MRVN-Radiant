@@ -1,3 +1,5 @@
+#include <set>
+#include <string>
 /* -------------------------------------------------------------------------------
 
    Copyright (C) 2022-2023 MRVN-Radiant and contributors.
@@ -25,32 +27,27 @@
 #include "../model.h"
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
+#include "../respawn/encoding.h"
+#include "../respawn/vector_index.h"
 
 /*
     EmitTextureData()
     Emits texture data and returns its index
 */
 uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
-    std::string  tex = shader.shader.c_str();
+    std::string  tex;
+    try {
+        tex = Respawn::textureName(shader.shader.c_str());
+    } catch (const std::exception &error) {
+        Error("EmitTextureData: \"%s\": %s", shader.shader.c_str(), error.what());
+    }
     std::size_t  index;
 
-    // Strip 'textures/'
-    tex.erase(tex.begin(), tex.begin() + strlen("textures/"));
-    std::replace(tex.begin(), tex.end(), '/', '\\');  // Do we even need to do this ?
-
-    // Check if it's already saved
-    std::string table = std::string(Titanfall::Bsp::textureDataData.begin(), Titanfall::Bsp::textureDataData.end());
-    index = table.find(tex);
-    if (index != std::string::npos) {
-        // Is already saved, find the index of its textureData
-
-        for (std::size_t i = 0; i < Titanfall::Bsp::textureData.size(); i++) {
-            Titanfall::TextureData_t &td = Titanfall::Bsp::textureData.at(i);
-            uint32_t &tdt = Titanfall::Bsp::textureDataTable.at(td.name_index);
-
-            if (tdt == index) {
-                return i;
-            }
+    for (std::size_t i = 0; i < Titanfall::Bsp::textureData.size(); i++) {
+        const auto &td = Titanfall::Bsp::textureData[i];
+        const auto offset = Titanfall::Bsp::textureDataTable.at(td.name_index);
+        if (Respawn::textureNameEquals(Titanfall::Bsp::textureDataData, offset, tex)) {
+            return i;
         }
     }
 
@@ -69,11 +66,47 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
     td.name_index = Titanfall::Bsp::textureDataTable.size() - 1;
     td.sizeX = shader.shaderImage->width;
     td.sizeY = shader.shaderImage->height;
-    td.visibleX = shader.shaderImage->width;
-    td.visibleY = shader.shaderImage->height;
+    td.visibleX = td.sizeX;
+    td.visibleY = td.sizeY;
     td.flags = shader.surfaceFlags;
+    // v29 keeps above/underwater draw participation on MESHES, not the material
+    // flags in TEXTURE_DATA. All 1,485 surveyed retail TF1 materials omit them.
+    if (g_game->bspVersion == 29) {
+        td.flags &= ~(S_MESH_UNKNOWN | S_TF1_UNDERWATER_DRAW);
+        if (shader.compileFlags & C_ALPHASHADOW)
+            td.flags |= S_TF1_ALPHA_TEST;
+        td.sizeX = td.visibleX = shader.shaderWidth;
+        td.sizeY = td.visibleY = shader.shaderHeight;
+    }
+    // Retail v29 stores each texture's mean linear colour here (431 of 433 Angel
+    // City records are nonzero); retail v37 leaves it zero. Average per pixel in
+    // linear space, as Source's vrad does. Credit: r3muxd's R1 patch. A missing
+    // texture (the white placeholder image) stays zero rather than claiming 1.0.
+    td.reflectivity = Vector3(0, 0, 0);
+    const image_t *image = shader.shaderImage;
+    if (g_game->bspVersion == 29 && image && image->pixels && image->width > 0 && image->height > 0
+        && !strEqual(image->name.c_str(), DEFAULT_IMAGE)) {
+        const std::size_t pixels = static_cast<std::size_t>(image->width) * image->height;
+        double sum[3] = {0, 0, 0};
+        for (std::size_t pixel = 0; pixel < pixels; ++pixel)
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const double c = image->pixels[pixel * 4 + channel] / 255.0;
+                sum[channel] += c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+            }
+        td.reflectivity = Vector3(sum[0] / pixels, sum[1] / pixels, sum[2] / pixels);
+    }
 
     return index;
+}
+
+
+namespace {
+Respawn::VectorIndex vertexIndex(EQUAL_EPSILON), normalIndex(EQUAL_EPSILON);
+}
+
+void Titanfall::ClearVertexIndices() {
+    vertexIndex.clear();
+    normalIndex.clear();
 }
 
 
@@ -82,11 +115,9 @@ uint32_t Titanfall::EmitTextureData(shaderInfo_t shader) {
     Saves a vertex into Titanfall::vertices and returns its index
 */
 uint32_t Titanfall::EmitVertex(Vector3 &vertex) {
-    for (uint32_t i = 0; i < (uint32_t)Titanfall::Bsp::vertices.size(); i++) {
-        if (VectorCompare(vertex, Titanfall::Bsp::vertices.at(i))) {
-            return i;
-        }
-    }
+    const uint32_t found = vertexIndex.find(vertex, Titanfall::Bsp::vertices, VectorCompare);
+    if (found != UINT32_MAX)
+        return found;
 
     Titanfall::Bsp::vertices.emplace_back(vertex);
     return (uint32_t)Titanfall::Bsp::vertices.size() - 1;
@@ -98,10 +129,9 @@ uint32_t Titanfall::EmitVertex(Vector3 &vertex) {
     Saves a vertex normal into Titanfall::vertexNormals and returns its index
 */
 uint32_t Titanfall::EmitVertexNormal(Vector3 &normal) {
-    for (uint32_t i = 0; i < (uint32_t)Titanfall::Bsp::vertexNormals.size(); i++) {
-        if (VectorCompare(normal, Titanfall::Bsp::vertexNormals.at(i)))
-            return i;
-    }
+    const uint32_t found = normalIndex.find(normal, Titanfall::Bsp::vertexNormals, VectorCompare);
+    if (found != UINT32_MAX)
+        return found;
 
     Titanfall::Bsp::vertexNormals.emplace_back(normal);
     return (uint32_t)Titanfall::Bsp::vertexNormals.size() - 1;
@@ -348,7 +378,7 @@ void Titanfall::EmitVertexLitFlat(Shared::Vertex_t &vertex) {
     EmitVertexLitBump
     Saves a vertex into Titanfall::Bsp::vertexLitBumpVertices
 */
-void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
+void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent) {
     Titanfall::VertexLitBump_t &lv = Titanfall::Bsp::vertexLitBumpVertices.emplace_back();
     lv.vertexIndex  = Titanfall::EmitVertex(vertex.xyz);
     lv.normalIndex  = Titanfall::EmitVertexNormal(vertex.normal);
@@ -356,7 +386,8 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
     lv.colour       = vertex.colour;
     lv.lightmapUV   = vertex.lightmapUV;
     lv.lightmapStep = vertex.lightmapStep;
-    // TODO: tangentIndex
+    lv.tangentIndex[0] = tangent[0];
+    lv.tangentIndex[1] = tangent[1];
 }
 
 
@@ -364,13 +395,14 @@ void Titanfall::EmitVertexLitBump(Shared::Vertex_t &vertex) {
     EmitVertexUnlitTS
     Saves a vertex into Titanfall::Bsp::vertexUnlitTSVertices
 */
-void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex) {
+void Titanfall::EmitVertexUnlitTS(Shared::Vertex_t &vertex, std::array<uint32_t, 2> tangent) {
     Titanfall::VertexUnlitTS_t &ul = Titanfall::Bsp::vertexUnlitTSVertices.emplace_back();
     ul.vertexIndex = Titanfall::EmitVertex(vertex.xyz);
     ul.normalIndex = Titanfall::EmitVertexNormal(vertex.normal);
     ul.textureUV   = vertex.textureUV;
     ul.colour      = vertex.colour;
-    // TODO: tangentIndex
+    ul.tangentIndex[0] = tangent[0];
+    ul.tangentIndex[1] = tangent[1];
 }
 
 
@@ -390,6 +422,54 @@ void Titanfall::EmitVertexBlinnPhong(Shared::Vertex_t &vertex) {
 
 
 /*
+    MeshTangents()
+    Tangent references for normal-mapped vertices, as retail Coliseum/Glitch
+    store them: the vertex-normal index of a unit tangent along +dP/du with the
+    normal component removed, and bit 31 set when the bitangent runs against
+    +dP/dv. The second tangent word is always zero. Titanfall 1 (Angel City and
+    the TFO lobby) instead stores two plain indices: the tangent, then the
+    bitangent cross(normal, tangent) flipped to follow +dP/dv.
+*/
+static std::vector<std::array<uint32_t, 2>> MeshTangents(const Shared::Mesh_t &mesh) {
+    std::vector<Vector3>  du(mesh.vertices.size(), Vector3(0, 0, 0)), dv(mesh.vertices.size(), Vector3(0, 0, 0));
+    for (std::size_t i = 0; i + 2 < mesh.triangles.size(); i += 3) {
+        const uint16_t  t[3] = {mesh.triangles[i], mesh.triangles[i + 1], mesh.triangles[i + 2]};
+        const Shared::Vertex_t &a = mesh.vertices.at(t[0]), &b = mesh.vertices.at(t[1]), &c = mesh.vertices.at(t[2]);
+        const Vector3  e1 = b.xyz - a.xyz, e2 = c.xyz - a.xyz;
+        const Vector2  d1 = b.textureUV - a.textureUV, d2 = c.textureUV - a.textureUV;
+        const float  det = d1.x() * d2.y() - d1.y() * d2.x();
+        if (std::fabs(det) < 1e-12f)
+            continue;
+        const Vector3  s = (e1 * d2.y() - e2 * d1.y()) / det;
+        const Vector3  u = (e2 * d1.x() - e1 * d2.x()) / det;
+        for (uint16_t k : t) {
+            du[k] += s;
+            dv[k] += u;
+        }
+    }
+
+    std::vector<std::array<uint32_t, 2>>  words;
+    for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
+        const Vector3  n = mesh.vertices[i].normal;
+        Vector3  tangent = du[i] - n * static_cast<float>(vector3_dot(n, du[i]));
+        if (vector3_length(tangent) < 1e-6) {  // no usable UV gradient
+            const Vector3  axis = std::fabs(n.z()) < 0.9f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
+            tangent = vector3_cross(axis, n);
+        }
+        tangent = vector3_normalised(tangent);
+        const bool  mirrored = vector3_dot(vector3_cross(n, tangent), dv[i]) < 0;
+        if (g_game->bspVersion == 29) {
+            Vector3  bitangent = vector3_cross(n, tangent) * (mirrored ? -1.0f : 1.0f);
+            words.push_back({Titanfall::EmitVertexNormal(tangent), Titanfall::EmitVertexNormal(bitangent)});
+        } else {
+            words.push_back({Titanfall::EmitVertexNormal(tangent) | (mirrored ? 0x80000000u : 0u), 0u});
+        }
+    }
+    return words;
+}
+
+
+/*
     EmitMeshes()
     writes the mesh list to the bsp
 */
@@ -401,22 +481,47 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
     // Emit Bsp::meshes
     for (const Shared::Mesh_t &mesh : Shared::meshes) {
+        if (mesh.vertices.empty() || mesh.vertices.size() > 65536 || mesh.triangles.size() / 3 > 65535)
+            Error("Mesh vertex or triangle count exceeds its 16-bit field");
+        // Retail TF1 draws lit-flat vertices only on cheap water tops and never
+        // uses unlit-TS; R1Delta draws both black on ordinary materials. So v29
+        // writes other lit-flat surfaces as lit-bump and unlit-TS as unlit.
+        int surfaceFlags = mesh.shaderInfo->surfaceFlags;
+        if (g_game->bspVersion == 29) {
+            const int format = surfaceFlags & S_VERTEX_UNLIT_TS;
+            const bool water = (surfaceFlags & 0x3008) == 0x3008;
+            int replaced = -1;
+            if (format == S_VERTEX_UNLIT_TS) replaced = S_VERTEX_UNLIT;
+            else if (format == S_VERTEX_LIT_FLAT && !water && !(surfaceFlags & (S_SKY | S_SKY_2D))) replaced = S_VERTEX_LIT_BUMP;
+            if (replaced >= 0) {
+                static std::set<std::string> warned;
+                if (warned.insert(mesh.shaderInfo->shader.c_str()).second)
+                    Sys_Warning("%s: TF1 does not draw %s vertices here; writing %s\n", mesh.shaderInfo->shader.c_str(),
+                                format == S_VERTEX_UNLIT_TS ? "unlit-TS" : "lit-flat",
+                                replaced == S_VERTEX_UNLIT ? "unlit" : "lit-bump");
+                surfaceFlags = (surfaceFlags & ~S_VERTEX_UNLIT_TS) | replaced;
+            }
+        }
         Titanfall::Mesh_t &m = Titanfall::Bsp::meshes.emplace_back();
+        Titanfall::Bsp::meshCompileFlags.push_back(mesh.shaderInfo->compileFlags);
         m.const0 = 4294967040;  // :)
-        m.flags = mesh.shaderInfo->surfaceFlags;
-        m.vertexCount = mesh.vertices.size();
+        m.flags = surfaceFlags;
+        if (g_game->bspVersion == 29 && (mesh.shaderInfo->compileFlags & C_ALPHASHADOW))
+            m.flags |= S_TF1_ALPHA_TEST;
+        // Engine surface/decal queries iterate through this index inclusively.
+        m.vertexCount = mesh.vertices.size() - 1;
         m.triOffset = Titanfall::Bsp::meshIndices.size();
         m.triCount = mesh.triangles.size() / 3;
 
         int vertexOffset = 0;
 
-        if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT_TS)) {
+        if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT_TS)) {
             m.vertexType = 3;
             vertexOffset = Titanfall::Bsp::vertexUnlitTSVertices.size();
-        } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags,S_VERTEX_LIT_BUMP)) {
+        } else if (CHECK_FLAG(surfaceFlags,S_VERTEX_LIT_BUMP)) {
             m.vertexType = 2;
             vertexOffset = Titanfall::Bsp::vertexLitBumpVertices.size();
-        } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT)) {
+        } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT)) {
             m.vertexType = 1;
             vertexOffset = Titanfall::Bsp::vertexUnlitVertices.size();
         } else {
@@ -424,25 +529,39 @@ void Titanfall::EmitMeshes(const entity_t &e) {
             vertexOffset = Titanfall::Bsp::vertexLitFlatVertices.size();
         }
 
-        m.vertexOffset = vertexOffset;
+        // Keep the pool selector separate from the serialized v29 enum:
+        // surveyed TF1 meshes use 0=unlit, 1=lit-flat, 2=lit-bump. Pool flags
+        // still select the same vertex streams; changing this byte must not
+        // alter lightmap eligibility or tangent generation.
+        const uint8_t vertexFormat = m.vertexType;
+        if (g_game->bspVersion == 29 && m.vertexType < 2)
+            m.vertexType ^= 1;
 
         // Emit texture related structs
         uint32_t  textureIndex = Titanfall::EmitTextureData(*mesh.shaderInfo);
-        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, m.vertexCount);
+        // Lit meshes sample the lightmap page their material sort points at.
+        const bool  baked = Shared::lightmapsEnabled && (vertexFormat == 0 || vertexFormat == 2)
+                         && mesh.lightmapPage >= 0;
+        m.materialOffset = Titanfall::EmitMaterialSort(textureIndex, vertexOffset, mesh.vertices.size(),
+                                                       baked ? mesh.lightmapPage : -1);
         int materialSortOffset = Titanfall::Bsp::materialSorts.at(m.materialOffset).vertexOffset;
+        // Both surface queries and triangle indices add the material-sort base.
+        m.vertexOffset = vertexOffset - materialSortOffset;
         MinMax  aabb;
 
         // Save vertices and vertexnormals
+        const std::vector<std::array<uint32_t, 2>>  tangents = (vertexFormat == 2 || vertexFormat == 3)
+                                              ? MeshTangents(mesh) : std::vector<std::array<uint32_t, 2>>();
         for (std::size_t i = 0; i < mesh.vertices.size(); i++) {
             Shared::Vertex_t  vertex = mesh.vertices.at(i);
 
             aabb.extend(vertex.xyz);
 
-            if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT_TS)) {
-                Titanfall::EmitVertexUnlitTS(vertex);
-            } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_LIT_BUMP)) {
-                Titanfall::EmitVertexLitBump(vertex);
-            } else if (CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_VERTEX_UNLIT)) {
+            if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT_TS)) {
+                Titanfall::EmitVertexUnlitTS(vertex, tangents.at(i));
+            } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_LIT_BUMP)) {
+                Titanfall::EmitVertexLitBump(vertex, tangents.at(i));
+            } else if (CHECK_FLAG(surfaceFlags, S_VERTEX_UNLIT)) {
                 Titanfall::EmitVertexUnlit(vertex);
             } else {
                 Titanfall::EmitVertexLitFlat(vertex);
@@ -451,13 +570,52 @@ void Titanfall::EmitMeshes(const entity_t &e) {
 
         // Save triangles
         for (uint16_t triangle : mesh.triangles) {
-            Titanfall::Bsp::meshIndices.emplace_back(triangle + m.vertexOffset - materialSortOffset);
+            // The pool offset can exceed 16 bits; indices are relative to the sort.
+            const int index = triangle + vertexOffset - materialSortOffset;
+            if (index < 0 || index > 65535)
+                Error("Mesh index exceeds the 16-bit material-sort range");
+            Titanfall::Bsp::meshIndices.emplace_back(index);
+        }
+        // The runtime reads triangles in pairs: like retail (Angel City, Homestead),
+        // follow odd-sized meshes with a degenerate triangle so every mesh starts on
+        // a six-index boundary. Unpadded, grenade decals read the next mesh's indices
+        // and crashed at engine.dll+0xae8d3. triCount keeps the real count.
+        if (m.triCount & 1) {
+            const uint16_t last = Titanfall::Bsp::meshIndices.back();
+            Titanfall::Bsp::meshIndices.insert(Titanfall::Bsp::meshIndices.end(), 3, last);
         }
 
         // Save MeshBounds
         Titanfall::MeshBounds_t &mb = Titanfall::Bsp::meshBounds.emplace_back();
         mb.origin = (aabb.maxs + aabb.mins) / 2;
         mb.extents = (aabb.maxs - aabb.mins) / 2;
+        mb.radius = vector3_length(mb.extents);
+        mb.tanYaw = 0.0f;
+
+        if (baked) {
+            Respawn::Bake::Chart &chart = Titanfall::Bsp::lightmapCharts.emplace_back();
+            chart.page = mesh.lightmapPage;
+            // Textured sky (e.g. Quake sky faces drawn as world geometry) glows
+            // at a constant level instead of being lit, like a sky dome.
+            if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY))
+                chart.constant = 1.0;
+            // Bounce albedo: the texture's average colour, linearised and kept to a
+            // plausible diffuse range (q3map2 averages 0-255 pixels, or a 0-1 colour).
+            const Color4f &average = mesh.shaderInfo->averageColor;
+            const float range = std::max({average[0], average[1], average[2]}) > 1.0f ? 255.0f : 1.0f;
+            if (average[0] + average[1] + average[2] > 0.0f) {
+                auto linear = [&](float c) { return std::clamp(std::pow(c / range, 2.2), 0.02, 0.9); };
+                chart.albedo = {linear(average[0]), linear(average[1]), linear(average[2])};
+            }
+            for (const Shared::Vertex_t &vertex : mesh.vertices) {
+                chart.positions.push_back({vertex.xyz.x(), vertex.xyz.y(), vertex.xyz.z()});
+                chart.normals.push_back({vertex.normal.x(), vertex.normal.y(), vertex.normal.z()});
+                chart.luxels.push_back({vertex.lightmapUV.x(), vertex.lightmapUV.y()});
+            }
+            chart.triangles.assign(mesh.triangles.begin(), mesh.triangles.end());
+            Titanfall::Bsp::lightmapVertexRanges.push_back({vertexFormat == 2, static_cast<std::size_t>(vertexOffset),
+                                                           mesh.vertices.size(), static_cast<std::uint32_t>(mesh.lightmapPage)});
+        }
     }
 }
 
@@ -466,21 +624,31 @@ void Titanfall::EmitMeshes(const entity_t &e) {
     EmitMaterialSort()
     Tries to create a material sort of the last texture
 */
-uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count) {
+uint16_t Titanfall::EmitMaterialSort(uint32_t index, int offset, int count, int lightmapHeader) {
+    if (index > 32767)
+        Error("Material-sort texture index exceeds its signed 16-bit field");
     /* Check if the material sort we need already exists */
     std::size_t pos = 0;
     for (Titanfall::MaterialSort_t &ms : Titanfall::Bsp::materialSorts) {
-        if (ms.textureData == index && offset - ms.vertexOffset + count < 65535) {
+        if (ms.textureData == index && ms.lightmapHeader == lightmapHeader
+         && offset >= ms.vertexOffset && offset - ms.vertexOffset + count <= 65536) {
+            if (g_game->bspVersion == 29)
+                ms.vertexSpan = std::max(ms.vertexSpan, static_cast<uint16_t>(offset - ms.vertexOffset + count - 1));
             return pos;
         }
 
         pos++;
     }
 
+    if (pos > 65535)
+        Error("Material-sort index exceeds 16 bits");
     Titanfall::MaterialSort_t &ms = Titanfall::Bsp::materialSorts.emplace_back();
     ms.textureData = index;
-    ms.lightmapHeader = -1;
-    ms.cubemap = -1;
+    ms.lightmapHeader = lightmapHeader;
+    // TF2 material sorts all store 0 and meshes carry the cubemap; TF1 sorts
+    // without cubemap data store -1, as the TFO lobby does.
+    ms.cubemap = g_game->bspVersion == 29 ? -1 : 0;
+    ms.vertexSpan = g_game->bspVersion == 29 ? count - 1 : 0;
     ms.vertexOffset = offset;
 
     return pos;
@@ -509,7 +677,7 @@ void Titanfall::EmitLevelInfoWorldspawn() {
     // TODO: start from firstTransMeshIndex
     li.firstSkyMeshIndex = 0;
     for (Shared::Mesh_t &mesh : Shared::meshes) {
-        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY)) { break; }
+        if (CHECK_FLAG(mesh.shaderInfo->compileFlags, C_SKY) && CHECK_FLAG(mesh.shaderInfo->surfaceFlags, S_SKY)) { break; }
             li.firstSkyMeshIndex++;
     }
 
@@ -554,6 +722,7 @@ void Titanfall::EmitStaticProp(entity_t &e) {
     }
 
     Titanfall::Bsp::gameLumpPropHeader.numProps++;
+    Titanfall::Bsp::gameLumpPropHeader.unk0++;
     Titanfall::Bsp::gameLumpPropHeader.unk1++;
     Titanfall::GameLumpProp_t &prop = Titanfall::Bsp::gameLumpProps.emplace_back();
     Vector3 origin;
@@ -575,16 +744,14 @@ void Titanfall::EmitStaticProp(entity_t &e) {
     prop.modelName = pathIdx;
     prop.solid = 6;
     prop.flags = 4;
-    prop.envCubemap = -1;
-    prop.forcedFadeScale = -1.0f;
-    prop.cpuLevel[0] = -1.0f;
-    prop.cpuLevel[1] = -1.0f;
-    prop.gpuLevel[0] = -1.0f;
-    prop.gpuLevel[1] = -1.0f;
-    prop.lightingOrigin.x() = 1.0f;
-    prop.lightingOrigin.y() = 1.0f;
-    prop.lightingOrigin.z() = 1.0f;
-    prop.disableX360 = -1;
+    // Defaults every Angel City placement uses: fades -1, no CPU/GPU level
+    // limits, white diffuse modulation, forced fade scale 1, cubemap 0.
+    prop.fadeMinDist = -1.0f;
+    prop.fadeMaxDist = -1.0f;
+    prop.envCubemap = 0;
+    prop.forcedFadeScale = 1.0f;
+    prop.diffuseModulation = -1;
+    prop.lightingOrigin = origin;
 
     for ( const auto mesh : meshes )
     {
@@ -608,6 +775,6 @@ void Titanfall::EmitLevelInfo() {
     Titanfall::LevelInfo_t &li = Titanfall::Bsp::levelInfo.back();
 
     li.propCount = Titanfall::Bsp::gameLumpPropHeader.numProps;
-    // TODO: unk2 sun vector from last light_environment
-    li.unk2 = { 0.1, 0.8, -0.6 };  // placeholder
+    // Placeholder sun vector; EmitLighting replaces it with the last sun's normal.
+    li.unk2 = { 0.1, 0.8, -0.6 };
 }

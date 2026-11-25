@@ -29,18 +29,31 @@ add_executable(remap
                common/unzip.h
                common/vfs.cpp
                common/vfs.h
+               source/hiprt_trace.cpp
+               source/hiprt_trace.h
+               source/apex_legends/apex_legends_bsp.cpp
                source/apex_legends/apex_legends_collisions.cpp
-               source/apex_legends/apex_legends_misc.cpp
-               source/apex_legends/apex_legends_vis.cpp
-               source/apex_legends/apex_legends.cpp
+               source/apex_legends/apex_legends_entities.cpp
+               source/apex_legends/apex_legends_lighting.cpp
+               source/apex_legends/apex_legends_lightmaps.cpp
+               source/apex_legends/apex_legends_meshes.cpp
+               source/apex_legends/apex_legends_models.cpp
+               source/apex_legends/apex_legends_portals.cpp
+               source/apex_legends/apex_legends_textures.cpp
+               source/apex_legends/apex_legends_vertices.cpp
+               source/apex_legends/apex_legends_visibility.cpp
                source/apex_legends/apex_legends.h
                source/titanfall/titanfall_collisions.cpp
                source/titanfall/titanfall_decompile.cpp
                source/titanfall/titanfall_misc.cpp
+               source/titanfall/titanfall_physics.cpp
                source/titanfall/titanfall_vis.cpp
                source/titanfall/titanfall.cpp
                source/titanfall/titanfall.h
                source/titanfall2/titanfall2_vis.cpp
+               source/titanfall2/titanfall2_portals.cpp
+               source/titanfall2/titanfall2_lighting.cpp
+               source/titanfall2/titanfall2_cubemaps.cpp
                source/titanfall2/titanfall2.cpp
                source/titanfall2/titanfall2.h
                source/brush.cpp
@@ -78,6 +91,11 @@ add_executable(remap
                source/portals.cpp
                source/prtfile.cpp
                source/remap.h
+               source/respawn/bsp_reader.h
+               source/respawn/lump_versions.h
+               source/respawn/encoding.h
+               source/respawn/lightmap.h
+               source/respawn/lightbake.h
                source/shaders.cpp
                source/shaders.h
                source/surface_extra.cpp
@@ -122,4 +140,6 @@ target_link_libraries(remap
                       ${LIBXML2_LIBRARIES}
                      )
 
-set_target_properties(remap PROPERTIES LINK_FLAGS "-Wl,-rpath,./")
+if(UNIX)
+    set_target_properties(remap PROPERTIES LINK_FLAGS "-Wl,-rpath,./")
+endif()

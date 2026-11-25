@@ -30,6 +30,7 @@
 /* dependencies */
 #include "remap.h"
 #include "bspfile_abstract.h"
+#include "respawn/bsp_reader.h"
 #include <ctime>
 
 
@@ -100,9 +101,11 @@ void LoadEntFile(const char *filename, std::vector<char> &ents) {
     }
     /* Open it */
     MemBuffer f = LoadFile(filename);
-    /* Add to bspEntities */
-    std::vector<char> ent = { (char*)((byte*)f.data() + 10), (char*)((byte*)f.data() + f.size()) };
-    ents.insert(ents.end(), ent.begin(), ent.end());
+    try {
+        Respawn::appendEntityFile(ents, static_cast<const char*>(f.data()), f.size());
+    } catch (const std::exception& error) {
+        Error("LoadEntFile: %s: %s", filename, error.what());
+    }
 }
 
 

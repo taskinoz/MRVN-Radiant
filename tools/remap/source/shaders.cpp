@@ -31,6 +31,8 @@
 /* dependencies */
 #include "remap.h"
 #include "shaders.h"
+#include "respawn/encoding.h"
+#include "respawn/vmt_surfaceprop.h"
 
 
 static bool           g_warnImage = true;
@@ -240,9 +242,9 @@ bool ApplyShaderType( const char *name, int *surfaceFlags, int *contentFlags, in
     GetShaderFlag()
     Returns a ShaderType_t corresponding to name
 */
-ShaderFlag_t *GetShaderFlag( const char *name, std::vector<ShaderFlag_t> flags ) {
+const ShaderFlag_t *GetShaderFlag( const char *name, const std::vector<ShaderFlag_t> &flags ) {
     // Walk the current game's shader type vector
-    for( ShaderFlag_t &sf : flags ) {
+    for( const ShaderFlag_t &sf : flags ) {
         if ( striEqual(name, sf.name) ) {
             return &sf;
         }
@@ -256,7 +258,7 @@ ShaderFlag_t *GetShaderFlag( const char *name, std::vector<ShaderFlag_t> flags )
     Applies a shader flag to the supplied flags
 */
 bool ApplyShaderFlag( const char *name, int *surfaceFlags, int *contentFlags, int *compileFlags ) {
-    ShaderFlag_t *sf = nullptr;
+    const ShaderFlag_t *sf = nullptr;
     if( surfaceFlags != nullptr ) { sf = GetShaderFlag(name, g_game->surfaceFlags); }
     if( contentFlags != nullptr ) { sf = GetShaderFlag(name, g_game->contentFlags); }
     if( compileFlags != nullptr ) { sf = GetShaderFlag(name, g_game->compileFlags); }
@@ -606,6 +608,43 @@ static shaderInfo_t *AllocShaderInfo() {
 
 
 
+static void ResolveTf1TextureSize(shaderInfo_t *shader) {
+    std::string material;
+    try { material = Respawn::textureName(shader->shader.c_str()); } catch (const std::runtime_error &) { return; }
+    Respawn::VmtProperty baseTexture;
+    const auto load = [](const std::string &filename, std::string &text) {
+        const MemBuffer file = vfsLoadFile(filename.c_str());
+        if (!file) return false;
+        text.assign(file.data(), file.size());
+        return true;
+    };
+    if (!Respawn::resolveVmtProperty("materials/" + material + ".vmt", "$basetexture", load, baseTexture) ||
+        !baseTexture.present || baseTexture.value.empty()) return;
+
+    std::string asset = "materials/" + baseTexture.value;
+    const std::string folded = Respawn::vmtLower(asset);
+    if (folded.compare(folded.size() - 4, 4, ".vtf") != 0) asset += ".vtf";
+    std::string filename;
+    if (!Respawn::vmtAssetPath(asset, ".vtf", filename)) return;
+
+    const MemBuffer file = vfsLoadFile(filename.c_str());
+    if (!file || file.size() < 64 || std::memcmp(file.data(), "VTF\0", 4) != 0) return;
+    const unsigned char *bytes = file.data();
+    const auto read16 = [bytes](std::size_t offset) {
+        return uint32_t(bytes[offset]) | (uint32_t(bytes[offset + 1]) << 8);
+    };
+    const auto read32 = [&read16](std::size_t offset) {
+        return read16(offset) | (read16(offset + 2) << 16);
+    };
+    const uint32_t minorVersion = read32(8);
+    const uint32_t headerSize = read32(12);
+    const uint32_t width = read16(16), height = read16(18);
+    if (read32(4) != 7 || minorVersion > 5 || headerSize < (minorVersion >= 2 ? 80u : 64u) ||
+        headerSize >= file.size() || !width || !height) return;
+    shader->shaderWidth = width;
+    shader->shaderHeight = height;
+}
+
 /*
    FinishShader() - ydnar
    sets a shader's width and height among other things
@@ -623,6 +662,8 @@ static void FinishShader(shaderInfo_t *si) {
         if (si->shaderWidth == 0 && si->shaderHeight == 0) {
             si->shaderWidth = si->shaderImage->width;
             si->shaderHeight = si->shaderImage->height;
+            if (g_game->bspVersion == 29 && strEqual(si->shaderImage->name.c_str(), DEFAULT_IMAGE))
+                ResolveTf1TextureSize(si);
         }
 
         /* legacy terrain has explicit image-sized texture projection */
@@ -876,6 +917,9 @@ static void ParseShaderFile(const char *filename) {
                 if ( !ApplyShaderFlag(token, nullptr, &si->contentFlags, nullptr) ) {
                     Sys_Warning( "Unknown contentflag: \"%s\"\n", token );
                 }
+            } else if (striEqual(token, "$surfaceprop")) {
+                text.GetToken(false);
+                si->surfaceProp = token;  // VPhysics surface property; overrides the VMT
             } else if (striEqual(token, "$compileflag")) {
                 text.GetToken(false);
                 if ( !ApplyShaderFlag(token, nullptr, nullptr, &si->compileFlags) ) {

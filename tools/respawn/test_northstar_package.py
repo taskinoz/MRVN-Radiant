@@ -59,19 +59,20 @@ class NorthstarPackageTests(unittest.TestCase):
         self.assertEqual(output.count('"script_name" "menu_scene_ref"'), 1)
         self.assertEqual(output.count('"script_name" "menu_camera_target"'), 1)
 
-    def test_triggers_doors_and_liquids_cannot_become_static_solids(self):
+    def test_triggers_cannot_become_static_solids_but_water_surfaces_are_preserved(self):
         face = '( 0 0 0 ) ( 1 0 0 ) ( 0 1 0 ) STONE 0 0 0 1 1'
         entities = []
-        for classname in ("worldspawn", "func_wall", "func_door", "func_door_secret", "trigger_once"):
+        for classname in ("func_door", "func_door_secret", "trigger_once"):
             entities.append('{\n"classname" "' + classname + '"\n{\n' + face + '\n}\n}')
         entities.append('{\n"classname" "worldspawn"\n{\n' + face.replace('STONE', '*water') + '\n}\n}')
         entities.append('{\n"classname" "info_player_start"\n"origin" "0 0 24"\n}')
         stats = {}
         output, brushes, _ = adapt_map('\n'.join(entities), stats)
-        self.assertEqual(brushes, 2)
-        self.assertEqual(sum(stats["discarded_brushes"].values()), 4)
+        self.assertEqual(brushes, 3)
+        self.assertEqual(sum(stats["discarded_brushes"].values()), 1)
         self.assertNotIn("trigger_once", output)
         self.assertNotIn("*water", output)
+        self.assertIn("world/water/water_mp_angelcity_cheap", output)
 
     def test_foreign_lights_removed_without_changing_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:

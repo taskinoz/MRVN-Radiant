@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Decode and audit Respawn realtime-light (RTL) lightmap planes.
 
 Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.

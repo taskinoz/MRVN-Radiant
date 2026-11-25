@@ -153,7 +153,9 @@ python tools/respawn/build_tf1_package.py --maps BUILD/maps --map mp_name --name
   `graphs/<map>.ain`, plus anything under `--assets` (`materials/`, `models/`,
   `sound/`, `scripts/`, `resource/`, `particles/`, `cfg/`).
 - `vpk/` holds an optional shader-only map VPK from `pack_tf1_shaders.py`
-  (Water); it installs into the game's `vpk/` folder.
+  (Water); it installs into the game's `vpk/` folder. The generated
+  `englishclient_<map>.bsp.pak000_dir.vpk` plus `client_<map>.bsp.pak000_000.vpk`
+  pair and the older renamed `client_<map>..._dir.vpk` form are both accepted.
 - The map must pass `validate_records.py`. `manifest.json` lists file hashes
   and every BSP material and static-prop model as shipped or expected from the
   base game; `--strict` fails if anything is not shipped. `INSTALL.md` and one

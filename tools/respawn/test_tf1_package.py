@@ -108,6 +108,18 @@ class PackageTests(unittest.TestCase):
                          ['materials/world/b.vmt', 'materials/world/b_col.vtf'])
         self.assertTrue((self.root / 'out/r1delta/Author.Test/materials/world/b_col.vtf').is_file())
 
+    def test_shader_vpk_naming_from_pack_tf1_shaders(self):
+        from pack_vpk import pack_files
+        folder = self.root / 'shader-vpk'
+        pack_files({'shaders/fxc/water_ps40.vcs': b'VCS\0'}, folder,
+                   'client_mp_test.bsp.pak000')
+        manifest = self.build(shader_vpk=folder)
+        expected = {
+            'vpk/client_mp_test.bsp.pak000_000.vpk',
+            'vpk/englishclient_mp_test.bsp.pak000_dir.vpk',
+        }
+        self.assertEqual({p for p in manifest['files'] if p.startswith('vpk/')}, expected)
+
     def test_rejections(self):
         with self.assertRaisesRegex(ValueError, 'strict'):
             self.build(strict=True)
@@ -125,6 +137,11 @@ class PackageTests(unittest.TestCase):
         (vpk / 'client_mp_test.bsp.pak000_000.vpk').write_bytes(b'x')
         with self.assertRaisesRegex(ValueError, '_dir.vpk'):
             self.build(shader_vpk=vpk)
+        other = self.root / 'bad-shader-vpk'
+        other.mkdir()
+        (other / 'englishclient_mp_other.bsp.pak000_dir.vpk').write_bytes(b'x')
+        with self.assertRaisesRegex(ValueError, 'expected only'):
+            self.build(shader_vpk=other)
         write_bsp(self.maps / 'mp_test.bsp', version=37)
         with self.assertRaisesRegex(ValueError, 'v29'):
             self.build()

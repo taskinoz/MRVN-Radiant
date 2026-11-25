@@ -8,6 +8,7 @@ The layouts are the ones the native harnesses load:
   tfo/<Name>/mod.json, tfo/<Name>/mod/maps/<map>.bsp (+ .bsp_lump, .ent, graphs/<map>.ain)
   r1delta/<Name>/maps/<map>.bsp (+ the same files); list <Name> in r1/addonlist.txt
   vpk/client_<map>.bsp.pak000_*.vpk   optional shader-only map VPK (pack_tf1_shaders.py)
+                                      the directory may be englishclient_<map>...
 
 The compiled level must pass validate_records.py (records, entity partitions and
 sidecars). Every material named by the BSP and every static-prop model is listed
@@ -125,16 +126,35 @@ def asset_files(assets):
 
 
 def shader_vpks(folder, map_name):
+    """Accept the VPK pair written by pack_tf1_shaders.py.
+
+    pack_vpk.pack_files() writes englishclient_<map>.bsp.pak000_dir.vpk and
+    client_<map>.bsp.pak000_000.vpk. Older fixtures renamed the directory to
+    client_<map>...; both directory forms are valid. External blocks must keep
+    the unprefixed client_<map>... name.
+    """
     if folder is None:
         return []
     if linked(folder) or not folder.is_dir():
         raise ValueError('--shader-vpk must be a real directory')
     vpks = sorted(p for p in folder.iterdir() if p.suffix.lower() == '.vpk')
     prefix = f'client_{map_name}.bsp.pak000_'.lower()
-    if not vpks or any(linked(p) or not p.name.lower().startswith(prefix) for p in vpks):
+    dir_prefix = 'english' + prefix
+    directories = []
+    for path in vpks:
+        name = path.name.lower()
+        if linked(path):
+            raise ValueError(f'linked shader VPK: {path}')
+        if name.endswith('_dir.vpk'):
+            if not name.startswith((prefix, dir_prefix)):
+                raise ValueError(f'expected only {prefix}*.vpk files in --shader-vpk')
+            directories.append(path)
+        elif not name.startswith(prefix):
+            raise ValueError(f'expected only {prefix}*.vpk files in --shader-vpk')
+    if not vpks:
         raise ValueError(f'expected only {prefix}*.vpk files in --shader-vpk')
-    if not any(p.name.lower().endswith('_dir.vpk') for p in vpks):
-        raise ValueError('shader VPK set has no _dir.vpk')
+    if len(directories) != 1:
+        raise ValueError('shader VPK set needs exactly one _dir.vpk')
     return vpks
 
 

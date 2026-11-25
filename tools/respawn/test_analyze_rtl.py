@@ -1,4 +1,4 @@
-"""Unit tests for the RTL analysis helpers (synthetic data, no retail maps)."""
+﻿"""Unit tests for the RTL analysis helpers (synthetic data, no retail maps)."""
 import struct
 import unittest
 

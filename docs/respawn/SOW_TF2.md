@@ -5,6 +5,13 @@ Date: 24 November 2026. Companion index:
 tracks the v37 path only. Do not transfer an item to Apex by matching lump
 numbers; Apex needs its own pinned corpus and engine checks.
 
+Path convention: `.local/respawn/...` paths for integration and older branch
+evidence are relative to the main `C:/Users/Tristan/GitHub/MRVN-Radiant`
+checkout. Closure-owned one-hash evidence under
+`.local/respawn/tf2-lighting-onehash-native-20261124` is relative to
+`.local/respawn/tf1-tfo-closure`. Absolute paths are used for game installs and
+profiles outside those checkouts.
+
 ## Pinned target and current boundary
 
 | Runtime | Installed build | Boundary of existing evidence |
@@ -35,10 +42,10 @@ Python unit tests, six C++ reader/bake tests and the isolated `lit` and
 unrelated TF1 `sky-only` fixture (`ledge client data outside CM_BRUSHES`). The
 final one-hash integration build passes the whole compiler suite: 69 reports,
 zero issues, including 29 `titanfall2` fixtures. It also passes 316 Python unit
-tests and six C++ tests. An isolated replay of the three TF2 lighting fixtures
+tests and six C++ tests. Isolated compiler replays of the TF2 lighting fixtures
 produced lump payloads identical to the original evidence build; only BSP header
-timestamp bytes differ. Native captures below remain tied to the earlier
-`6daec3b2…` build and have not been repeated under the one-hash compiler.
+timestamp bytes differ. Broader native captures below remain tied to the earlier
+`6daec3b2…` build, but one bounded one-hash native replay is recorded below.
 
 A fresh native smoke pass on 24 November 2026 loaded that fixture as
 `mp_mrvn_tf2light_stock` in the isolated `R2MapHarness` profile. The log shows
@@ -54,6 +61,20 @@ build manifest SHA-256 `01fcbedddc0f16aea59e8a495d23f8e63687e622d6c9446a00c11e7c
 This certifies load/render/shutdown for this fixture only, not shader-level
 channel semantics or every light class, and it used the `1.31.13` harness
 profile rather than the main `1.31.16` profile.
+
+The same fixture was recompiled with compiler
+`b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110` and loaded
+in an ARES-owned profile seeded from the pinned `R2MapHarness` `Northstar.dll`
+(`ff9bd1dc1606a2f3e8109d52b3d9a491b07869fc04cf600aabcdf47fb2c96547`) and core
+mods. All lump payloads matched the earlier BSP; the loaded/finished report has
+the same two floor traces ending at z=0.03125, four nonblank captures, no script
+errors and no crash dumps. Replay BSP SHA-256
+`a7e2e38eb1d7e4967753c69d6e80096d2068e73e036b491bf49711923cd949bc`; report
+SHA-256 `5d6f5f3e4be56dd76320de49cce9fdf31e8cf71ac30f89f08b7813c891af87d7`.
+Evidence: `.local/respawn/tf2-lighting-onehash-native-20261124/native-evidence.json`
+(SHA-256 `ec5f6b2aa59a81e1de2bdb83cd9fb38c7fd0a5a2397bb9b250152dff0455cdc0`).
+This is a load/render/shutdown replay only, with window-fallback captures; it
+does not test the `R2Northstar` `1.31.16` label or add image comparison.
 
 Baseline evidence:
 [RESPAWN_MAP_SUPPORT_AUDIT.md](RESPAWN_MAP_SUPPORT_AUDIT.md),
@@ -206,8 +227,9 @@ Evidence: `.local/respawn/integration-one-hash-replay/integration/results.json`
 (SHA-256 `29017908A2E67186981F6EA3AE5CC862A1845B15B5264A790A1808AE7A5AFB36`).
 
 **Missing:** styled/targeted lights, v1/v2 record emission, full shader-level
-channel semantics, a native replay under the one-hash compiler, and fill-level
-agreement across retail maps.
+channel semantics, a native RTL/SKY A/B under the one-hash compiler, and
+fill-level agreement across retail maps. The one-hash smoke replay above proves
+load/trace/capture only.
 
 **Acceptance:** decode RTL channels with engine/shader evidence; compare raw
 atlas planes to retail under the same exposure conditions.

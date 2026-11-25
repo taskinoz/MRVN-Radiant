@@ -5,6 +5,13 @@ Date: 24 November 2026. Companion index:
 item to Apex by matching TF2 v37 lump numbers. Pin the game build, season corpus
 and R5Reloaded SDK before starting any item.
 
+Path convention: `.local/respawn/...` paths for integration and older branch
+evidence are relative to the main `C:/Users/Tristan/GitHub/MRVN-Radiant`
+checkout. Closure-owned one-hash evidence under
+`.local/respawn/apex-onehash-native-20261124` is relative to
+`.local/respawn/tf1-tfo-closure`. Absolute paths are used for game installs and
+profiles outside those checkouts.
+
 ## Pinned targets and current boundary
 
 | Source / runtime | Build or revision | Boundary |
@@ -28,9 +35,11 @@ Baseline evidence:
 the TF1 acceptance and TF2 lighting changes; the resulting compiler passes the
 full 69-report suite. A dev-textured fixture room and a recovered TF2 `mp_box`
 load in the S3 rendered client, with 14/14 native trace checks and visible
-per-face lightmaps/prop contact shadows. That native evidence predates the
-one-hash compiler and has not been replayed under it, so this remains a bounded
-proof of concept, not full season or asset compatibility.
+per-face lightmaps/prop contact shadows. The rendered-client evidence predates
+the one-hash compiler, but the 14-check fixture has now been replayed under that
+exact binary on a fresh dedicated R5 server with all checks passing. This is
+still a bounded server/collision proof of concept, not client, season or asset
+compatibility.
 
 ## Map support
 
@@ -54,13 +63,15 @@ issues: 37 `titanfallonline`, 29 `titanfall2` and 3 `apexlegends`. It also passe
 316 Python unit tests and six C++ tests. The older 33/26/Apex counts are no
 longer the acceptance totals.
 
-**Missing:** replay the 14/14 native Apex fixture under this exact compiler
-hash, from a clean checkout. The retained rendered-client result belongs to the
-earlier `apex-s3-compiler` build and must not be claimed for the one-hash binary.
+**Missing:** rebuild from a clean checkout and replay the rendered-client
+result under this exact compiler hash. The 14/14 dedicated-server checks now
+pass under the one-hash binary; the retained rendered-client result still belongs
+to the earlier `apex-s3-compiler` build and must not be claimed for that binary.
 
 **Acceptance:** one build from the chosen base contains the S3 backend, passes
 the full compiler suite (met), and reproduces the branch's 14/14 native fixture
-from a clean checkout (open).
+under the chosen binary (met for the dedicated-server regression; clean-checkout
+rebuild open).
 
 ### APEX-MAP-01 — season-pinned v47 profile and corpus — Partial (`S`/`B`)
 
@@ -152,7 +163,7 @@ parity.
 **Acceptance:** native trace suite on an authored large map with several cells;
 matched retail comparison; record all contents values and harness reports.
 
-### APEX-COL-02 — branch backend differential review — Partial (`S`/`N`)
+### APEX-COL-02 — branch backend differential review — Done (`S`/`B`/`N`)
 
 Before the S3 corrections, the r5valkyrie backend's own compiler was built and
 tested: a dev-textured box rendered with lightmaps and ten line/hull traces
@@ -161,11 +172,21 @@ wrong collision/visibility encodings that the engine tolerated without
 crashing. The branch fixed the realtime light, mesh, lightmap, RTL, probe,
 visibility, CSM and tree-index layouts against retail samples.
 
-**Missing:** differential structural and native tests after integration; verify
-that no later edit regressed the fork's successfully traced geometry.
+**Differential replay (`B`/`N`):** the one-hash integration compares earlier BSP
+`6151e0270846d96aa14748715379e87a1233f29eec4a594f9e3ba4e732a849d9` with replay
+BSP `6d168586b993ff22f59adc07d43d5d80d0b53818df21feb5f1aea1ddea1689f1`. Both
+validation-issue arrays are empty, the lump-payload differences are retained,
+and a fresh dedicated R5 server passed 14/14 fixture checks. Evidence:
+`.local/respawn/apex-onehash-native-20261124/native-evidence.json` (SHA-256
+`07c6cb021ccb42125099410d7fb28dd1bdc5837fa4be4e1cf19eb65fc3d32192`).
 
-**Acceptance:** old and new compiler outputs compared with `inspect_bsp.py`,
-`validate_records.py` and the 14-check native fixture; failures retained.
+**Still open:** rendered-client parity, custom assets and S0–S2 are separate
+gates; this replay does not close those or the broader authored-geometry,
+multi-cell and BVH limits in APEX-COL-01.
+
+**Acceptance:** the stated differential gate is met for structural comparison
+and the 14-check dedicated-server native fixture; failures from earlier branches
+remain retained in their own evidence.
 
 ## Lighting and shadows
 
@@ -231,13 +252,22 @@ The S3 branch has cleared a bounded rendered-client gate: fixture room with dev
 textures, per-face lightmaps, three props and a ramp; `mp_box` load; trigger
 touch; and 14/14 native trace checks in `regress-2` through `regress-5`.
 `regress-1` timed out before spawning, so load stability was not automatic. The
-backend is now in the one-hash compiler and its three Apex compiler reports pass,
-but the native result has **not** been replayed under that exact binary. It has
-**not** cleared full compatibility. Before advertising Apex support:
+backend is now in the one-hash compiler and its three Apex compiler reports pass.
+Under that exact compiler binary, `mp_mrvn_regress_onehash` loaded on a fresh
+dedicated R5 server VM and passed 14/14 checks. Replay BSP SHA-256
+`6d168586b993ff22f59adc07d43d5d80d0b53818df21feb5f1aea1ddea1689f1`; report
+SHA-256 `57cd8c3e3e68df5aca19f80dd9c6c323f95d7270920752f1dfd2452caf8697aa`.
+Evidence:
+`.local/respawn/apex-onehash-native-20261124/native-evidence.json` (SHA-256
+`07c6cb021ccb42125099410d7fb28dd1bdc5837fa4be4e1cf19eb65fc3d32192`). Lump
+payload differences against the earlier fixture are retained there; no rendered
+client, custom material/model or image comparison was added. Full compatibility
+has **not** been cleared. Before advertising Apex support:
 
-1. reproduce the 14/14 native result under compiler
-   `b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110` from a
-   clean checkout (compiler integration itself is complete);
+1. rebuild from a clean checkout under compiler
+   `b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110` and
+   repeat the rendered-client gate; the dedicated-server 14/14 replay under the
+   chosen binary is already recorded;
 2. boot with custom materials/models and no missing-material checkerboard;
 3. show dome/sky/cubemaps at matched cameras;
 4. run a short first-person session in the selected mode with multiplayer;

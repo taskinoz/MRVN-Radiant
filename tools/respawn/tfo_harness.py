@@ -44,6 +44,15 @@ from pathlib import Path
 MOD = 'MRVN.TF1Harness'
 
 
+def map_source(maps, map_name):
+    """Return the folder holding the compiled BSP, accepting a build root or the maps folder."""
+    maps = Path(maps)
+    source = maps / 'maps' if (maps / 'maps' / f'{map_name}.bsp').is_file() else maps
+    if not (source / f'{map_name}.bsp').is_file():
+        raise ValueError(f'missing compiled map: {maps / (map_name + ".bsp")}')
+    return source
+
+
 def target_map_started(text, map_name):
     return bool(re.search(r'UICodeCallback_LevelLoadingStarted:\s*' + re.escape(map_name) + r'(?:\s|$)', text))
 
@@ -435,7 +444,8 @@ def main():
     enabled_path = args.game/'Mods/enabledmods.json'
     enabled_backup = enabled_path.read_bytes()
     log = args.game/'Logs/tforevive.log'
-    mod = write_mod(args.game, args.maps, checks)
+    source = map_source(args.maps, args.map)
+    mod = write_mod(args.game, source, checks)
     try:
         enabled = json.loads(enabled_backup)
         enabled[MOD] = True

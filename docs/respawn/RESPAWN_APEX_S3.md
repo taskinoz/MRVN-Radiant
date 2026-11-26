@@ -177,21 +177,32 @@ visibility, and the CSM reference split. It changed these:
   BC6H), 9 mips, flags `0x420c`, and a `CMA` resource. The compiler does
   not write it yet.
 
+## Character lighting (26 November 2026)
+
+Without a HIPRT SDK the fork's probe pass skipped every ray test: probes
+got the full sky indoors (the same blue-grey ambient everywhere) and were
+placed at the lowest mesh height, on the floor. `hiprt_trace.cpp` now takes
+a CPU closest-hit function and uses it whenever no GPU scene exists; the
+Apex lighting pass registers its brush occluders. Probes now sit above the
+floor and their SH follows the scene (beside an orange static light
+0.19/0.13/0.15, in an unlit corner 0.05/0.07/0.14). In R5Reloaded, third
+person (`player.SetThirdPersonShoulderModeOn()`), the character is tinted
+orange by the static light, lit from above under a realtime spot through
+its probe light reference, and dark in the unlit corner.
+
 ## Open work, in order
 
-1. **Character lighting.** Check probe lighting on a player in third person
-   near static and realtime lights.
-2. **Lightmap quality.** Patch and prop occlusion, bounce light, and filtering
+1. **Lightmap quality.** Patch and prop occlusion, bounce light, and filtering
    of the 32-ray sky term (jagged bands show on some walls).
-3. **Brush entities.** `func_brush`, doors and other movers through the
+2. **Brush entities.** `func_brush`, doors and other movers through the
    `*coll` entity collision path.
-4. **Cells and portals.** The object tree is retail-shaped with one cell;
+3. **Cells and portals.** The object tree is retail-shaped with one cell;
    measure culling with several cells on a large map. Trees allow 22-bit
    (4,194,303) node and reference indices.
-5. **Cubemaps.** Bake cubemaps and write `cubemaps.hdr.vtf` into the
+4. **Cubemaps.** Bake cubemaps and write `cubemaps.hdr.vtf` into the
    PAKFILE in the S3 format above.
-6. **S0–S2.** Find a way to run custom maps in those builds, or document
+5. **S0–S2.** Find a way to run custom maps in those builds, or document
    that the shared layout is the only evidence.
-7. **Navigation.** R5 maps use separate navmesh files; none are generated.
-8. **GPU baking.** The fork's HIPRT path is built only when its SDK is in
+6. **Navigation.** R5 maps use separate navmesh files; none are generated.
+7. **GPU baking.** The fork's HIPRT path is built only when its SDK is in
    `windeps/hiprt`; the CPU path is used otherwise.

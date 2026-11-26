@@ -37,6 +37,11 @@
 */
 
 #include "hiprt_trace.h"
+#include <algorithm>
+#include <atomic>
+#include <functional>
+#include <thread>
+#include <vector>
 #include "remap.h"
 #include "bspfile_shared.h"
 
@@ -756,7 +761,7 @@ bool TestVisibility(const Vector3 &origin, const Vector3 &dir, float maxDist) {
 }
 
 
-bool TraceRay(const Vector3 &origin, const Vector3 &dir, float maxDist,
+static bool TraceRayGpu(const Vector3 &origin, const Vector3 &dir, float maxDist,
               float &outHitDist, Vector3 &outHitNormal, int &outMeshIndex) {
 #ifdef USE_HIPRT
     if (!g_sceneReady)
@@ -792,7 +797,7 @@ bool TraceRay(const Vector3 &origin, const Vector3 &dir, float maxDist,
 }
 
 
-bool TraceRayExtended(const Vector3 &origin, const Vector3 &dir, float maxDist,
+static bool TraceRayExtendedGpu(const Vector3 &origin, const Vector3 &dir, float maxDist,
                       float &outHitDist, Vector3 &outHitNormal, int &outMeshIndex,
                       Vector2 &outHitUV, int &outPrimID) {
 #ifdef USE_HIPRT
@@ -863,7 +868,7 @@ bool TraceRayExtended(const Vector3 &origin, const Vector3 &dir, float maxDist,
 }
 
 
-bool IsSceneReady() {
+static bool IsGpuSceneReady() {
 #ifdef USE_HIPRT
     return g_sceneReady;
 #else
@@ -881,7 +886,7 @@ SceneStats GetSceneStats() {
 }
 
 
-void BatchTestVisibility(int count, const Vector3* origins, const Vector3* dirs,
+static void BatchTestVisibilityGpu(int count, const Vector3* origins, const Vector3* dirs,
                          const float* maxDists, uint8_t* results) {
 #ifdef USE_HIPRT
     if (!g_sceneReady || count <= 0 || g_anyHitBatchFunc == nullptr) {
@@ -933,7 +938,7 @@ void BatchTestVisibility(int count, const Vector3* origins, const Vector3* dirs,
 }
 
 
-void BatchTraceRay(int count, const Vector3* origins, const Vector3* dirs,
+static void BatchTraceRayGpu(int count, const Vector3* origins, const Vector3* dirs,
                    const float* maxDists, float* outHitDists,
                    float* outHitNormalXs, float* outHitNormalYs,
                    float* outHitNormalZs, int* outMeshIndices) {
@@ -1010,6 +1015,84 @@ void BatchTraceRay(int count, const Vector3* origins, const Vector3* dirs,
         if (outMeshIndices) outMeshIndices[i] = -1;
     }
 #endif
+}
+
+
+/*
+    CPU fallback
+    Without a HIPRT SDK (USE_HIPRT off) or a GPU scene, these entry points
+    used to report "no scene", and callers then skipped ray tests: probes got
+    the full sky indoors and stayed at the lowest mesh height. A registered
+    closest-hit function (the Apex lighting pass registers its brush
+    occluders) now answers them on the CPU.
+*/
+namespace {
+CpuClosestHit g_cpuClosest;
+
+template <typename Body>
+void ParallelRays(int count, Body body) {
+    const unsigned threads = std::max(1u, std::min<unsigned>(std::thread::hardware_concurrency(), 64u));
+    std::atomic<int> next{0};
+    std::vector<std::thread> pool;
+    for (unsigned t = 0; t < threads; t++) {
+        pool.emplace_back([&]() {
+            for (int i = next.fetch_add(256); i < count; i = next.fetch_add(256))
+                for (int k = i; k < std::min(count, i + 256); k++) body(k);
+        });
+    }
+    for (std::thread &thread : pool) thread.join();
+}
+}
+
+void SetCpuFallback(CpuClosestHit closest) { g_cpuClosest = std::move(closest); }
+
+bool IsSceneReady() { return IsGpuSceneReady() || static_cast<bool>(g_cpuClosest); }
+
+bool TraceRay(const Vector3 &origin, const Vector3 &dir, float maxDist,
+              float &outHitDist, Vector3 &outHitNormal, int &outMeshIndex) {
+    if (IsGpuSceneReady()) return TraceRayGpu(origin, dir, maxDist, outHitDist, outHitNormal, outMeshIndex);
+    outMeshIndex = -1;
+    return g_cpuClosest && g_cpuClosest(origin, dir, maxDist, outHitDist, outHitNormal);
+}
+
+bool TraceRayExtended(const Vector3 &origin, const Vector3 &dir, float maxDist,
+                      float &outHitDist, Vector3 &outHitNormal, int &outMeshIndex,
+                      Vector2 &outHitUV, int &outPrimID) {
+    if (IsGpuSceneReady())
+        return TraceRayExtendedGpu(origin, dir, maxDist, outHitDist, outHitNormal, outMeshIndex, outHitUV, outPrimID);
+    outMeshIndex = -1;
+    outPrimID = 0;
+    outHitUV = Vector2(0, 0);
+    return g_cpuClosest && g_cpuClosest(origin, dir, maxDist, outHitDist, outHitNormal);
+}
+
+void BatchTestVisibility(int count, const Vector3* origins, const Vector3* dirs,
+                         const float* maxDists, uint8_t* results) {
+    if (IsGpuSceneReady()) { BatchTestVisibilityGpu(count, origins, dirs, maxDists, results); return; }
+    if (!g_cpuClosest) { for (int i = 0; i < count; i++) results[i] = 0; return; }
+    ParallelRays(count, [&](int i) {
+        float dist; Vector3 normal;
+        results[i] = g_cpuClosest(origins[i], dirs[i], maxDists[i], dist, normal) ? 1 : 0;
+    });
+}
+
+void BatchTraceRay(int count, const Vector3* origins, const Vector3* dirs,
+                   const float* maxDists, float* outHitDists,
+                   float* outHitNormalXs, float* outHitNormalYs,
+                   float* outHitNormalZs, int* outMeshIndices) {
+    if (IsGpuSceneReady()) {
+        BatchTraceRayGpu(count, origins, dirs, maxDists, outHitDists, outHitNormalXs, outHitNormalYs, outHitNormalZs, outMeshIndices);
+        return;
+    }
+    ParallelRays(count, [&](int i) {
+        float dist = -1.0f; Vector3 normal(0, 0, 0);
+        const bool hit = g_cpuClosest && g_cpuClosest(origins[i], dirs[i], maxDists[i], dist, normal);
+        outHitDists[i] = hit ? dist : -1.0f;
+        if (outHitNormalXs) outHitNormalXs[i] = normal.x();
+        if (outHitNormalYs) outHitNormalYs[i] = normal.y();
+        if (outHitNormalZs) outHitNormalZs[i] = normal.z();
+        if (outMeshIndices) outMeshIndices[i] = -1;
+    });
 }
 
 } // namespace HIPRTTrace

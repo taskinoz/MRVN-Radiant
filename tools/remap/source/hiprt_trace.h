@@ -22,6 +22,7 @@
    ------------------------------------------------------------------------------- */
 
 #pragma once
+#include <functional>
 
 /*
     HIPRT Ray Tracing Acceleration
@@ -114,6 +115,12 @@ bool TraceRayExtended(const Vector3 &origin, const Vector3 &dir, float maxDist,
 
 // Check if HIPRT scene is ready for ray tracing
 bool IsSceneReady();
+
+// CPU closest-hit used when no GPU scene is available: returns true on a hit
+// within maxDist and fills the hit distance and surface normal.
+using CpuClosestHit = std::function<bool(const Vector3 &origin, const Vector3 &dir, float maxDist,
+                                         float &outHitDist, Vector3 &outHitNormal)>;
+void SetCpuFallback(CpuClosestHit closest);
 
 // Get statistics about the current scene
 struct SceneStats {

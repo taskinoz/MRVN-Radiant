@@ -1888,6 +1888,16 @@ void ApexLegends::BuildLightOccluders(const entity_t &world) {
     }
     Sys_Printf("  %zu occluder brushes for lighting\n", brushes.size());
     g_occluders = std::make_unique<Respawn::Bake::Occluders>(std::move(brushes));
+    HIPRTTrace::SetCpuFallback([](const Vector3 &origin, const Vector3 &dir, float maxDist,
+                                  float &outHitDist, Vector3 &outHitNormal) {
+        double fraction = 0;
+        Respawn::Bake::V3 normal{};
+        const Vector3 end = origin + dir * maxDist;
+        if (!g_occluders || !g_occluders->firstHit(ToV3(origin), ToV3(end), fraction, normal)) return false;
+        outHitDist = static_cast<float>(fraction) * maxDist;
+        outHitNormal = Vector3(static_cast<float>(normal.x), static_cast<float>(normal.y), static_cast<float>(normal.z));
+        return true;
+    });
 }
 
 static bool OccludersBlocked(const Vector3 &from, const Vector3 &to) {

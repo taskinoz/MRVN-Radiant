@@ -1894,6 +1894,16 @@ void ApexLegends::BuildLightOccluders(const entity_t &world) {
     Sys_Printf("  %zu occluder brushes for lighting\n", brushes.size());
     g_occluders = std::make_unique<Respawn::Bake::Occluders>(std::move(brushes));
     g_sealers = std::make_unique<Respawn::Bake::Occluders>(std::move(sealers));
+    HIPRTTrace::SetCpuFallback([](const Vector3 &origin, const Vector3 &dir, float maxDist,
+                                  float &outHitDist, Vector3 &outHitNormal) {
+        double fraction = 0;
+        Respawn::Bake::V3 normal{};
+        const Vector3 end = origin + dir * maxDist;
+        if (!g_occluders || !g_occluders->firstHit(ToV3(origin), ToV3(end), fraction, normal)) return false;
+        outHitDist = static_cast<float>(fraction) * maxDist;
+        outHitNormal = Vector3(static_cast<float>(normal.x), static_cast<float>(normal.y), static_cast<float>(normal.z));
+        return true;
+    });
 }
 
 /*
@@ -3009,32 +3019,22 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
                 Vector3 rayStart(posX, posY, meshBounds.maxs[2] - 8.0f);
                 float maxTrace = meshSize[2] + 16.0f;
 
-                if (HIPRTTrace::IsSceneReady()) {
+                // Every floor down the column, top to bottom (upward-facing
+                // hits outside solid brushes); the top floor alone missed
+                // lower storeys.
+                Vector3 origin = rayStart;
+                float reach = maxTrace;
+                for (int floors = 0; floors < 16 && reach > 0.0f; floors++) {
                     float hitDist;
                     Vector3 hitNormal;
                     int meshIdx;
-                    if (HIPRTTrace::TraceRay(rayStart, Vector3(0,0,-1), maxTrace,
-                                             hitDist, hitNormal, meshIdx)) {
-                        if (hitNormal[2] > 0.1f) {
-                            float floorZ = rayStart[2] - hitDist;
-                            seeds.push_back(Vector3(posX, posY, floorZ + FLOOR_PROBE_HEIGHT));
-                        }
-                    }
-                } else {
-                    // CPU: every floor down the column, top to bottom.
-                    std::vector<Vector3> origin{rayStart}, down{Vector3(0, 0, -1)};
-                    std::vector<float> reach{maxTrace}, dist{-1.0f};
-                    for (int floors = 0; floors < 16; floors++) {
-                        ProbeBatchDistance(origin, down, reach, dist);
-                        if (dist[0] < 0.0f) break;
-                        const float floorZ = origin[0][2] - dist[0];
-                        if (!OccludersInside(Vector3(posX, posY, floorZ + 1.0f)))
-                            seeds.push_back(Vector3(posX, posY, floorZ + FLOOR_PROBE_HEIGHT));
-                        origin[0][2] = floorZ - 1.0f;
-                        while (origin[0][2] > meshBounds.mins[2] && OccludersInside(origin[0])) origin[0][2] -= 8.0f;
-                        reach[0] = origin[0][2] - meshBounds.mins[2] + 8.0f;
-                        if (reach[0] <= 0.0f) break;
-                    }
+                    if (!HIPRTTrace::TraceRay(origin, Vector3(0, 0, -1), reach, hitDist, hitNormal, meshIdx)) break;
+                    const float floorZ = origin[2] - hitDist;
+                    if (hitNormal[2] > 0.1f && !OccludersInside(Vector3(posX, posY, floorZ + 1.0f)))
+                        seeds.push_back(Vector3(posX, posY, floorZ + FLOOR_PROBE_HEIGHT));
+                    origin[2] = floorZ - 1.0f;
+                    while (origin[2] > meshBounds.mins[2] && OccludersInside(origin)) origin[2] -= 8.0f;
+                    reach = origin[2] - meshBounds.mins[2] + 8.0f;
                 }
             }
         }

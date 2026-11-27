@@ -80,8 +80,9 @@ V3 FaceDirection(int face, double u, double v) {
 
 using Face = std::vector<V3>;  // size x size, row-major
 
-// With no radiance grid, `directSun` lights hit surfaces with each unshadowed
-// sun (albedo 0.5) so sunlit ground still shows in the reflection.
+// With no radiance grid, `directSun` lights hit surfaces directly (albedo 0.5)
+// from each unshadowed light in `suns`, which may also hold point and spot
+// lights, so sunlit ground and local light pools show in the reflection.
 Face RenderFace(V3 origin, int face, const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid,
                 V3 sky, const std::vector<Respawn::Bake::Light> &suns, bool directSun = false) {
     Face out(RenderSize * RenderSize);
@@ -99,17 +100,28 @@ Face RenderFace(V3 origin, int face, const Respawn::Bake::Occluders *occluders, 
                 colour = sky * 0.15;
                 if (grid && grid->lookup(hit + normal * 1.0, normal, radiance)) colour = colour + radiance;
                 if (!grid && directSun)
-                    for (const Respawn::Bake::Light &sun : suns) {
-                        const double ndotl = Respawn::Bake::dot(normal, -sun.direction);
+                    for (const Respawn::Bake::Light &light : suns) {
                         double blocked;
                         V3 unused;
                         const V3 from = hit + normal * 1.0;
-                        if (ndotl > 0 && !occluders->firstHit(from, from - sun.direction * far, blocked, unused))
-                            colour = colour + sun.intensity * (0.5 * ndotl);
+                        if (light.type == Respawn::Bake::LightType::Sun) {
+                            const double ndotl = Respawn::Bake::dot(normal, -light.direction);
+                            if (ndotl > 0 && !occluders->firstHit(from, from - light.direction * far, blocked, unused))
+                                colour = colour + light.intensity * (0.5 * ndotl);
+                            continue;
+                        }
+                        const V3 toLight = light.origin - from;
+                        const double distance = Respawn::Bake::length(toLight);
+                        if (distance <= 0 || distance >= light.zeroDistance) continue;
+                        const V3 l = toLight * (1.0 / distance);
+                        const double ndotl = Respawn::Bake::dot(normal, l);
+                        const double scale = ndotl * Respawn::Bake::falloff(light, distance) * Respawn::Bake::spotFactor(light, -l);
+                        if (scale > 0 && !occluders->firstHit(from, light.origin, blocked, unused))
+                            colour = colour + light.intensity * (0.5 * scale);
                     }
             } else {
                 for (const Respawn::Bake::Light &sun : suns)
-                    if (Respawn::Bake::dot(d, -sun.direction) > 0.9995)
+                    if (sun.type == Respawn::Bake::LightType::Sun && Respawn::Bake::dot(d, -sun.direction) > 0.9995)
                         colour = colour + sun.intensity * 4.0;
             }
             out[y * RenderSize + x] = colour;

@@ -419,9 +419,19 @@ shadows and trigger touch also work.
     renderer. It is written to a new PAKFILE lump whose VTF header matches
     retail World's Edge field for field. The S3 client loads the map and
     renders as before (`apex-cube-contact.png`).
-  - Still open: CMA is 1.0 (meaning unknown, as TF2-15); there is no radiance
-    grid, so walls are lit only by the sun; reflections need a visual check
-    (HV-01).
+  - In-game check with the built-in `weapon_cubemap` (chrome `envballs`
+    viewmodel, `give weapon_cubemap`), compared with the old build:
+    - Without a PAKFILE, the chrome ball reflects an engine fallback outdoor
+      scene.
+    - With the compiled cubemap it reflects our rooms. The renderer now adds
+      point and spot lights, and unlit walls are black when the map has no sky
+      ambient. Before that change the ball showed a flat grey-blue tint.
+    - Decoded faces: `apex-cube5-faces.png`. Chrome-ball comparison:
+      `apex-envballs-chrome-zoom.png` (HV-01).
+  - Still open:
+    - CMA is 1.0 (meaning unknown, as TF2-15).
+    - There is no bounce light, and PBR lights are left out of the cubemaps.
+    - Reflections are not compared with a retail map.
 - [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
 - [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
@@ -530,14 +540,17 @@ These items need a person: a judgement call, a visual check or access only you
 have. Screenshots are under
 `.local/respawn/tf2-targeted-spot-native-20261126/`.
 
-- [ ] **HV-01 Apex cubemap reflections**: `apex-cube-contact.png` shows the S3
-  test map before (top) and after (bottom) the compiled cubemap. The map loads
-  and renders the same, but its dev textures barely reflect. Please look at a
-  shiny material in game, or name a retail material to place in a test map,
-  and judge whether the reflection looks right.
-- [ ] **HV-02 TF1 light-style probe**: `tf1-style2-contact.png`. Confirm the
+- [ ] **HV-01 Apex cubemap reflections**: `apex-envballs-chrome-zoom.png`
+  shows the `weapon_cubemap` chrome ball in each test room.
+  - Row A: old build (engine fallback).
+  - Row B: first compiled version (grey tint).
+  - Row C: current version (dark room, bright patches from the spot pools).
+  - Please judge row C, ideally in game: `give weapon_cubemap` on an
+    MRVN-compiled map.
+- [x] **HV-02 TF1 light-style probe**: `tf1-style2-contact.png`. Confirm the
   pools look steady across the four style-2 frames (columns 2–5) and match the
   baseline (column 1).
+  - Confirmed by the user, 27 November 2026: the lights look steady.
 - [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
   (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
   loads with the new `retail_entities.ent` classes and no XML errors.

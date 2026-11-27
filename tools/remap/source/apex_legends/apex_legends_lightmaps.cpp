@@ -1906,7 +1906,9 @@ void ApexLegends::EmitCubemapPakfile() {
     }
     if (origins.empty()) return;
     std::vector<Respawn::Bake::Light> suns;
-    V3 sky{0.4, 0.45, 0.5};
+    // No light_environment (an indoor or sealed map): no sky light, so unlit
+    // walls reflect black rather than a default sky tint.
+    V3 sky{0, 0, 0};
     for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
         const V3 intensity{light.intensity[0], light.intensity[1], light.intensity[2]};
         if (light.type == emit_skylight) {
@@ -1917,6 +1919,20 @@ void ApexLegends::EmitCubemapPakfile() {
             suns.push_back(sun);
         } else if (light.type == emit_skyambient && intensity.x + intensity.y + intensity.z > 0) {
             sky = intensity;
+        } else if ((light.type == emit_point || light.type == emit_spotlight) && !(light.flags & WORLDLIGHT_FLAG_PBR)
+                   && light.radius > 0) {
+            // Non-PBR falloff is the stored polynomial, as in the shared baker.
+            // PBR lights (x100000, inverse square) are left out of the cubemaps.
+            Respawn::Bake::Light local;
+            local.type = light.type == emit_spotlight ? Respawn::Bake::LightType::Spot : Respawn::Bake::LightType::Point;
+            local.origin = {light.origin[0], light.origin[1], light.origin[2]};
+            local.direction = {light.normal[0], light.normal[1], light.normal[2]};
+            local.intensity = intensity;
+            local.zeroDistance = light.radius;
+            local.attenuation = {light.constant_attn, light.linear_attn, light.quadratic_attn};
+            local.cosInner = light.stopdot;
+            local.cosOuter = light.stopdot2;
+            suns.push_back(local);
         }
     }
     std::string level = source;

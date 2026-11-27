@@ -218,6 +218,37 @@ int main() {
                     "TF1 mode: sunlit floor still bounces onto the wall");
         }
 
+        // Realtime slot margin: a texel takes a light's slot when the light reaches
+        // anywhere within +-1 texel of its centre. Slot indices cannot be blended,
+        // so centre-only scoring cut TF1/TFO/Apex spot pools into texel steps.
+        // The spot below lights a 30-unit disc: the texel centred at x=24 is
+        // inside it, x=40 is outside but next to a lit texel, x=56 is two away.
+        {
+            Light spot;
+            spot.type = LightType::Spot;
+            spot.origin = {0, 8, 48};
+            spot.direction = {0, 0, -1};
+            spot.intensity = {1, 1, 1};
+            spot.zeroDistance = 300;
+            spot.attenuation = fitAttenuation(300, 90);
+            spot.cosOuter = 48 / std::sqrt(48.0 * 48.0 + 30.0 * 30.0);
+            spot.cosInner = 0.99;
+            spot.shadowMask = false;
+            spot.hardwareIndex = 1;
+            Options tf1Options = options;
+            tf1Options.sunSlots = false;
+            tf1Options.unshadowedSlots = true;
+            const Result m = bake({floorChart()}, pages, {spot}, {0, 0, 0}, Occluders(), tf1Options);
+            auto hasSpot = [&](int x) {
+                const std::uint32_t word = rtlWord(m, texel(x, 6));
+                return word != RtlUnusedTexel && (word & 0x3f) != RtlUnusedSlot &&
+                       m.rtlPages[word >> 24][word & 0x3f] == 1;
+            };
+            require(hasSpot(7), "Slot margin: texel inside the cone takes the spot");
+            require(hasSpot(8), "Slot margin: texel one step outside the cone keeps the spot");
+            require(!hasSpot(9), "Slot margin: texel two steps outside the cone takes no slot");
+        }
+
         // A block resting on the x<0 half of the floor buries those texels. They
         // must not bake black: they copy the nearest visible texel, so bilinear
         // filtering at the block's foot reads lit values.

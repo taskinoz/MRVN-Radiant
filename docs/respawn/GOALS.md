@@ -199,6 +199,14 @@ edges.
   environments; no TF1 v29 probe fixture yet.
 - [ ] **TF1-19 Cubemaps** `[unproven]`: cubemap selection per material sort,
   path verification and reflection equivalence against Angel City and Colony.
+  - Progress 27 November 2026:
+    - The v29 writer now honours `env_cubemap`; before, it always wrote one
+      cubemap at the spawns.
+    - Cubemaps now include realtime point and spot lights.
+    - Checked in R1Delta with the stock `models/dev/envballs.mdl` (ARES
+      `r1_harness.py` `"cubemap_balls": true`), against retail `mp_angel_city`:
+      `tf1-envballs-contact.png`.
+    - The test rooms are dark, so the reflections are subtle.
 
 ### Materials, models and packaging
 

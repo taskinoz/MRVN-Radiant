@@ -594,7 +594,18 @@ Goals:
 
 These items need a person: a judgement call, a visual check or access only you
 have. Screenshots are under
-`.local/respawn/tf2-targeted-spot-native-20261126/`.
+`.local/respawn/tf2-targeted-spot-native-20261126/` unless an item says
+otherwise.
+
+**Blocked on you (open):**
+
+| Item | What's needed | Blocks |
+| --- | --- | --- |
+| HV-03 | Open each gamepack in MRVN-Radiant and check the generated `retail_entities.ent` loads | ALL-06 |
+| HV-04 | A RenderDoc/PIX draw-count capture of the Apex cell fixture, or a convar that locks visibility | APEX-06, making multi-cell the default |
+
+Agents: add new rows here when work waits on the user, and remove them when
+answered.
 
 - [x] **HV-01 Apex cubemap reflections**: `apex-envballs-chrome-zoom.png`
   shows the `weapon_cubemap` chrome ball in each test room.

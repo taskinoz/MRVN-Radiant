@@ -537,6 +537,52 @@ TF2_ENV_VOLUME_FIXTURE = (
 )
 
 
+
+# Three floor islands with a block each. Cubemap "near" sits by the left and
+# middle islands, "far" by the right one. An envmap_volume targeting "far"
+# encloses the middle island: retail gives a mesh the cubemap of the highest
+# priority volume around its centre, so the middle meshes must take "far"
+# although "near" is closer; the left ones keep the nearest ("near").
+TF2_ENVMAP_VOLUME_FIXTURE = (
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
+    + box((-700, -128, -16), (-400, 128, 0), "bump") + "\n"
+    + box((-600, -32, 0), (-536, 32, 64), "bump") + "\n"
+    + box((-150, -128, -16), (150, 128, 0), "bump") + "\n"
+    + box((-32, -32, 0), (32, 32, 64), "bump") + "\n"
+    + box((1850, -128, -16), (2150, 128, 0), "bump") + "\n"
+    + box((1968, -32, 0), (2032, 32, 64), "bump") + "\n}\n"
+    + entity(classname="env_cubemap", targetname="near", origin="-300 0 128")
+    + entity(classname="env_cubemap", targetname="far", origin="2000 0 128")
+    + '{\n"classname" "envmap_volume"\n"target" "far"\n"priority" "1"\n'
+    + box((-200, -200, -64), (200, 200, 256), "skip") + "\n}\n"
+    + entity(classname="light", origin="0 0 200", _light="255 255 255 300", _distance="512", realtime="0")
+)
+
+
+def tf2_envmap_volume_checks(bsp):
+    """Mesh cubemaps follow envmap_volume before distance."""
+    with bsp.open("rb") as stream:
+        def lump(index):
+            stream.seek(16 + index * 16)
+            offset, length = struct.unpack("<2I", stream.read(8))
+            stream.seek(offset)
+            return stream.read(length)
+        meshes, bounds, cubemaps = lump(0x50), lump(0x51), lump(0x2A)
+    if len(cubemaps) // 16 != 2:
+        raise RuntimeError(f"envmap-volume fixture: {len(cubemaps) // 16} cubemaps, expected 2")
+    seen = {}
+    for i in range(len(meshes) // 28):
+        cubemap = struct.unpack_from("<b", meshes, i * 28 + 11)[0]
+        if cubemap < 0:
+            continue
+        x = struct.unpack_from("<f", bounds, i * 32)[0]
+        region = "left" if x < -300 else "middle" if x < 1000 else "right"
+        seen.setdefault(region, set()).add(cubemap)
+    expected = {"left": {0}, "middle": {1}, "right": {1}}
+    if seen != expected:
+        raise RuntimeError(f"envmap-volume fixture cubemaps by region {seen}, expected {expected}")
+    return seen
+
 def tangent_checks(bsp, titanfall1=False):
     """Bump-lit tangents follow retail. TF2: unit, along +dP/du, bit 31 = mirrored,
     second word zero. TF1: plain tangent and bitangent normal indices, the
@@ -1813,6 +1859,17 @@ def main():
                     raise RuntimeError(f"environment-volume fixture: {env_report['issues']}")
                 tf2_env_volume_checks(env_bsp)
                 reports.append({"game": game, "fixture": "tf2-env-volume", "issues": []})
+                envmap_path = folder / "tf2-envmap-volume.map"
+                envmap_path.write_text(TF2_ENVMAP_VOLUME_FIXTURE, encoding="utf-8")
+                with (folder / "tf2-envmap-volume.log").open("wb") as log:
+                    subprocess.run(command[:-1] + [str(envmap_path)], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                envmap_bsp = envmap_path.with_suffix(".bsp")
+                envmap_report = validate(envmap_bsp)
+                if envmap_report["issues"]:
+                    raise RuntimeError(f"envmap-volume fixture: {envmap_report['issues']}")
+                tf2_envmap_volume_checks(envmap_bsp)
+                reports.append({"game": game, "fixture": "tf2-envmap-volume", "issues": []})
             from decompile_bsp import decompile, rebuild, compile_scene
             project = folder / 'recovered-project'
             decompile(bsp, project)

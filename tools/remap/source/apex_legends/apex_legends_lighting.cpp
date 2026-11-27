@@ -677,12 +677,22 @@ void ApexLegends::EmitShadowEnvironments() {
     and picks the cubemap nearest the mesh's bounds centre.
 */
 void ApexLegends::AssignMeshCubemaps() {
+    // Cubemap names in lump 0x2A order (EmitCubemaps: env_cubemap entities in
+    // entity order; a generated default has none).
+    std::vector<std::string> names;
+    for (const entity_t &e : entities)
+        if (e.classname_is("env_cubemap")) names.push_back(e.valueForKey("targetname"));
+    names.resize(ApexLegends::Bsp::cubemaps.size());
+    const auto volumeCubemap = Titanfall2::EnvmapVolumeLookup(names);
     for (std::size_t i = 0; i < ApexLegends::Bsp::meshes.size(); i++) {
         ApexLegends::Mesh_t &mesh = ApexLegends::Bsp::meshes[i];
         const uint16_t pool = mesh.unknown[2] & 0xFF;
         if (pool == 0 || pool == 3) continue;  // unlit pools keep 0xFF
         uint16_t index = 0xFF;
-        if (!ApexLegends::Bsp::cubemaps.empty() && i < ApexLegends::Bsp::meshBounds.size()) {
+        const int volume = i < ApexLegends::Bsp::meshBounds.size() ? volumeCubemap(ApexLegends::Bsp::meshBounds[i].origin) : -1;
+        if (volume >= 0) {
+            index = static_cast<uint16_t>(volume);
+        } else if (!ApexLegends::Bsp::cubemaps.empty() && i < ApexLegends::Bsp::meshBounds.size()) {
             const Vector3 centre = ApexLegends::Bsp::meshBounds[i].origin;
             float best = FLT_MAX;
             for (std::size_t c = 0; c < ApexLegends::Bsp::cubemaps.size() && c < 0xFF; c++) {

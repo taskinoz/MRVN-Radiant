@@ -410,7 +410,7 @@ shadows and trigger touch also work.
   retail check. Feeds ALL-09.
   - Done 27 November 2026: all 31,262 retail S0–S3 world lights have style 0.
     The writer now writes 0 and warns, like the Titanfall writers.
-- [ ] **APEX-15 Cubemaps** `[wrong]`: `EmitCubemaps()` writes 25 identical
+- [x] **APEX-15 Cubemaps** `[wrong]`: `EmitCubemaps()` writes 25 identical
   samples at the world centre with `guid = 0`, and the PAKFILE is empty. Retail
   S0–S3 ship `materials/maps/<map>/cubemaps.hdr.vtf`: VTF 7.5, 256×256, one
   frame per cubemap, format 66, 9 mips, flags `0x420c`, plus a `CMA` resource.
@@ -428,10 +428,12 @@ shadows and trigger touch also work.
       ambient. Before that change the ball showed a flat grey-blue tint.
     - Decoded faces: `apex-cube5-faces.png`. Chrome-ball comparison:
       `apex-envballs-chrome-zoom.png` (HV-01).
-  - Still open:
-    - CMA is 1.0 (meaning unknown, as TF2-15).
-    - There is no bounce light, and PBR lights are left out of the cubemaps.
-    - Reflections are not compared with a retail map.
+  - Done: the user judged the current reflections (HV-01 row C) good,
+    27 November 2026. Remaining quality work is APEX-29.
+- [ ] **APEX-29 Cubemap content quality** `[wrong]`:
+  - CMA is 1.0 (meaning unknown, as TF2-15).
+  - There is no bounce light, and PBR lights are left out of the cubemaps.
+  - Reflections are not compared with a retail map.
 - [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
 - [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
@@ -540,13 +542,14 @@ These items need a person: a judgement call, a visual check or access only you
 have. Screenshots are under
 `.local/respawn/tf2-targeted-spot-native-20261126/`.
 
-- [ ] **HV-01 Apex cubemap reflections**: `apex-envballs-chrome-zoom.png`
+- [x] **HV-01 Apex cubemap reflections**: `apex-envballs-chrome-zoom.png`
   shows the `weapon_cubemap` chrome ball in each test room.
   - Row A: old build (engine fallback).
   - Row B: first compiled version (grey tint).
   - Row C: current version (dark room, bright patches from the spot pools).
   - Please judge row C, ideally in game: `give weapon_cubemap` on an
     MRVN-compiled map.
+  - Confirmed by the user, 27 November 2026: row C looks good.
 - [x] **HV-02 TF1 light-style probe**: `tf1-style2-contact.png`. Confirm the
   pools look steady across the four style-2 frames (columns 2–5) and match the
   baseline (column 1).

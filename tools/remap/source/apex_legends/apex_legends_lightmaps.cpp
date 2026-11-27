@@ -167,7 +167,7 @@ constexpr float INDIRECT_AMBIENT_SCALE = 0.5f;   // Scale factor for sky ambient
 
 // Light probe settings (adapted from Source SDK leaf_ambient_lighting.cpp)
 constexpr int LIGHT_PROBE_GRID_SPACING = 256;   // Units between probes on grid
-constexpr int LIGHT_PROBE_MIN_SPACING = 128;    // Minimum spacing between probes
+constexpr int LIGHT_PROBE_MIN_SPACING = 96;     // Minimum spacing (retail S3 nearest-neighbour median: 89 World's Edge, 192 Firing Range)
 constexpr int LIGHT_PROBE_MAX_PER_AXIS = 64;    // Max probes per axis (prevent explosion)
 constexpr int LIGHT_PROBE_MAX_COUNT = -1;       // Maximum total light probes (-1 = unlimited)
 constexpr float LIGHT_PROBE_TRACE_DIST = 64000.0f;  // Ray trace distance
@@ -1863,12 +1863,14 @@ static void EncodeHDRTexelPair(const Vector3 &directColor, const Vector3 &indire
 */
 namespace {
 std::unique_ptr<Respawn::Bake::Occluders> g_occluders;
+// Every visible or sky brush: what seals the playable space (probe placement).
+std::unique_ptr<Respawn::Bake::Occluders> g_sealers;
 
 Respawn::Bake::V3 ToV3(const Vector3 &v) { return {v.x(), v.y(), v.z()}; }
 }
 
 void ApexLegends::BuildLightOccluders(const entity_t &world) {
-    std::vector<Respawn::Bake::Brush> brushes;
+    std::vector<Respawn::Bake::Brush> brushes, sealers;
     for (const brush_t &brush : world.brushes) {
         bool visible = false, sky = false, translucent = false;
         for (const side_t &side : brush.sides) {
@@ -1878,17 +1880,20 @@ void ApexLegends::BuildLightOccluders(const entity_t &world) {
             translucent |= (flags & (C_TRANSLUCENT | C_ALPHASHADOW)) != 0;
             visible |= (flags & C_NODRAW) == 0;
         }
-        if (!visible || sky || translucent) continue;
-        Respawn::Bake::Brush &out = brushes.emplace_back();
+        if (!visible && !sky) continue;
+        Respawn::Bake::Brush out;
         for (const side_t &side : brush.sides) {
             if (side.bevel) continue;
             out.planes.push_back({side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z(), side.plane.dist()});
         }
         out.mins = ToV3(brush.minmax.mins);
         out.maxs = ToV3(brush.minmax.maxs);
+        sealers.push_back(out);
+        if (!sky && !translucent) brushes.push_back(std::move(out));
     }
     Sys_Printf("  %zu occluder brushes for lighting\n", brushes.size());
     g_occluders = std::make_unique<Respawn::Bake::Occluders>(std::move(brushes));
+    g_sealers = std::make_unique<Respawn::Bake::Occluders>(std::move(sealers));
 }
 
 /*
@@ -2521,6 +2526,46 @@ static bool TraceRayAgainstMeshes(const Vector3 &origin, const Vector3 &dir, flo
 
 
 /*
+    ProbeBatchVisibility / ProbeBatchDistance
+    Batched probe rays: HIPRT when its scene is ready, else the CPU tracer
+    (brush occluders) across threads. Probe placement and lighting used to
+    trace only through HIPRT, so builds without it treated every ray as a
+    miss: probes landed in the void and sealed rooms saw the sun (APEX-16).
+    The CPU distance is bisected to about 1/512 of maxDist; misses are -1.
+*/
+static void ProbeBatchVisibility(const std::vector<Vector3> &origins, const std::vector<Vector3> &dirs,
+                                 const std::vector<float> &maxDists, std::vector<uint8_t> &hits) {
+    if (origins.empty()) return;
+    if (HIPRTTrace::IsSceneReady()) {
+        HIPRTTrace::BatchTestVisibility(static_cast<int>(origins.size()), origins.data(), dirs.data(),
+                                        maxDists.data(), hits.data());
+        return;
+    }
+    Respawn::Bake::detail::parallelFor(origins.size(), 0, [&](std::size_t i) {
+        hits[i] = TraceRayAgainstMeshes(origins[i], dirs[i], maxDists[i]) ? 1 : 0;
+    });
+}
+
+static void ProbeBatchDistance(const std::vector<Vector3> &origins, const std::vector<Vector3> &dirs,
+                               const std::vector<float> &maxDists, std::vector<float> &dists) {
+    if (origins.empty()) return;
+    if (HIPRTTrace::IsSceneReady()) {
+        HIPRTTrace::BatchTraceRay(static_cast<int>(origins.size()), origins.data(), dirs.data(),
+                                  maxDists.data(), dists.data());
+        return;
+    }
+    Respawn::Bake::detail::parallelFor(origins.size(), 0, [&](std::size_t i) {
+        float lo = 0.0f, hi = maxDists[i];
+        if (!TraceRayAgainstMeshes(origins[i], dirs[i], hi)) { dists[i] = -1.0f; return; }
+        for (int step = 0; step < 9; step++) {
+            const float mid = 0.5f * (lo + hi);
+            (TraceRayAgainstMeshes(origins[i], dirs[i], mid) ? hi : lo) = mid;
+        }
+        dists[i] = hi;
+    });
+}
+
+/*
     TraceRayGetSurfaceColor
     Trace a ray and return the color of the hit surface.
     Uses texture sampling when available for accurate color bleeding.
@@ -2619,6 +2664,21 @@ static bool TraceRayGetSurfaceColor(const Vector3 &origin, const Vector3 &dir,
     
     Enhanced with texture color sampling for accurate color bleeding.
 */
+/*
+    ProbeSkyBounce
+    Scale for the probes' neutral bounce term: the share of the probe's sphere
+    rays that reach sky, doubled and capped at 1 (an open yard sees about half
+    sky and keeps full bounce). A sealed room gets none. The old fixed bounce
+    gave every probe in sealed, unlit rooms SH DC 0.12, so characters were lit
+    in the dark (APEX-16, S3 client, 28 Nov 2026).
+*/
+static float ProbeSkyBounce(const std::vector<uint8_t> &dirHits, size_t probe) {
+    int open = 0;
+    for (int d = 0; d < NUM_SPHERE_NORMALS; d++)
+        if (!dirHits[probe * NUM_SPHERE_NORMALS + d]) open++;
+    return std::min(1.0f, 2.0f * open / NUM_SPHERE_NORMALS);
+}
+
 static void ComputeAmbientFromSphericalSamples(const Vector3 &position, 
                                                 const SkyEnvironment &sky,
                                                 Vector3 lightBoxColor[6]) {
@@ -2893,7 +2953,7 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
     constexpr float PROBE_ELEVATION     = 64.0f;   // Height above surface samples
     constexpr float MIN_SURFACE_DIST    = 64.0f;   // Minimum distance from geometry
     constexpr float SOLID_TEST_DIST     = 32.0f;   // Ray length for inside-solid test
-    constexpr float FLOOR_GRID_SPACING  = 128.0f;  // Grid spacing for floor probes
+    constexpr float FLOOR_GRID_SPACING  = 96.0f;   // Grid spacing for floor probes
     constexpr float FLOOR_PROBE_HEIGHT  = 64.0f;   // Height above detected floors
 
     const Vector3 cardinalDirs[6] = {
@@ -2960,8 +3020,21 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
                             seeds.push_back(Vector3(posX, posY, floorZ + FLOOR_PROBE_HEIGHT));
                         }
                     }
-                } else if (TraceRayAgainstMeshes(rayStart, Vector3(0,0,-1), maxTrace)) {
-                    seeds.push_back(Vector3(posX, posY, meshBounds.mins[2] + FLOOR_PROBE_HEIGHT));
+                } else {
+                    // CPU: every floor down the column, top to bottom.
+                    std::vector<Vector3> origin{rayStart}, down{Vector3(0, 0, -1)};
+                    std::vector<float> reach{maxTrace}, dist{-1.0f};
+                    for (int floors = 0; floors < 16; floors++) {
+                        ProbeBatchDistance(origin, down, reach, dist);
+                        if (dist[0] < 0.0f) break;
+                        const float floorZ = origin[0][2] - dist[0];
+                        if (!OccludersInside(Vector3(posX, posY, floorZ + 1.0f)))
+                            seeds.push_back(Vector3(posX, posY, floorZ + FLOOR_PROBE_HEIGHT));
+                        origin[0][2] = floorZ - 1.0f;
+                        while (origin[0][2] > meshBounds.mins[2] && OccludersInside(origin[0])) origin[0][2] -= 8.0f;
+                        reach[0] = origin[0][2] - meshBounds.mins[2] + 8.0f;
+                        if (reach[0] <= 0.0f) break;
+                    }
                 }
             }
         }
@@ -2995,10 +3068,7 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
         }
 
         std::vector<uint8_t> hits(totalRays, 0);
-        if (totalRays > 0 && HIPRTTrace::IsSceneReady()) {
-            HIPRTTrace::BatchTestVisibility(static_cast<int>(totalRays),
-                rayOrigins.data(), rayDirs.data(), rayMaxDists.data(), hits.data());
-        }
+        ProbeBatchVisibility(rayOrigins, rayDirs, rayMaxDists, hits);
 
         validSeeds.reserve(N);
         for (size_t i = 0; i < N; i++) {
@@ -3092,10 +3162,7 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
         }
 
         std::vector<uint8_t> hits(totalRays, 0);
-        if (totalRays > 0 && HIPRTTrace::IsSceneReady()) {
-            HIPRTTrace::BatchTestVisibility(static_cast<int>(totalRays),
-                rayOrigins.data(), rayDirs.data(), rayMaxDists.data(), hits.data());
-        }
+        ProbeBatchVisibility(rayOrigins, rayDirs, rayMaxDists, hits);
 
         validCentroids.reserve(M);
         for (size_t i = 0; i < M; i++) {
@@ -3134,10 +3201,7 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
             }
 
             std::vector<float> hitDists(nRays, -1.0f);
-            if (nRays > 0 && HIPRTTrace::IsSceneReady()) {
-                HIPRTTrace::BatchTraceRay(static_cast<int>(nRays),
-                    rayOrigins.data(), rayDirs.data(), rayMaxDists.data(), hitDists.data());
-            }
+            ProbeBatchDistance(rayOrigins, rayDirs, rayMaxDists, hitDists);
 
             for (size_t a = 0; a < active.size(); a++) {
                 size_t posIdx = active[a];
@@ -3175,9 +3239,45 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
         }
 
         std::vector<uint8_t> hits(totalRays, 0);
-        if (totalRays > 0 && HIPRTTrace::IsSceneReady()) {
-            HIPRTTrace::BatchTestVisibility(static_cast<int>(totalRays),
-                rayOrigins.data(), rayDirs.data(), rayMaxDists.data(), hits.data());
+        ProbeBatchVisibility(rayOrigins, rayDirs, rayMaxDists, hits);
+
+        // Void: an axis ray leaves the map without meeting a sealing (visible
+        // or sky) brush. Remap keeps faces that look into the void, so seeds
+        // above roofs and behind outer walls came back as probes (APEX-16: 56
+        // of 72). A map that leaks everywhere keeps them all, with a warning.
+        // Sealed means no player spawn sees out (a leak test); with no spawns,
+        // a majority of void probes is taken as a leak.
+        std::vector<uint8_t> inVoid(P, 0);
+        if (g_sealers && !g_sealers->empty()) {
+            const float reach = 2.0f * vector3_length(worldBounds.maxs - worldBounds.mins) + 1024.0f;
+            auto seesOut = [&](const Vector3 &point) {
+                for (int d = 0; d < 6; d++)
+                    if (!g_sealers->blocked(ToV3(point), ToV3(point + cardinalDirs[d] * reach))) return true;
+                return false;
+            };
+            Respawn::Bake::detail::parallelFor(P, 0, [&](std::size_t i) { inVoid[i] = seesOut(validCentroids[i]); });
+            int spawns = 0, leakingSpawns = 0;
+            for (const entity_t &entity : entities) {
+                const char *classname = entity.classname();
+                if (!striEqual(classname, "info_player_start") && !striEqualPrefix(classname, "info_spawnpoint_"))
+                    continue;
+                Vector3 origin;
+                if (!entity.read_keyvalue(origin, "origin")) continue;
+                spawns++;
+                leakingSpawns += seesOut(origin + Vector3(0, 0, 32)) ? 1 : 0;
+            }
+            const size_t voidCount = std::count(inVoid.begin(), inVoid.end(), 1);
+            if (leakingSpawns || (!spawns && voidCount * 2 > P)) {
+                if (spawns)
+                    Sys_Warning("map is not sealed (%d of %d spawns see out); keeping %zu probe positions outside it\n",
+                                leakingSpawns, spawns, voidCount);
+                else
+                    Sys_Warning("map has no spawns and %zu of %zu probe positions see out of it; keeping them\n",
+                                voidCount, P);
+                std::fill(inVoid.begin(), inVoid.end(), 0);
+            } else if (voidCount) {
+                Sys_FPrintf(SYS_VRB, "    Dropped %zu probe positions outside the sealed map\n", voidCount);
+            }
         }
 
         finalPositions.reserve(P);
@@ -3187,7 +3287,7 @@ static void GenerateProbePositionsVoronoi(const MinMax &worldBounds,
             size_t base = i * 6;
             bool allHit = hits[base] && hits[base+1] && hits[base+2] &&
                           hits[base+3] && hits[base+4] && hits[base+5];
-            if (allHit) continue;
+            if (allHit || inVoid[i]) continue;
 
             bool tooClose = false;
             for (const Vector3 &existing : finalPositions) {
@@ -3245,8 +3345,12 @@ static void AssignStaticLightsToProbe(const Vector3 &probePos, LightProbe_t &pro
         const float dist = vector3_length(delta);
         if (dist < 1.0f) continue;
         const float strength = std::max({light.intensity[0], light.intensity[1], light.intensity[2]});
-        const float score = ApexLegends::LocalLightFalloff(light, dist)
-                          * ApexLegends::LocalLightSpot(light, delta * (1.0f / dist)) * strength;
+        // The spot cone ranks lights but doesn't gate them: the engine applies
+        // the cone per pixel, and a probe just outside a narrow cone still
+        // serves characters standing in the pool (APEX-16: 25-degree spots
+        // linked no probe at all).
+        const float spot = ApexLegends::LocalLightSpot(light, delta * (1.0f / dist));
+        const float score = ApexLegends::LocalLightFalloff(light, dist) * std::max(spot, 0.05f) * strength;
         if (score <= 0.0f) continue;
         picks.push_back({score, i, 0.0f});
     }
@@ -3845,10 +3949,7 @@ void ApexLegends::EmitLightProbes() {
     
     // Batch visibility test (hit = geometry, miss = sky)
     std::vector<uint8_t> dirHits(totalDirRays, 0);
-    if (totalDirRays > 0 && HIPRTTrace::IsSceneReady()) {
-        HIPRTTrace::BatchTestVisibility(static_cast<int>(totalDirRays), dirRayOrigins.data(),
-                                        dirRayDirs.data(), dirRayMaxDists.data(), dirHits.data());
-    }
+    ProbeBatchVisibility(dirRayOrigins, dirRayDirs, dirRayMaxDists, dirHits);
     
     {
         auto now = std::chrono::high_resolution_clock::now();
@@ -3887,6 +3988,21 @@ void ApexLegends::EmitLightProbes() {
         for (size_t i = 0; i < numHitRays; i++) {
             hitDistances[hitRayIndices[i]] = hitRayDists[i];
         }
+    } else if (!hitRayIndices.empty()) {
+        // CPU: only the bounce falloff (< 512 units) needs a distance; bisect it.
+        Respawn::Bake::detail::parallelFor(hitRayIndices.size(), 0, [&](std::size_t i) {
+            const size_t r = hitRayIndices[i];
+            float lo = 0.0f, hi = 512.0f;
+            if (!TraceRayAgainstMeshes(dirRayOrigins[r], dirRayDirs[r], hi)) {
+                hitDistances[r] = hi;
+                return;
+            }
+            for (int step = 0; step < 8; step++) {
+                const float mid = 0.5f * (lo + hi);
+                (TraceRayAgainstMeshes(dirRayOrigins[r], dirRayDirs[r], mid) ? hi : lo) = mid;
+            }
+            hitDistances[r] = hi;
+        });
     }
     
     {
@@ -3953,11 +4069,7 @@ void ApexLegends::EmitLightProbes() {
         
         // Batch dispatch
         std::vector<uint8_t> lightHits(lightRayOrigins.size(), 0);
-        if (!lightRayOrigins.empty() && HIPRTTrace::IsSceneReady()) {
-            HIPRTTrace::BatchTestVisibility(static_cast<int>(lightRayOrigins.size()),
-                                            lightRayOrigins.data(), lightRayDirs.data(),
-                                            lightRayMaxDists.data(), lightHits.data());
-        }
+        ProbeBatchVisibility(lightRayOrigins, lightRayDirs, lightRayMaxDists, lightHits);
         
         // Store hit results for Phase 4 processing
         // We'll use the lightHits vector directly in Phase 4
@@ -4031,12 +4143,7 @@ void ApexLegends::EmitLightProbes() {
                         distFactor = 1.0f + (512.0f - hitDist) / 512.0f * 0.5f;
                     }
                     
-                    // Use ambient color * neutral reflectance since we don't have surface color
-                    Vector3 bounceColor;
-                    bounceColor[0] = sky.ambientColor[0] * 0.5f;
-                    bounceColor[1] = sky.ambientColor[1] * 0.5f;
-                    bounceColor[2] = sky.ambientColor[2] * 0.5f;
-                    radcolor[d] = bounceColor * (0.4f * distFactor);
+                    radcolor[d] = sky.ambientColor * (0.5f * 0.4f * distFactor * ProbeSkyBounce(dirHits, p));
                 }
             }
             
@@ -4093,11 +4200,7 @@ void ApexLegends::EmitLightProbes() {
                     if (hitDist >= 0 && hitDist < 512.0f) {
                         distFactor = 1.0f + (512.0f - hitDist) / 512.0f * 0.5f;
                     }
-                    Vector3 bounceColor;
-                    bounceColor[0] = sky.ambientColor[0] * 0.5f;
-                    bounceColor[1] = sky.ambientColor[1] * 0.5f;
-                    bounceColor[2] = sky.ambientColor[2] * 0.5f;
-                    radcolor[d] = bounceColor * (0.4f * distFactor);
+                    radcolor[d] = sky.ambientColor * (0.5f * 0.4f * distFactor * ProbeSkyBounce(dirHits, p));
                 }
             }
             

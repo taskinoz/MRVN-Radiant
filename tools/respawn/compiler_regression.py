@@ -1268,6 +1268,51 @@ def physics_material_limit_fixture(folder, command, reports, game):
     reports.append({'game':game,'fixture':'physics-material-overflow-rejected','issues':[]})
 
 
+def apex_probe_placement_fixture(folder, command, reports, game):
+    """Apex light probes in two sealed rooms (APEX-16): a dark spawn room and a
+    room lit by a realtime spot. No probe may sit outside the rooms (remap keeps
+    faces that look into the void, whose seeds used to become probes), the dark
+    room's probes must be black (CPU builds traced no probe rays, so sealed rooms
+    saw the sun), and the spot room's probes must link the spot even outside its
+    narrow cone."""
+    path = folder / 'apex-probe-placement.map'
+    path.write_text(
+        '{\n"classname" "worldspawn"\n' + _tf2_light_class_room(-1024) + '\n' + _tf2_light_class_room(0) + '\n}\n'
+        + entity(classname='light_environment', origin='0 0 1024', pitch='-60', angles='60 30 0',
+                 _light='255 255 255 50', _ambient='0 0 0 0')
+        + entity(classname='light_spot', origin='-128 0 240', pitch='-90', angles='90 0 0', realtime='1',
+                 _light='255 255 255 400', _distance='500', _cone='25', _inner_cone='15')
+        + entity(classname='info_player_start', origin='-1024 0 16', angles='0 0 0'), encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    if inventory['issues']:
+        raise RuntimeError(f'Apex probe placement fixture inventory: {inventory["issues"]}')
+    with bsp.open('rb') as stream:
+        def payload(index):
+            entry = inventory['lumps'][index]
+            stream.seek(entry['offset'])
+            return stream.read(entry['length'])
+        probes = list(struct.iter_unpack('<12h3hh4B4HI', payload(0x65)))
+        references = list(struct.iter_unpack('<3fIhH', payload(0x68)))
+    rooms = {'spawn': -1024, 'spot': 0}
+
+    def room(x, y, z):
+        return next((name for name, cx in rooms.items()
+                     if cx - 192 < x < cx + 192 and -192 < y < 192 and 0 < z < 256), None)
+    placed = {name: [probes[r[3]] for r in references if room(*r[:3]) == name] for name in rooms}
+    outside = [r[:3] for r in references if room(*r[:3]) is None]
+    if outside or not all(placed.values()):
+        raise RuntimeError(f'Apex probes outside the sealed rooms {outside} or a room without probes')
+    if any(p[3] or p[7] or p[11] or any(i != 0xFFFF for i in p[20:24]) for p in placed['spawn']):
+        raise RuntimeError(f'dark sealed room has lit probes: {placed["spawn"]}')
+    if not all(any(i != 0xFFFF for i in p[20:24]) for p in placed['spot']):
+        raise RuntimeError(f'realtime spot room probes lack a light link: {placed["spot"]}')
+    reports.append({'game': game, 'fixture': 'apex-probe-placement',
+                    'probes': {name: len(v) for name, v in placed.items()}, 'issues': []})
+
+
 def apex_alpha_shadow_fixture(folder, command, reports, game):
     """Apex alpha-tested shadow casters, laid out as retail S3 does: opaque
     shadow meshes first (drawType 1, sort 0xFFFF), then one alpha mesh per
@@ -1510,6 +1555,7 @@ def main():
             apex_levelinfo_fixtures(folder, command, reports, game)
             apex_viewportals_fixture(folder, command, reports, game)
             apex_alpha_shadow_fixture(folder, command, reports, game)
+            apex_probe_placement_fixture(folder, command, reports, game)
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":

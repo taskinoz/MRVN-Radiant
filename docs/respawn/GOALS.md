@@ -551,8 +551,31 @@ shadows and trigger touch also work.
   - CMA is 1.0 (meaning unknown, as TF2-15).
   - There is no bounce light, and PBR lights are left out of the cubemaps.
   - Reflections are not compared with a retail map.
-- [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
+- [x] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
+  - Fixed 28 November 2026. A character in a sealed, unlit room was lit like
+    one in a spot pool, because every probe had SH DC 0.12. Causes:
+    - Probe placement and lighting traced only through HIPRT. Builds without
+      it treated every ray as a miss, so probes saw the sun through walls.
+      The probe ray batches now fall back to the CPU brush tracer.
+    - Remap keeps faces that look into the void, and their seeds became probes:
+      56 of 72 sat above roofs or behind outer walls. Probes whose axis rays
+      leave the map without meeting a visible or sky brush are now dropped,
+      unless a player spawn sees out (a leak), in which case all are kept with
+      a warning.
+    - The spot cone gated probe light links, so no probe linked a 25° spot.
+      The cone now only ranks lights.
+    - Probe spacing is now 96 (it was 128). Retail S3 nearest-neighbour
+      medians are 89 (World's Edge) and 192 (Firing Range).
+  - Checked by the `apex-probe-placement` regression.
+  - Verified in the S3 client in third person
+    (`.local/respawn/tf2-targeted-spot-native-20261126/apex-char-contact-new.png`;
+    the old run is `apex-char-contact.png`):
+    - in the unlit room the character is now dark;
+    - characters in the realtime spot pools and the baked spot pool are lit.
+  - Not compared with retail probe values. The probe sun and sky terms still
+    ignore `_light` and `_ambient` brightness (they use colour only); see
+    ALL-11.
 - [x] **APEX-17 Alpha-tested shadows** `[missing]`.
   - Progress 27 November 2026: written in the retail S3 layout.
     - Opaque shadow meshes first, then one alpha mesh per material sort

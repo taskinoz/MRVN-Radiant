@@ -88,7 +88,13 @@ def fixture(with_props):
             entity("light_spot", origin="-600 600 450", angles="-90 0 0", _light="80 160 255 900",
                    _quadratic_attn="1", _cone="35", _inner_cone="20"),
             entity("trigger_multiple", box(-900, 600, 0, -600, 900, 200, TRIGGER),
-                   targetname="mrvn_regress_trigger", spawnflags="1")]
+                   targetname="mrvn_regress_trigger", spawnflags="1"),
+            # A solid brush entity with retail S3 keys. Retail keeps func_brush in
+            # _script.ent with no *coll keys: its collision is the BSP model's.
+            entity("func_brush", box(300, 600, 0, 400, 700, 160), targetname="mrvn_regress_brush",
+                   solidity="2", solidbsp="0", spawnflags="2", startdisabled="0", triangle_collision="1",
+                   disableshadows="0", invert_exclusion="0", splitNavmesh="1", useNonLocalWorldLights="0",
+                   bakedSunFraction="-1.0")]
     if with_props:
         ents += [entity("prop_static", model=BARREL, origin=f"{x} {y} 0", angles=f"0 {yaw} 0", solid="6")
                  for x, y, yaw in BARRELS]
@@ -114,6 +120,9 @@ def checks(with_props):
         ("ramp_middle", "line", (-700, -700, 400), (-700, -700, -10), (400 - 100) / 410),
         ("ramp_high", "line", (-550, -700, 400), (-550, -700, -10), (400 - 175) / 410),
         ("trigger_nonsolid", "line", (-750, 500, 100), (-750, 1000, 100), 1.0),
+        ("func_brush_side", "line", (350, 300, 64), (350, 1000, 64), (600 - 300) / 700),
+        ("func_brush_top", "line", (350, 650, 400), (350, 650, -10), (400 - 160) / 410),
+        ("func_brush_hull", "hull", (100, 650, 64), (700, 650, 64), (300 - 16 - 100) / 600),
     ]
     if with_props:
         out += [("barrel_side", "line", (400, -200, 24), (400, 200, 24), (200 - 15.27) / 400),
@@ -187,6 +196,14 @@ def run(args):
                         'GetEntArrayByClass_Expensive("trigger_multiple")[0].GetBoundingMaxs()')
         report["checks"].append(dict(name="trigger_entity", expected="1 <150, 150, 100>", actual=trigger,
                                      passed=bool(trigger) and trigger.startswith("1 <150, 150, 100")))
+        brush = query(args.connection, "brush", 'GetEntArrayByClass_Expensive("func_brush").len() + " " + '
+                      'GetEntArrayByClass_Expensive("func_brush")[0].GetBoundingMaxs()')
+        # A brush entity keeps origin 0, so its bounds are the model's world bounds
+        # (the box maxima 400, 700, 160 plus about one unit).
+        numbers = [float(v) for v in re.findall(r"-?[0-9.]+", brush or "")]
+        report["checks"].append(dict(name="func_brush_entity", expected="1 <400, 700, 160> (+-1.5)", actual=brush,
+                                     passed=len(numbers) == 4 and numbers[0] == 1 and all(
+                                         abs(a - b) <= 1.5 for a, b in zip(numbers[1:], (400, 700, 160)))))
         report["passed"] = all(c["passed"] for c in report["checks"])
     finally:
         if not args.keep_installed:

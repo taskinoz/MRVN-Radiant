@@ -485,6 +485,22 @@ TF2_LIGHT_CLASS_FIXTURE = (
 )
 
 
+# One sealed room: a spot aimed by "target" (its angles point straight down and
+# must be overridden), a spot whose target is missing (falls back to angles) and
+# a styled point light (retail has no light styles; it bakes as style 0).
+TF2_TARGETED_SPOT_FIXTURE = (
+    '{\n"classname" "worldspawn"\n"_bouncescale" "0"\n'
+    + _tf2_light_class_room(0) + "\n}\n"
+    + entity(classname="light_spot", origin="-100 0 200", pitch="-90", angles="90 0 0",
+             target="spot_aim", _light="255 255 255 400", _distance="400", _cone="45")
+    + entity(classname="info_target", origin="0 0 100", targetname="spot_aim")
+    + entity(classname="light_spot", origin="100 0 200", pitch="-90", angles="90 0 0",
+             target="no_such_entity", _light="255 255 255 400", _distance="400", _cone="45")
+    + entity(classname="light", origin="0 100 96", style="5", realtime="0",
+             _light="255 255 255 255", _distance="256")
+)
+
+
 # Two sunlit boxes with matched geometry: one opaque, one alpha-tested. The
 # compile-only sky shell must not enter either shadow stream.
 TF2_ALPHA_SHADOW_FIXTURE = (
@@ -880,6 +896,30 @@ def tf2_light_class_checks(bsp):
     if not suns or any(abs(a - b) > 1e-5 for a, b in zip(level[4:7], suns[-1][6:9])):
         raise RuntimeError("LEVEL_INFO sun vector must be the last sun normal")
     return found
+
+
+def tf2_targeted_spot_checks(bsp, log_text):
+    """Check target-aimed spot normals, the angle fallback and style handling."""
+    with bsp.open("rb") as stream:
+        stream.seek(16 + 0x36 * 16)
+        offset, length, _, _ = struct.unpack("<4I", stream.read(16))
+        stream.seek(offset)
+        lights = list(struct.iter_unpack("<12f3i7f3i3f", stream.read(length)))
+    spots = sorted((l for l in lights if l[13] == 2), key=lambda l: l[0])
+    points = [l for l in lights if l[13] == 1]
+    if len(spots) != 2 or len(points) != 1:
+        raise RuntimeError(f"targeted-spot fixture: {len(spots)} spots, {len(points)} points")
+    r = 2 ** -0.5
+    expected = {"targeted": (r, 0.0, -r), "fallback": (0.0, 0.0, -1.0)}
+    for name, spot in zip(("targeted", "fallback"), spots):
+        if any(abs(a - b) > 1e-4 for a, b in zip(spot[6:9], expected[name])):
+            raise RuntimeError(f"{name} spot normal {spot[6:9]}, expected {expected[name]}")
+    if any(l[14] != 0 for l in lights):
+        raise RuntimeError("world lights must keep style 0")
+    for needle in ('missing target "no_such_entity"', "has style 5"):
+        if needle not in log_text:
+            raise RuntimeError(f"targeted-spot log lacks warning: {needle}")
+    return [tuple(round(v, 4) for v in s[6:9]) for s in spots]
 
 
 def tf2_alpha_shadow_checks(bsp):
@@ -1677,6 +1717,18 @@ def main():
                     raise RuntimeError(f"light-class fixture: {class_report['issues']}")
                 tf2_light_class_checks(class_bsp)
                 reports.append({"game": game, "fixture": "light-classes", "issues": []})
+                spot_path = folder / "tf2-targeted-spot.map"
+                spot_path.write_text(TF2_TARGETED_SPOT_FIXTURE, encoding="utf-8")
+                spot_log = folder / "tf2-targeted-spot.log"
+                with spot_log.open("wb") as log:
+                    subprocess.run(command[:-1] + [str(spot_path)], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                spot_bsp = spot_path.with_suffix(".bsp")
+                spot_report = validate(spot_bsp)
+                if spot_report["issues"]:
+                    raise RuntimeError(f"targeted-spot fixture: {spot_report['issues']}")
+                tf2_targeted_spot_checks(spot_bsp, spot_log.read_text(encoding="utf-8", errors="replace"))
+                reports.append({"game": game, "fixture": "tf2-targeted-spot", "issues": []})
                 alpha_path = folder / "tf2-alpha-shadow.map"
                 alpha_path.write_text(TF2_ALPHA_SHADOW_FIXTURE, encoding="utf-8")
                 with (folder / "tf2-alpha-shadow.log").open("wb") as log:

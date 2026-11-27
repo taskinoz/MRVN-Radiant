@@ -806,6 +806,8 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                 const auto& s = samples[p][i];
                 if (s.chart < 0 || charts[s.chart].constant >= 0) continue;
                 const V3 pos{s.px, s.py, s.pz}, n{s.nx, s.ny, s.nz};
+                V3 tangent, bitangent;
+                detail::basis(n, tangent, bitangent);
                 Slots& out = slots[p][i];
                 for (std::size_t l = 0; l < lights.size(); ++l) {
                     const Light& light = lights[l];
@@ -818,12 +820,25 @@ inline Result bake(const std::vector<Chart>& charts, const std::vector<PageSize>
                         // Suns outrank local lights so their shadow mask is always kept.
                         score = dot(n, -light.direction) > 0 ? 1e9 + luminance(light.intensity) : 0;
                     } else {
-                        const V3 toLight = light.origin - pos;
-                        const double d = length(toLight);
-                        if (d >= light.zeroDistance || d <= 0) continue;
-                        const V3 l3 = toLight * (1.0 / d);
-                        score = luminance(light.intensity) * falloff(light, d) * std::max(0.0, dot(n, l3)) *
-                                spotFactor(light, -l3);
+                        // Conservative coverage: slots are light indices, so the
+                        // engine cannot blend them and a pixel whose texel lacks the
+                        // light goes dark. Centre-only scoring cut TF1 spot pools into
+                        // texel-sized steps at the cone edge (R1Delta and TFO, 27 Nov
+                        // 2026). Covering the texel's own footprint (+-0.5) still left
+                        // the steps; native probes showed one texel of dilation
+                        // removes them, so score over a +-1 texel neighbourhood.
+                        score = 0;
+                        static const double corners[9][2] = {{0, 0}, {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
+                                                             {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+                        for (const auto& c : corners) {
+                            const V3 at = pos + tangent * (c[0] * options.luxelSize) + bitangent * (c[1] * options.luxelSize);
+                            const V3 toLight = light.origin - at;
+                            const double d = length(toLight);
+                            if (d >= light.zeroDistance || d <= 0) continue;
+                            const V3 l3 = toLight * (1.0 / d);
+                            score = std::max(score, luminance(light.intensity) * falloff(light, d) *
+                                                        std::max(0.0, dot(n, l3)) * spotFactor(light, -l3));
+                        }
                     }
                     if (!(score > 0)) continue;
                     if (out.light[3] >= 0 && score <= out.score[3]) continue;  // cannot make the top four

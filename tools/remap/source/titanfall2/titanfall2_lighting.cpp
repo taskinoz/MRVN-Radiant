@@ -127,6 +127,28 @@ V3 OriginForEntity(const entity_t &e) {
     return {origin.x(), origin.y(), origin.z()};
 }
 
+/*
+    Spotlight direction. A Source-style "target" naming another entity aims the
+    spot at that entity's origin and overrides angles/pitch; a missing or
+    coincident target falls back to the angles with a warning.
+*/
+V3 SpotDirection(const entity_t &e) {
+    const char *target = e.valueForKey("target");
+    if (!strEmpty(target)) {
+        if (const entity_t *aim = FindTargetEntity(target)) {
+            const V3 delta = OriginForEntity(*aim) - OriginForEntity(e);
+            if (Respawn::Bake::length(delta) > 1e-3)
+                return Respawn::Bake::normalize(delta);
+            Sys_FPrintf(SYS_WRN, "WARNING: %s at %s: target \"%s\" is at the light origin, using angles\n",
+                        e.classname(), e.valueForKey("origin"), target);
+        } else {
+            Sys_FPrintf(SYS_WRN, "WARNING: %s at %s: missing target \"%s\", using angles\n",
+                        e.classname(), e.valueForKey("origin"), target);
+        }
+    }
+    return DirectionForEntity(e, -90);
+}
+
 Titanfall2::WorldLight_t BaseRecord(const Light &light, int32_t type) {
     Titanfall2::WorldLight_t record{};
     // Vector3's default constructor leaves its components uninitialized even
@@ -539,6 +561,14 @@ void Titanfall2::CollectLight(const entity_t &e) {
             return;
         }
 
+        // Retail world lights never use the style field (style 0 in all 3,123
+        // records of six v37 maps), so switchable/flicker styles have no
+        // record form. Bake them as constant lights and say so.
+        const int style = e.intForKey("_style", "style");
+        if (style != 0)
+            Sys_FPrintf(SYS_WRN, "WARNING: %s at %s has style %d; Respawn world lights have no light styles, baking it as a constant light\n",
+                        e.classname(), e.valueForKey("origin"), style);
+
         const bool spot = e.classname_is("light_spot");
         PendingLight pending;
         Light &light = pending.light;
@@ -573,7 +603,7 @@ void Titanfall2::CollectLight(const entity_t &e) {
         if (spot) {
             const double outer = std::clamp(DoubleForKey(e, "_cone", 45), 1.0, 89.0);
             const double inner = std::clamp(DoubleForKey(e, "_inner_cone", outer * 0.5), 0.0, outer);
-            light.direction = DirectionForEntity(e, -90);
+            light.direction = SpotDirection(e);
             light.cosOuter = std::cos(outer * Pi / 180);
             light.cosInner = std::cos(inner * Pi / 180);
             pending.record.normal = Vector3(light.direction.x, light.direction.y, light.direction.z);

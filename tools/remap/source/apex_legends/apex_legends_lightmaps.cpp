@@ -4328,11 +4328,14 @@ void ApexLegends::EmitRealTimeLightmaps() {
                 std::vector<TexelPick> found;
                 for (std::size_t index : candidates) {
                     const WorldLight_t &light = ApexLegends::Bsp::worldLights[index];
+                    // Reach over the texel and its eight neighbours (+-1 texel).
+                    // Slots are light indices the engine cannot blend, so scoring
+                    // only inside the texel cut spot pools into texel steps at the
+                    // cone edge (S3 client, 27 Nov 2026; same fix as TF1, see
+                    // respawn/lightbake.h pass 1).
                     float score = 0.0f;
-                    int open = 0;
-                    // 2x2 samples over the texel footprint for soft visibility.
-                    for (int s = 0; s < 4; s++) {
-                        const Vector3 pos = ComputeTexelWorldPos(surf, x + ((s & 1) ? 0.25f : -0.25f), y + ((s & 2) ? 0.25f : -0.25f));
+                    for (int s = 0; s < 9; s++) {
+                        const Vector3 pos = ComputeTexelWorldPos(surf, x + float(s % 3 - 1), y + float(s / 3 - 1));
                         const Vector3 toLight = light.origin - pos;
                         const float dist = vector3_length(toLight);
                         if (dist < 1.0f) continue;
@@ -4340,8 +4343,19 @@ void ApexLegends::EmitRealTimeLightmaps() {
                         const float facing = vector3_dot(normal, dir);
                         if (facing <= 0.0f) continue;
                         const float reach = ApexLegends::LocalLightFalloff(light, dist) * ApexLegends::LocalLightSpot(light, dir * -1.0f);
-                        if (reach <= 0.0f) continue;
                         score = std::max(score, reach * facing);
+                    }
+                    if (score <= 0.0f) continue;
+                    // 2x2 samples over the texel footprint for soft visibility
+                    // (shadowing only; the cone and falloff are the shader's).
+                    int open = 0;
+                    for (int s = 0; s < 4; s++) {
+                        const Vector3 pos = ComputeTexelWorldPos(surf, x + ((s & 1) ? 0.25f : -0.25f), y + ((s & 2) ? 0.25f : -0.25f));
+                        const Vector3 toLight = light.origin - pos;
+                        const float dist = vector3_length(toLight);
+                        if (dist < 1.0f) { open++; continue; }
+                        const Vector3 dir = toLight * (1.0f / dist);
+                        if (vector3_dot(normal, dir) <= 0.0f) continue;
                         const Vector3 start = pos + normal * 1.0f;
                         if (!TraceRayAgainstMeshes(start, dir, std::max(0.0f, dist - 2.0f))) open++;
                     }

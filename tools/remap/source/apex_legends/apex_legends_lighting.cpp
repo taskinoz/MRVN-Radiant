@@ -135,6 +135,27 @@ Vector3 LightDirection(const entity_t &e) {
     return ApexLegends::vector3_from_angles(angles);
 }
 
+// Source-style aiming, as in the Titanfall writer: a light_spot with "target"
+// points at that entity's origin; a missing or coincident target warns and
+// falls back to the angles.
+Vector3 SpotDirection(const entity_t &e) {
+    const char *target = e.valueForKey("target");
+    if (target && target[0]) {
+        const Vector3 origin = e.vectorForKey("origin");
+        if (const entity_t *aim = FindTargetEntity(target)) {
+            const Vector3 delta = aim->vectorForKey("origin") - origin;
+            const float length = vector3_length(delta);
+            if (length > 1e-3f) return delta * (1.0f / length);
+            Sys_FPrintf(SYS_WRN, "WARNING: light_spot at %s: target \"%s\" is at the light origin, using angles\n",
+                        e.valueForKey("origin"), target);
+        } else {
+            Sys_FPrintf(SYS_WRN, "WARNING: light_spot at %s: missing target \"%s\", using angles\n",
+                        e.valueForKey("origin"), target);
+        }
+    }
+    return LightDirection(e);
+}
+
 // Order key for local lights; lower sorts first.
 int LightGroup(const WorldLight_t &light) {
     if (light.flags & WORLDLIGHT_FLAG_TWEAK) return 0;
@@ -180,7 +201,7 @@ void ApexLegends::EmitWorldLights() {
         light.origin = e.vectorForKey("origin");
         light.type = spot ? emit_spotlight : emit_point;
         light.style = e.intForKey("style");
-        light.normal = spot ? LightDirection(e) : Vector3(1.0f, 0.0f, 0.0f);
+        light.normal = spot ? SpotDirection(e) : Vector3(1.0f, 0.0f, 0.0f);
 
         const bool pbr = FloatKey(e, "_pbr_falloff", 0.0f) != 0.0f;
         const bool tweakable = FloatKey(e, "script_tweakable", FloatKey(e, "tweakable", 0.0f)) != 0.0f;

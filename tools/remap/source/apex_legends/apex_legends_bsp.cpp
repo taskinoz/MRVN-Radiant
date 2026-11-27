@@ -277,6 +277,15 @@ void CompileR5BSPFile() {
     }
 
     Sys_PhaseBegin( 1 );
+    // Multi-cell maps keep each world mesh inside one visibility cell, so cells
+    // can cull them: build the cell graph first and split faces along it.
+    // Phase 2 builds the same graph again for the final lumps.
+    if (entities[0].intForKey("_viewportals")) {
+        std::vector<std::vector<std::size_t>> cellObjects;
+        std::vector<MinMax> cellBounds;
+        Titanfall2::BuildVisibilityCells(entities[0], {}, cellObjects, cellBounds);
+        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();
+    }
     {
         int modelIndex = 0;
         int brushEntityCount = 0;

@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include <array>
+#include <functional>
+
 #include "remap.h"
 #include "respawn/lightmap.h"
 #include <set>
@@ -52,9 +55,17 @@ namespace Shared {
         shaderInfo_t          *shaderInfo;
         int                    lightmapPage = -1;
         bool                   noCollision = false;
+        int                    cellKey = -1;  // visibility cell; meshes merge only within one
         std::vector<Vertex_t>  vertices;
         std::vector<uint16_t>  triangles;
     };
+
+    // Optional, for multi-cell maps: splits a brush face (polygon, outward
+    // normal) into one piece per visibility cell, returning each piece with its
+    // cell. Meshes then merge only within a cell, as retail meshes do (Apex S3:
+    // 92-99% of world meshes lie in a single cell), so cells can cull them.
+    inline std::function<std::vector<std::pair<std::vector<std::array<double, 3>>, int>>(
+        const std::vector<std::array<double, 3>> &, const std::array<double, 3> &)> splitFaceByCells;
 
     struct Island_t {
         MinMax2D  bounds;

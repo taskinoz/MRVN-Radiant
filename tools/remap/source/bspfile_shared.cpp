@@ -86,7 +86,7 @@ void ReadRecoveredMeshes(const entity_t &entity, const char *key, int &meshIndex
 // Merges meshes sharing a material, lightmap page and grid cell, in material order.
 // Sky stays one mesh: splitting a dome by cell gains no culling.
 void ClusterMeshes(float size) {
-    using Key = std::tuple<std::string, int, int, int, int>;
+    using Key = std::tuple<std::string, int, int, int, int, int>;
     std::map<Key, std::vector<Shared::Mesh_t>> clusters;
     for (Shared::Mesh_t &mesh : Shared::meshes) {
         const Vector3 centre = (mesh.minmax.mins + mesh.minmax.maxs) * 0.5f;
@@ -94,7 +94,7 @@ void ClusterMeshes(float size) {
         Key key{mesh.shaderInfo->shader.c_str(), mesh.lightmapPage,
                 sky ? 0 : static_cast<int>(std::floor(centre.x() / size)),
                 sky ? 0 : static_cast<int>(std::floor(centre.y() / size)),
-                sky ? 0 : static_cast<int>(std::floor(centre.z() / size))};
+                sky ? 0 : static_cast<int>(std::floor(centre.z() / size)), mesh.cellKey};
         std::vector<Shared::Mesh_t> &group = clusters[key];
         if (group.empty() || group.back().triangles.size() + mesh.triangles.size() > 63000
          || group.back().vertices.size() + mesh.vertices.size() > 60000) {
@@ -188,13 +188,21 @@ void Shared::MakeMeshes(const entity_t &e) {
                 face.push_back({vertex.x(), vertex.y(), vertex.z()});
             const Respawn::Csg::Plane facePlane{{side.plane.normal().x(), side.plane.normal().y(), side.plane.normal().z()},
                                                 side.plane.dist()};
-            const std::vector<Respawn::Csg::Polygon> fragments = Respawn::Csg::visibleFragments(face, facePlane, owner, solids);
-            if (fragments.empty())
+            const std::vector<Respawn::Csg::Polygon> visible = Respawn::Csg::visibleFragments(face, facePlane, owner, solids);
+            if (visible.empty())
                 hidden_faces++;
-            else if (fragments.size() > 1 || fragments[0].size() != face.size())
+            else if (visible.size() > 1 || visible[0].size() != face.size())
                 split_faces++;
+            std::vector<std::pair<Respawn::Csg::Polygon, int>> fragments;
+            for (const Respawn::Csg::Polygon &fragment : visible) {
+                if (Shared::splitFaceByCells) {
+                    for (auto &piece : Shared::splitFaceByCells(fragment, facePlane.normal)) fragments.push_back(std::move(piece));
+                } else {
+                    fragments.emplace_back(fragment, -1);
+                }
+            }
 
-            for (const Respawn::Csg::Polygon &fragment : fragments) {
+            for (const auto &[fragment, cell] : fragments) {
                 winding_t winding;
                 for (const Respawn::Csg::Point &p : fragment)
                     winding.push_back(Vector3(p[0], p[1], p[2]));
@@ -202,6 +210,7 @@ void Shared::MakeMeshes(const entity_t &e) {
                 Shared::Mesh_t &mesh = Shared::meshes.emplace_back();
                 mesh.shaderInfo = side.shaderInfo;
                 mesh.noCollision = brush.noCollision;
+                mesh.cellKey = cell;
                 Shared::Island_t  island;
 
                 Vector3 normal = side.plane.normal();
@@ -427,6 +436,7 @@ void Shared::MakeMeshes(const entity_t &e) {
 
             if (mesh1.triangles.size() + mesh2.triangles.size() > 63000
              || mesh1.lightmapPage != mesh2.lightmapPage
+             || mesh1.cellKey != mesh2.cellKey
              || !striEqual(mesh1.shaderInfo->shader.c_str(), mesh2.shaderInfo->shader.c_str())
              || !mesh1.minmax.test(mesh2.minmax)) {
                 continue;

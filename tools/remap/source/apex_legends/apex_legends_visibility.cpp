@@ -285,11 +285,23 @@ void ApexLegends::EmitVisibilityCells(const entity_t &world) {
     CopyStub(Titanfall::Bsp::portalIntersectVertices_stub, ApexLegends::Bsp::portalEdgeIntersectAtVertex);
     CopyStub(Titanfall::Bsp::portalIntersectHeaders_stub, ApexLegends::Bsp::portalEdgeIntersectHeader);
 
+    // World meshes split along the cells (Shared::splitFaceByCells) belong to
+    // their own cell only; portals make them visible from elsewhere. Retail
+    // S3 puts 92-99% of meshes in a single cell. Other objects (props, unsplit
+    // meshes) go to every cell their bounds overlap.
+    auto ownCell = [&](std::size_t object) -> int {
+        if (ids[object] >= Shared::meshes.size()) return -1;
+        const int cell = Shared::meshes[ids[object]].cellKey;
+        return cell >= 0 && static_cast<std::size_t>(cell) < cellBounds.size() ? cell : -1;
+    };
     std::vector<VisRoot> roots(cellBounds.size());
-    for (std::size_t c = 0; c < cellBounds.size(); c++) {
-        roots[c].cell = cellBounds[c];
-        for (std::size_t o : cellObjects[c]) roots[c].objects.push_back(static_cast<uint32_t>(o));
-    }
+    for (std::size_t c = 0; c < cellBounds.size(); c++) roots[c].cell = cellBounds[c];
+    for (std::size_t c = 0; c < cellBounds.size(); c++)
+        for (std::size_t o : cellObjects[c])
+            if (ownCell(o) < 0) roots[c].objects.push_back(static_cast<uint32_t>(o));
+    for (std::size_t o = 0; o < ids.size(); o++)
+        if (const int cell = ownCell(o); cell >= 0) roots[cell].objects.push_back(static_cast<uint32_t>(o));
+    for (VisRoot &root : roots) std::sort(root.objects.begin(), root.objects.end());
     WriteVisTrees(ids, bounds, roots);
 }
 

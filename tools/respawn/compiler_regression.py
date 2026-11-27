@@ -1199,6 +1199,57 @@ def physics_material_limit_fixture(folder, command, reports, game):
     reports.append({'game':game,'fixture':'physics-material-overflow-rejected','issues':[]})
 
 
+def apex_viewportals_fixture(folder, command, reports, game):
+    """Opt-in Apex multi-cell visibility: the Titanfall 2 cell graph, one root per
+    cell, world meshes split so each lies in exactly one cell (retail S3: 92-99%)."""
+    path = folder / 'apex-viewportals.map'
+    path.write_text(portal_fixture(sky=True), encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    if inventory['issues']:
+        raise RuntimeError(f'Apex viewportals fixture inventory: {inventory["issues"]}')
+    with bsp.open('rb') as stream:
+        def payload(index):
+            entry = inventory['lumps'][index]
+            stream.seek(entry['offset'])
+            return stream.read(entry['length'])
+        cells = list(struct.iter_unpack('<HHHh', payload(0x6B)))
+        portals = list(struct.iter_unpack('<BBBBHHI', payload(0x6C)))
+        nodes = payload(0x77)
+        references = [r[0] for r in struct.iter_unpack('<I', payload(0x78))]
+        mesh_count = len(payload(0x50)) // 28
+    if len(cells) < 2:
+        raise RuntimeError(f'Apex viewportals fixture has {len(cells)} cell(s)')
+    if not any(p[1] == 1 and p[5] == len(cells) + 1 for p in portals):
+        raise RuntimeError('Apex viewportals fixture has no sky portal to cell count + 1')
+    if not any(p[1] == 0 and p[5] < len(cells) for p in portals):
+        raise RuntimeError('Apex viewportals fixture has no portal between cells')
+
+    def word(index, offset):
+        value = struct.unpack_from('<I', nodes, index * 32 + offset)[0]
+        return value & 0xFF, (value >> 8) & 0x3FFFFF, (value >> 30) & 1
+
+    holders = {}
+    for cell in range(len(cells)):  # root i is cell i
+        stack, seen = [cell], set()
+        while stack:
+            index = stack.pop()
+            count, first, internal = word(index, 12)
+            ref_count, ref_first, _ = word(index, 28)
+            seen.update(references[ref_first:ref_first + ref_count])
+            if internal:
+                stack.extend(range(first, first + count))
+        for obj in seen:
+            holders.setdefault(obj, []).append(cell)
+    meshes = {obj: owners for obj, owners in holders.items() if obj < mesh_count}
+    if len(meshes) != mesh_count or any(len(owners) != 1 for owners in meshes.values()):
+        raise RuntimeError(f'Apex world meshes are not one per cell: {meshes} of {mesh_count}')
+    reports.append({'game': game, 'fixture': 'apex-viewportals', 'cells': len(cells),
+                    'meshes': mesh_count, 'issues': []})
+
+
 def apex_levelinfo_fixtures(folder, command, reports, game):
     """Original asset-free v47 metadata/reference controls across a 64-object boundary."""
     model_root = folder.parent / 'assets/models/compat'
@@ -1353,6 +1404,7 @@ def main():
             raise RuntimeError("titanfallonline: unlit-TS vertices must be written as unlit")
         if game == "apexlegends":
             apex_levelinfo_fixtures(folder, command, reports, game)
+            apex_viewportals_fixture(folder, command, reports, game)
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":

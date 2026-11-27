@@ -2,6 +2,7 @@
  * Original TF2 serialization over NetRadiant's existing brush BSP/portal builder.
  * Record facts and retail measurements: docs/respawn/RESPAWN_TRICOLL_PORTALS.md.
  */
+#include "../respawn/csg.h"
 #include "../remap.h"
 #include "../bspfile_shared.h"
 #include "titanfall2.h"
@@ -390,6 +391,50 @@ void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const Min
         WriteAccessNode(node.children[i], first + i, node.children[i].minmax);
 }
 } // namespace
+
+/*
+    CellFaceSplitter()
+    Clips a face down the cell BSP (Titanfall::Bsp::cellBSPNodes_stub, as
+    BuildVisibilityCells emitted it: children[0], the front, at `child`, the
+    back at `child + 1`). A face lying on a node's plane goes to the side its
+    normal faces, like Source's vbsp. Returns each piece with its cell.
+*/
+std::function<std::vector<std::pair<std::vector<std::array<double, 3>>, int>>(
+    const std::vector<std::array<double, 3>> &, const std::array<double, 3> &)> Titanfall2::CellFaceSplitter() {
+    const std::vector<Titanfall::CellBspNode_t> nodes = B::cellBSPNodes_stub;
+    std::vector<Respawn::Csg::Plane> planes(nodes.size());
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+        if (nodes[i].plane < 0) continue;
+        const Plane3f &p = B::planes[nodes[i].plane];
+        planes[i] = {{p.a, p.b, p.c}, p.d};
+    }
+    return [nodes, planes](const Respawn::Csg::Polygon &face, const Respawn::Csg::Point &normal) {
+        std::vector<std::pair<Respawn::Csg::Polygon, int>> out;
+        constexpr double eps = 0.1;
+        std::function<void(const Respawn::Csg::Polygon &, std::size_t)> walk = [&](const Respawn::Csg::Polygon &poly, std::size_t n) {
+            if (nodes[n].plane < 0) {
+                out.emplace_back(poly, static_cast<int>(nodes[n].child));
+                return;
+            }
+            const Respawn::Csg::Plane &plane = planes[n];
+            bool coplanar = true;
+            for (const auto &point : poly)
+                if (std::abs(Respawn::Csg::dot(plane.normal, point) - plane.dist) > eps) { coplanar = false; break; }
+            if (coplanar) {
+                walk(poly, Respawn::Csg::dot(plane.normal, normal) > 0 ? nodes[n].child : nodes[n].child + 1);
+                return;
+            }
+            Respawn::Csg::Polygon front, back;
+            Respawn::Csg::split(poly, plane, eps, front, back);
+            if (!front.empty()) walk(front, nodes[n].child);
+            if (!back.empty()) walk(back, nodes[n].child + 1);
+        };
+        if (nodes.empty()) out.emplace_back(face, -1);
+        else walk(face, 0);
+        return out;
+    };
+}
+
 
 /*
     BuildVisibilityCells()

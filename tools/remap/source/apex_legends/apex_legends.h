@@ -267,6 +267,7 @@ namespace ApexLegends {
     std::size_t EmitObjReferences(Shared::visNode_t &node);
     int         EmitVisChildrenOfTreeNode(Shared::visNode_t node);
     void        EmitVisTree();
+    void        EmitVisibilityCells(const entity_t &world);
     void        EmitLevelInfo();
     void        EmitWorldLights();
     int         HardwareLightIndex(std::size_t worldLightIndex);

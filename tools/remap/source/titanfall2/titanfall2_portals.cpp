@@ -391,29 +391,18 @@ void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const Min
 }
 } // namespace
 
-void Titanfall2::EmitVisibility(const entity_t &world) {
+/*
+    BuildVisibilityCells()
+    The opt-in ("_viewportals" "1") cell and portal graph shared by Titanfall 2
+    and Apex Legends, whose cell, cell BSP and portal records are identical:
+    fills the Titanfall::Bsp *_stub cell/portal lumps and planes, and returns
+    each cell's bounds and the indices of the `objects` (bounds) that overlap it.
+*/
+void Titanfall2::BuildVisibilityCells(const entity_t &world, const std::vector<MinMax> &objects,
+                                      std::vector<std::vector<std::size_t>> &cellObjects, std::vector<MinMax> &cellBounds) {
     ClearPortals();
     PortalGeometry geometry;
-    // Safe default: one actual cell, no fabricated portal quad. Sky apertures
-    // come from authored sky brush faces. Selective brush cells are opt-in.
-    if (!world.intForKey("_viewportals")) {
-        B::cellBSPNodes_stub.push_back({-1, 0});
-        Titanfall::Cell_t cell{0, 0, 1, -1};
-        for (const brush_t &brush : world.brushes) for (const side_t &side : brush.sides) {
-            if (side.bevel || side.winding.size() < 3 || !(side.compileFlags & C_SKY)) continue;
-            auto portal = geometry.Polygon(side.winding, mapplanes[side.planenum].plane);
-            portal.type = 1; portal.cell = 2;
-            B::portals_stub.push_back(portal);
-        }
-        if (B::portals_stub.size() > 65535) Error("Sky portal count exceeds 16 bits");
-        cell.portalCount = B::portals_stub.size();
-        if (cell.portalCount) cell.flags |= 4;
-        B::cells_stub.push_back(cell);
-        Titanfall::EmitVisTree();
-        geometry.Finish();
-        return;
-    }
-
+    cellBounds.clear();
     // Respawn's parser intentionally bypasses Q3 SetBrushContents. Classify a
     // local copy for the inherited BSP routines using Respawn shader contents.
     // Small brushes (trim, pillars) split space into many cells without dividing
@@ -423,7 +412,6 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
     tree_t tree{};
     std::vector<node_t *> leaves;
     std::unordered_map<const node_t *, std::size_t> ids;
-    std::vector<MinMax> cellBounds;
     const float requested = world.floatForKey("_vis_detail");
     std::vector<float> thresholds{requested};
     for (float step : {16.f, 24.f, 32.f, 48.f, 64.f, 96.f, 128.f, 192.f, 256.f, 384.f, 512.f})
@@ -447,13 +435,15 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
             float dims[3] = {size.x(), size.y(), size.z()};
             std::sort(dims, dims + 3);
             if (dims[1] < visDetail) brush.detail = true;
-            brush.opaque = !(flags & C_TRANSLUCENT) && ((contents & CONTENTS_SOLID) || (flags & C_SKY));
+            // Sky always bounds a cell (it becomes a sky aperture), even when its
+            // editor shader is see-through: Apex's tools/toolsskybox is %trans.
+            brush.opaque = (flags & C_SKY) || (!(flags & C_TRANSLUCENT) && (contents & CONTENTS_SOLID));
             brush.compileFlags = flags;
         }
         facelist_t faces = MakeStructuralBSPFaceList(structural.brushes);
         if (faces.empty()) Error("_viewportals requires structural world brushes");
         tree = FaceBSP(faces);
-        for (const auto &ref : Shared::visRefs) tree.minmax.extend(ref.minmax);
+        for (const MinMax &box : objects) tree.minmax.extend(box);
         MakeTreePortals(tree);
         FilterStructuralBrushesIntoTree(structural, tree);
         std::function<void(node_t *)> collect = [&](node_t *node) {
@@ -528,7 +518,15 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         const portal_t *next = p->next[side];
         if (p->onnode && p->winding.size() >= 3 && visited.insert(p).second) {
             const bool free0 = !p->nodes[0]->opaque, free1 = !p->nodes[1]->opaque;
-            const bool sky = (p->compileFlags & C_SKY) != 0;
+            // The split plane's flags come from one face on it; a plane shared by
+            // a solid ceiling and a sky ceiling may carry the solid one's. Also
+            // accept the sky brush filtered into the opaque leaf behind the portal.
+            const auto skyLeaf = [](const node_t *leaf) {
+                for (const brush_t &b : leaf->brushlist) if (b.compileFlags & C_SKY) return true;
+                return false;
+            };
+            const bool sky = (p->compileFlags & C_SKY) ||
+                             (free0 != free1 && skyLeaf(free0 ? p->nodes[1] : p->nodes[0]));
             const bool regular = free0 && free1 && ids.at(p->nodes[0]) != ids.at(p->nodes[1]);
             const bool aperture = sky && (free0 != free1);
             if (regular || aperture) {
@@ -553,23 +551,66 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         B::cells_stub[i] = cell;
     }
     geometry.Finish();
-    // One access root per cell, followed by each root's geometric child tree.
-    std::vector<std::vector<Shared::visRef_t>> references(cellBounds.size());
-    std::function<void(const node_t *, const Shared::visRef_t &)> distribute = [&](const node_t *node, const Shared::visRef_t &ref) {
+    // Each object goes to every non-opaque cell its bounds overlap.
+    cellObjects.assign(cellBounds.size(), {});
+    std::function<void(const node_t *, std::size_t)> distribute = [&](const node_t *node, std::size_t object) {
         if (node->planenum == PLANENUM_LEAF) {
-            if (!node->opaque) references[ids.at(node)].push_back(ref);
+            if (!node->opaque) cellObjects[ids.at(node)].push_back(object);
             return;
         }
+        const MinMax &box = objects[object];
         const auto &plane = mapplanes[node->planenum].plane;
-        const Vector3 center = (ref.minmax.mins + ref.minmax.maxs) * 0.5f;
-        const Vector3 extent = (ref.minmax.maxs - ref.minmax.mins) * 0.5f;
+        const Vector3 center = (box.mins + box.maxs) * 0.5f;
+        const Vector3 extent = (box.maxs - box.mins) * 0.5f;
         const double d = vector3_dot(center, plane.normal()) - plane.dist();
         double radius = 0;
         for (int a = 0; a < 3; ++a) radius += std::abs(plane.normal()[a] * extent[a]);
-        if (d + radius >= -0.01) distribute(node->children[0], ref);
-        if (d - radius <= 0.01) distribute(node->children[1], ref);
+        if (d + radius >= -0.01) distribute(node->children[0], object);
+        if (d - radius <= 0.01) distribute(node->children[1], object);
     };
-    for (const auto &ref : Shared::visRefs) distribute(tree.headnode, ref);
+    for (std::size_t i = 0; i < objects.size(); ++i) distribute(tree.headnode, i);
+    for (auto &list : cellObjects) {
+        std::sort(list.begin(), list.end());
+        list.erase(std::unique(list.begin(), list.end()), list.end());
+    }
+    Sys_Printf("%9zu visibility cells from %zu BSP leaves, %zu directed portals, %zu portal edges\n",
+               cellBounds.size(), leaves.size(), B::portals_stub.size(), B::portalEdges_stub.size() / 2);
+    FreeTree(tree);
+}
+
+
+void Titanfall2::EmitVisibility(const entity_t &world) {
+    ClearPortals();
+    PortalGeometry geometry;
+    // Safe default: one actual cell, no fabricated portal quad. Sky apertures
+    // come from authored sky brush faces. Selective brush cells are opt-in.
+    if (!world.intForKey("_viewportals")) {
+        B::cellBSPNodes_stub.push_back({-1, 0});
+        Titanfall::Cell_t cell{0, 0, 1, -1};
+        for (const brush_t &brush : world.brushes) for (const side_t &side : brush.sides) {
+            if (side.bevel || side.winding.size() < 3 || !(side.compileFlags & C_SKY)) continue;
+            auto portal = geometry.Polygon(side.winding, mapplanes[side.planenum].plane);
+            portal.type = 1; portal.cell = 2;
+            B::portals_stub.push_back(portal);
+        }
+        if (B::portals_stub.size() > 65535) Error("Sky portal count exceeds 16 bits");
+        cell.portalCount = B::portals_stub.size();
+        if (cell.portalCount) cell.flags |= 4;
+        B::cells_stub.push_back(cell);
+        Titanfall::EmitVisTree();
+        geometry.Finish();
+        return;
+    }
+
+    std::vector<MinMax> boxes;
+    for (const auto &ref : Shared::visRefs) boxes.push_back(ref.minmax);
+    std::vector<std::vector<std::size_t>> cellObjects;
+    std::vector<MinMax> cellBounds;
+    BuildVisibilityCells(world, boxes, cellObjects, cellBounds);
+    // One access root per cell, followed by each root's geometric child tree.
+    std::vector<std::vector<Shared::visRef_t>> references(cellBounds.size());
+    for (std::size_t i = 0; i < cellBounds.size(); ++i)
+        for (std::size_t object : cellObjects[i]) references[i].push_back(Shared::visRefs[object]);
     B::cellAABBNodes.clear(); B::cellAABBNodes.resize(cellBounds.size());
     B::cellBounds = cellBounds;
     B::objReferences.clear(); B::objReferenceBounds.clear();
@@ -586,7 +627,4 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
         if (access.minmax.mins.x() <= access.minmax.maxs.x()) rootBounds.extend(access.minmax);
         WriteAccessNode(access, i, rootBounds);
     }
-    Sys_Printf("%9zu visibility cells from %zu BSP leaves, %zu directed portals, %zu portal edges\n",
-               cellBounds.size(), leaves.size(), B::portals_stub.size(), B::portalEdges_stub.size() / 2);
-    FreeTree(tree);
 }

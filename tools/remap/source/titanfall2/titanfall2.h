@@ -50,6 +50,8 @@ namespace Titanfall2 {
     void EmitLevelInfo();
     void CheckWorldIndexBudget(std::size_t firstMesh);
     void EmitVisibility(const entity_t &world);
+    void BuildVisibilityCells(const entity_t &world, const std::vector<MinMax> &objects,
+                              std::vector<std::vector<std::size_t>> &cellObjects, std::vector<MinMax> &cellBounds);
 
     void EmitEntity(const entity_t &e);
     void EmitStubs();

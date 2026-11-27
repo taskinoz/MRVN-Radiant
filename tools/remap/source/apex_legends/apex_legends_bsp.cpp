@@ -365,7 +365,10 @@ void CompileR5BSPFile() {
         Shared::MakeVisReferences();
         Shared::visRoot = Shared::MakeVisTree(Shared::visRefs, 1e30f);
         Shared::MergeVisTree(Shared::visRoot);
-        ApexLegends::EmitVisTree();
+        if (entities[0].intForKey("_viewportals"))
+            ApexLegends::EmitVisibilityCells(entities[0]);  // cells, portals and per-cell trees
+        else
+            ApexLegends::EmitVisTree();
         auto dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         Sys_Printf("  Vis tree built (%.2fs)\n", dt);
     }
@@ -436,8 +439,10 @@ void CompileR5BSPFile() {
     HIPRTTrace::Shutdown();
 
     Sys_PhaseBegin( 7 );
-    ApexLegends::EmitPortals();
-    ApexLegends::EmitCells();
+    if (!entities[0].intForKey("_viewportals")) {  // otherwise written in phase 2
+        ApexLegends::EmitPortals();
+        ApexLegends::EmitCells();
+    }
 
     Sys_PhaseBegin( 8 );
     EndBSPFile( true );

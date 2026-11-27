@@ -109,16 +109,9 @@ void NormaliseVisNode(VisTreeNode &node) {
 }
 }
 
-void ApexLegends::EmitVisTree() {
-    ApexLegends::Bsp::cellAABBNodes.clear();
-    ApexLegends::Bsp::objReferences.clear();
-    ApexLegends::Bsp::objReferenceBounds.clear();
-    ApexLegends::Bsp::cellAABBNumObjRefsTotal.clear();
-    ApexLegends::Bsp::cellAABBFadeDists.clear();
-
-    // Object table: world meshes, then static props.
-    std::vector<uint32_t> ids;
-    std::vector<MinMax> bounds;
+// Object table: world meshes by index, then static props from the 64-aligned
+// prop base (LEVEL_INFO).
+static void CollectVisObjects(std::vector<uint32_t> &ids, std::vector<MinMax> &bounds) {
     auto add = [&](uint32_t id, const MinMax &box) {
         if (!box.valid()) return;
         ids.push_back(id);
@@ -132,25 +125,58 @@ void ApexLegends::EmitVisTree() {
     }
     const uint32_t firstPropObjID = (static_cast<uint32_t>(Shared::meshes.size()) + 63) & ~63u;
     for (const auto &[propIndex, box] : ApexLegends::Bsp::staticPropShadowBounds) add(firstPropObjID + propIndex, box);
+}
 
-    VisTreeNode root;
-    if (!ids.empty()) root = ApexLegends::BuildObjTree(bounds);
-    // The root must be internal so that it sits at node 0 with 0x25[0].
-    if (IsLeafNode(root)) {
-        VisTreeNode leaf = std::move(root);
-        root = VisTreeNode();
-        root.bounds = leaf.bounds;
-        root.children.push_back(std::move(leaf));
-    }
-    if (!root.bounds.valid()) {
-        root.bounds.extend(Vector3(-1, -1, -1));
-        root.bounds.extend(Vector3(1, 1, 1));
-    }
-    NormaliseVisNode(root);
+namespace {
+// One visibility root: its cell's bounds (invalid for the single-cell tree)
+// and the object-table indices it references.
+struct VisRoot {
+    MinMax cell;
+    std::vector<uint32_t> objects;
+};
 
-    // Node indices: internal nodes breadth-first from the root, then leaf
-    // blocks in the order their parents were visited.
-    std::vector<const VisTreeNode *> internal{&root}, leaves;
+void RemapRefs(VisTreeNode &node, const std::vector<uint32_t> &objects) {
+    for (uint32_t &r : node.refs) r = objects[r];
+    for (VisTreeNode &child : node.children) RemapRefs(child, objects);
+}
+
+// Writes 0x77/0x78/0x79/0x25/0x27 with root i at node i: internal nodes
+// breadth-first from the roots, then leaf blocks in visiting order.
+void WriteVisTrees(const std::vector<uint32_t> &ids, const std::vector<MinMax> &bounds, const std::vector<VisRoot> &roots) {
+    ApexLegends::Bsp::cellAABBNodes.clear();
+    ApexLegends::Bsp::objReferences.clear();
+    ApexLegends::Bsp::objReferenceBounds.clear();
+    ApexLegends::Bsp::cellAABBNumObjRefsTotal.clear();
+    ApexLegends::Bsp::cellAABBFadeDists.clear();
+
+    std::vector<VisTreeNode> trees(roots.size());
+    for (std::size_t c = 0; c < roots.size(); c++) {
+        VisTreeNode &root = trees[c];
+        if (!roots[c].objects.empty()) {
+            std::vector<MinMax> boxes;
+            for (uint32_t o : roots[c].objects) boxes.push_back(bounds[o]);
+            root = ApexLegends::BuildObjTree(boxes);
+            RemapRefs(root, roots[c].objects);
+        }
+        // A root must be internal so that it sits at its cell's index with 0x25.
+        if (IsLeafNode(root)) {
+            VisTreeNode leaf = std::move(root);
+            root = VisTreeNode();
+            root.bounds = leaf.bounds;
+            root.children.push_back(std::move(leaf));
+        }
+        // The renderer culls a root by its bounds before its references, so a
+        // cell's root covers the cell and everything it references.
+        if (roots[c].cell.valid()) root.bounds.extend(roots[c].cell);
+        if (!root.bounds.valid()) {
+            root.bounds.extend(Vector3(-1, -1, -1));
+            root.bounds.extend(Vector3(1, 1, 1));
+        }
+        NormaliseVisNode(root);
+    }
+
+    std::vector<const VisTreeNode *> internal, leaves;
+    for (const VisTreeNode &root : trees) internal.push_back(&root);
     std::vector<std::pair<std::size_t, bool>> firstChild;  // per internal node: block start, leaf block?
     for (std::size_t i = 0; i < internal.size(); i++) {
         const VisTreeNode &node = *internal[i];
@@ -175,7 +201,7 @@ void ApexLegends::EmitVisTree() {
         for (const VisTreeNode &child : node.children) order(child);
         span[&node] = {first, static_cast<uint32_t>(ApexLegends::Bsp::objReferences.size()) - first};
     };
-    order(root);
+    for (const VisTreeNode &root : trees) order(root);
     if (ApexLegends::Bsp::objReferences.size() >= ApexLegends::kTreeIndexLimit) Error("Visibility tree exceeds its 22-bit reference index");
 
     ApexLegends::Bsp::cellAABBNodes.resize(nodeCount);
@@ -205,8 +231,66 @@ void ApexLegends::EmitVisTree() {
     for (std::size_t i = 0; i < leaves.size(); i++) write(*leaves[i], leafBase + i, false, 0);
     ApexLegends::Bsp::cellAABBFadeDists.assign(nodeCount, 0xFFFF);
 
-    Sys_Printf("  vis tree: %zu nodes (%zu internal), %zu object references\n",
-               nodeCount, internal.size(), ApexLegends::Bsp::objReferences.size());
+    Sys_Printf("  vis tree: %zu roots, %zu nodes (%zu internal), %zu object references\n",
+               roots.size(), nodeCount, internal.size(), ApexLegends::Bsp::objReferences.size());
+}
+
+template <class T>
+void CopyStub(const std::vector<T> &stub, std::vector<uint8_t> &out) {
+    const uint8_t *data = reinterpret_cast<const uint8_t *>(stub.data());
+    out.assign(data, data + stub.size() * sizeof(T));
+}
+}  // namespace
+
+void ApexLegends::EmitVisTree() {
+    std::vector<uint32_t> ids;
+    std::vector<MinMax> bounds;
+    CollectVisObjects(ids, bounds);
+    VisRoot all;
+    for (uint32_t i = 0; i < ids.size(); i++) all.objects.push_back(i);
+    WriteVisTrees(ids, bounds, {all});
+}
+
+/*
+    EmitVisibilityCells
+    Opt-in ("_viewportals" "1") multi-cell visibility, as in retail S3 maps
+    (World's Edge: 265 cells, one visibility root each). The cell BSP, cells
+    and portal records are byte-identical to Titanfall 2's (checked on World's
+    Edge and Colony: 8/8/12/12/16/8-byte records, sky portals to cell count + 1,
+    the same cell flags), so the Titanfall 2 graph is reused; each cell then
+    gets its own root over the objects that overlap it. Replaces EmitPortals,
+    EmitCells and EmitVisTree.
+*/
+void ApexLegends::EmitVisibilityCells(const entity_t &world) {
+    std::vector<uint32_t> ids;
+    std::vector<MinMax> bounds;
+    CollectVisObjects(ids, bounds);
+    std::vector<std::vector<std::size_t>> cellObjects;
+    std::vector<MinMax> cellBounds;
+    Titanfall2::BuildVisibilityCells(world, bounds, cellObjects, cellBounds);
+
+    static_assert(sizeof(Titanfall::CellBspNode_t) == 8 && sizeof(Titanfall::Cell_t) == 8 &&
+                  sizeof(Titanfall::Portal_t) == 12 && sizeof(Titanfall::IndexSet_t) == 16 &&
+                  sizeof(Titanfall::IntersectHeader_t) == 8, "Apex cell/portal records match Titanfall 2's");
+    static_assert(sizeof(Titanfall::Bsp::portalVertices_stub[0]) == 12, "portal vertices are 3 floats");
+    CopyStub(Titanfall::Bsp::cellBSPNodes_stub, ApexLegends::Bsp::cellBSPNodes);
+    CopyStub(Titanfall::Bsp::cells_stub, ApexLegends::Bsp::cells);
+    CopyStub(Titanfall::Bsp::portals_stub, ApexLegends::Bsp::portals);
+    CopyStub(Titanfall::Bsp::portalVertices_stub, ApexLegends::Bsp::portalVertices);
+    CopyStub(Titanfall::Bsp::portalEdges_stub, ApexLegends::Bsp::portalEdges);
+    CopyStub(Titanfall::Bsp::portalVertexEdges_stub, ApexLegends::Bsp::portalVertexEdges);
+    CopyStub(Titanfall::Bsp::portalVertexReferences_stub, ApexLegends::Bsp::portalVertexReferences);
+    CopyStub(Titanfall::Bsp::portalEdgeReferences_stub, ApexLegends::Bsp::portalEdgeReferences);
+    CopyStub(Titanfall::Bsp::portalIntersectEdges_stub, ApexLegends::Bsp::portalEdgeIntersectEdge);
+    CopyStub(Titanfall::Bsp::portalIntersectVertices_stub, ApexLegends::Bsp::portalEdgeIntersectAtVertex);
+    CopyStub(Titanfall::Bsp::portalIntersectHeaders_stub, ApexLegends::Bsp::portalEdgeIntersectHeader);
+
+    std::vector<VisRoot> roots(cellBounds.size());
+    for (std::size_t c = 0; c < cellBounds.size(); c++) {
+        roots[c].cell = cellBounds[c];
+        for (std::size_t o : cellObjects[c]) roots[c].objects.push_back(static_cast<uint32_t>(o));
+    }
+    WriteVisTrees(ids, bounds, roots);
 }
 
 /*

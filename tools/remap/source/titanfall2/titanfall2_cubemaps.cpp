@@ -99,12 +99,16 @@ Face RenderFace(V3 origin, int face, const Respawn::Bake::Occluders *occluders, 
                 // Direct light from the bake, plus a little sky light so shade is not black.
                 colour = sky * 0.15;
                 if (grid && grid->lookup(hit + normal * 1.0, normal, radiance)) colour = colour + radiance;
-                if (!grid && directSun)
-                    for (const Respawn::Bake::Light &light : suns) {
+                // Realtime point/spot lights are not in the baked grid, but the
+                // engine draws them, and retail cubemaps are captured in game: add
+                // them directly. Without a grid (Apex), every light is direct.
+                for (const Respawn::Bake::Light &light : suns) {
+                        const bool sun = light.type == Respawn::Bake::LightType::Sun;
+                        if (grid ? (sun || !light.realtime) : !directSun) continue;
                         double blocked;
                         V3 unused;
                         const V3 from = hit + normal * 1.0;
-                        if (light.type == Respawn::Bake::LightType::Sun) {
+                        if (sun) {
                             const double ndotl = Respawn::Bake::dot(normal, -light.direction);
                             if (ndotl > 0 && !occluders->firstHit(from, from - light.direction * far, blocked, unused))
                                 colour = colour + light.intensity * (0.5 * ndotl);
@@ -362,9 +366,9 @@ static std::vector<Face> RenderCubemap(V3 origin, int size, const Respawn::Bake:
                                        const Respawn::Bake::RadianceGrid *grid, std::vector<std::vector<Face>> &faces) {
     std::vector<Respawn::Bake::Light> suns;
     for (const Respawn::Bake::Light &light : Titanfall2::Bsp::bakeLights)
-        if (light.type == Respawn::Bake::LightType::Sun && light.realtime) suns.push_back(light);
+        if (light.realtime) suns.push_back(light);  // suns, plus realtime point/spot lights
     const V3 sky = Titanfall2::Bsp::ambient.x + Titanfall2::Bsp::ambient.y + Titanfall2::Bsp::ambient.z > 0
-        ? Titanfall2::Bsp::ambient : V3{0.4, 0.45, 0.5};
+        ? Titanfall2::Bsp::ambient : V3{0, 0, 0};  // no light_environment: no sky light
     std::vector<Face> rendered;
     faces.clear();
     for (int face = 0; face < 6; ++face) {
@@ -392,9 +396,9 @@ void Titanfall2::EmitCubemaps(const Respawn::Bake::Occluders *occluders, const R
     // Each cubemap sees the bake's lit surfaces and the first environment's sky.
     std::vector<Respawn::Bake::Light> suns;
     for (const Respawn::Bake::Light &light : Titanfall2::Bsp::bakeLights)
-        if (light.type == Respawn::Bake::LightType::Sun && light.realtime) suns.push_back(light);
+        if (light.realtime) suns.push_back(light);  // suns, plus realtime point/spot lights
     const V3 sky = Titanfall2::Bsp::ambient.x + Titanfall2::Bsp::ambient.y + Titanfall2::Bsp::ambient.z > 0
-        ? Titanfall2::Bsp::ambient : V3{0.4, 0.45, 0.5};
+        ? Titanfall2::Bsp::ambient : V3{0, 0, 0};  // no light_environment: no sky light
     std::vector<std::vector<std::vector<Face>>> rendered(pendingCubemaps.size());
     std::vector<float> cma;
     for (std::size_t i = 0; i < pendingCubemaps.size(); ++i) {

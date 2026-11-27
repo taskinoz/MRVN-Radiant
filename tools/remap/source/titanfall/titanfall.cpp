@@ -307,6 +307,9 @@ void CompileR1BSPFile() {
 
         if (Titanfall2::IsLightEntity(entity))
             Titanfall2::CollectLight(entity);
+        // Authored cubemap positions; without any, EmitCubemapsTF1 places one at the spawns.
+        if (entity.classname_is("env_cubemap"))
+            Titanfall2::CollectCubemap(entity);
 
         // Visible geo
         if (ENT_IS("worldspawn")) { // "worldspawn" is most of the map, should always be the 1st entity

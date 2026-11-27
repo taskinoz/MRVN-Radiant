@@ -56,6 +56,9 @@ void Titanfall::EmitEntity(const entity_t &e) {
     #define ENT_IS(x)          striEqual(classname, x)
     #define ENT_STARTS(x)      striEqualPrefix(classname, x)
     #define EDITORCLASS(x, y)  if (ENT_IS(y)) { e2.setKeyValue("classname", x); e2.setKeyValue("editorclass", y); }
+    // Compiled into CUBEMAPS; retail entity files have no env_cubemap.
+    if (ENT_IS("env_cubemap"))
+        return;
     // env
     // Retail spells it env_fog_controller; the old misspelling is still accepted.
     if (ENT_IS("env_fog_controller")

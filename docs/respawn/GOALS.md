@@ -400,8 +400,15 @@ also work.
     - In the alpha stream the fence box casts a chain-link patterned shadow.
     - In the opaque stream the same box casts a solid one
       (`tf2-fence-contact.png`).
-- [ ] **TF2-21 Cascades and small holes** `[unproven]`: compare cascade
+- [x] **TF2-21 Cascades and small holes** `[unproven]`: compare cascade
   behaviour with retail.
+  - Done 28 November 2026: a sunlit yard under a roof of slabs with slits 8,
+    16, 32, 64 and 128 units wide (`build_alpha_tf2.py --holes`).
+    - In Northstar every slit, down to 8 units, lights a stripe on the floor,
+      seen from under the roof and from about 1,000 units away
+      (`.local/respawn/apex-cells-20261127/tf2-holes-contact.png`).
+    - Cascade selection and resolution are the engine's. The compiler only
+      supplies shadow meshes and the CSM tree, and these don't limit hole size.
 - [ ] **TF2-22 Menu and gameplay isolation** `[unproven]`: full menu-stage scene
   parity beyond the structural environment ranges.
 

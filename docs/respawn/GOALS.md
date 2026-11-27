@@ -125,6 +125,14 @@ because a retail-complete map needs AI and titan navigation.
   bounce and chart filtering. Apex has no bounce. In Apex, props and patches
   don't occlude baked light, and the 32-ray sky term leaves jagged bands on some
   walls.
+- [ ] **ALL-13 Heap address in the Apex sky-ambient light** `[wrong]`: in some
+  Apex builds the `emit_skyambient` world light's `normal.x/.y` (lump 0x36,
+  +0x18) holds a 64-bit heap address that changes run to run, where it should
+  be zero. Seen in the `apex-alpha-shadow` and `apex-probe-placement`
+  regression outputs back to 27 November 2026, so it predates the APEX-16
+  work. This looks like a stale pointer or reference written into
+  `worldLights` after reallocation. Find the write and add a regression check
+  that ambient normals are zero.
 
 ---
 

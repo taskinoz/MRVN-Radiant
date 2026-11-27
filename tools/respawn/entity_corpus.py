@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Survey entity classes in retail Respawn maps.
+
+Reads the BSP entity lump (lump 0, embedded or an external .0000.bsp_lump) and
+the five ENT partitions (_env, _fx, _script, _snd, _spawn) of each map and
+records, per editor class, which partition holds it, whether it is a brush
+entity, and every key with its most common value.
+
+Outputs:
+  --json PATH     the full survey;
+  --ent PATH      Radiant XML definitions for classes the existing gamepack
+                  files do not define (pass them with --known);
+  --header PATH   a C++ table of each class's retail partition, for the writer.
+
+Copyright (C) 2026 MRVN-Radiant contributors. GPL-2.0-or-later.
+"""
+import argparse
+import collections
+import json
+import re
+import struct
+import sys
+from pathlib import Path
+from xml.sax.saxutils import escape
+
+PARTITIONS = ("bsp", "env", "fx", "script", "snd", "spawn")
+_BLOCK = re.compile(rb'\{([^{}]*)\}')
+_PAIR = re.compile(rb'"([^"]*)"\s+"([^"]*)"')
+# Keys every class has or that the editor supplies itself.
+_IMPLICIT = {"classname", "origin"}
+
+
+def parse_entities(data):
+    """Return a list of key/value dicts from Source-style entity text."""
+    out = []
+    for block in _BLOCK.finditer(data):
+        pairs = _PAIR.findall(block.group(1))
+        if pairs:
+            out.append({k.decode("latin-1"): v.decode("latin-1") for k, v in pairs})
+    return out
+
+
+def bsp_entity_text(bsp):
+    data = bsp.read_bytes()
+    if data[:4] != b"rBSP":
+        raise ValueError(f"{bsp}: not an rBSP file")
+    offset, length = struct.unpack_from("<ii", data, 16)
+    external = bsp.with_name(bsp.name + ".0000.bsp_lump")
+    if external.is_file():
+        return external.read_bytes()
+    return data[offset:offset + length]
+
+
+def map_entities(bsp):
+    """Yield (partition, entity) for one map."""
+    for entity in parse_entities(bsp_entity_text(bsp)):
+        yield "bsp", entity
+    stem = bsp.with_suffix("")
+    for part in PARTITIONS[1:]:
+        path = stem.with_name(f"{stem.name}_{part}.ent")
+        if path.is_file():
+            for entity in parse_entities(path.read_bytes()):
+                yield part, entity
+
+
+def editor_class(entity):
+    return entity.get("editorclass") or entity.get("classname", "")
+
+
+def value_kind(values):
+    kind = "integer"
+    for v in values:
+        try:
+            int(v)
+            continue
+        except ValueError:
+            pass
+        try:
+            float(v)
+            kind = "real"
+        except ValueError:
+            return "string"
+    return kind
+
+
+def survey(bsps):
+    classes = {}
+    for bsp in bsps:
+        name = bsp.stem
+        for part, entity in map_entities(bsp):
+            cls = editor_class(entity)
+            if not cls:
+                continue
+            c = classes.setdefault(cls, {"count": 0, "maps": set(), "partitions": collections.Counter(),
+                                         "classnames": collections.Counter(), "brush": 0,
+                                         "keys": collections.defaultdict(collections.Counter)})
+            c["count"] += 1
+            c["maps"].add(name)
+            c["partitions"][part] += 1
+            c["classnames"][entity.get("classname", "")] += 1
+            if entity.get("model", "").startswith("*"):
+                c["brush"] += 1
+            for k, v in entity.items():
+                if k not in _IMPLICIT and k != "editorclass":
+                    c["keys"][k][v] += 1
+    result = {}
+    for cls in sorted(classes):
+        c = classes[cls]
+        part, n = c["partitions"].most_common(1)[0]
+        result[cls] = {
+            "count": c["count"],
+            "maps": sorted(c["maps"]),
+            "partition": part,
+            "partition_counts": dict(c["partitions"]),
+            "partition_unanimous": n == c["count"],
+            "classnames": dict(c["classnames"]),
+            "brush": c["brush"] * 2 > c["count"],
+            "coll": sum(c["keys"].get("*coll0", {}).values()) * 2 > c["count"],
+            "keys": {k: {"entities": sum(vals.values()), "kind": value_kind(vals),
+                         "common": vals.most_common(1)[0][0], "distinct": len(vals),
+                         "common_share": vals.most_common(1)[0][1] / sum(vals.values())}
+                     for k, vals in sorted(c["keys"].items())},
+        }
+    return result
+
+
+def known_classes(paths):
+    names = set()
+    for path in paths:
+        names.update(re.findall(r'<(?:point|group)\s+name="([^"]+)"', path.read_text(encoding="utf-8", errors="replace")))
+    return names
+
+
+_COLOURS = {"bsp": "0.8 0.8 0.8", "env": "1 0.8 0.2", "fx": "1 0.3 1", "script": "0.3 1 0.3",
+            "snd": "0.3 0.8 1", "spawn": "0.3 0.3 1"}
+_KEY_TAGS = {"angles": "angles", "targetname": "targetname", "target": "target", "model": "model",
+             "_light": "color", "rendercolor": "color"}
+
+
+def ent_xml(game, data, skip):
+    lines = ['<?xml version="1.0"?>',
+             f"<!--",
+             f"\tRetail entity classes for {game}, generated by tools/respawn/entity_corpus.py.",
+             "\tKeys and defaults are the most common retail values; their meanings are",
+             "\tnot documented yet. Classes defined by entities.ent are skipped.",
+             "-->", "<classes>", ""]
+    for cls, c in data.items():
+        if cls in skip:
+            continue
+        tag = "group" if c["brush"] else "point"
+        box = "" if c["brush"] else ' box="-8 -8 -8 8 8 8"'
+        maps = ", ".join(c["maps"][:4]) + (", ..." if len(c["maps"]) > 4 else "")
+        lines.append(f'<{tag} name="{escape(cls)}" color="{_COLOURS[c["partition"]]}"{box}>')
+        lines.append(f'Retail class: {c["count"]} in {len(c["maps"])} map(s) ({escape(maps)}); '
+                     f'written to the {c["partition"]} partition.')
+        if set(c["classnames"]) != {cls}:
+            lines.append("Retail classname: " + escape(", ".join(sorted(c["classnames"]))) + ".")
+        lines.append("-------- KEYS --------")
+        for key, k in c["keys"].items():
+            if (key == "model" and c["brush"]) or key.startswith("*"):
+                continue  # brush model index and *coll collision come from the compiler
+            kind = _KEY_TAGS.get(key, {"integer": "integer", "real": "real"}.get(k["kind"], "string"))
+            # Per-entity values (names, sounds) make poor defaults; keep a default
+            # only when most retail entities share it.
+            value = escape(k["common"] if k["common_share"] >= 0.5 else "", {'"': "&quot;"})
+            lines.append(f'<{kind} key="{escape(key)}" name="{escape(key)}" value="{value}">'
+                         f'Set on {k["entities"]} of {c["count"]}; {k["distinct"]} distinct value(s).</{kind}>')
+        lines.append(f"</{tag}>")
+        lines.append("")
+    lines.append("</classes>")
+    return "\n".join(lines) + "\n"
+
+
+def header(tables):
+    out = ["// Generated by tools/respawn/entity_corpus.py from retail map entities.",
+           "// Do not edit by hand; regenerate from the corpora named below.",
+           "#pragma once", "", "#include <cstddef>", "", "namespace Respawn {", "",
+           "enum class EntPartition { Bsp, Env, Fx, Script, Snd, Spawn };", "",
+           "struct RetailEntityClass {", "    const char *name;", "    EntPartition partition;",
+           "    bool inlineCollision;  // retail entities carry *coll key-value collision", "};", ""]
+    for game, (sources, data) in tables.items():
+        out.append(f"// {game}: {len(data)} classes from {', '.join(sources)}.")
+        out.append(f"inline constexpr RetailEntityClass k{game}EntityClasses[] = {{")
+        for cls, c in data.items():
+            note = "" if c["partition_unanimous"] else f"  // mixed: {c['partition_counts']}"
+            coll = "true" if c.get("coll") else "false"
+            out.append(f'    {{"{cls}", EntPartition::{c["partition"].capitalize()}, {coll}}},{note}')
+        out.append("};")
+        out.append("")
+    out.append("// Tables are sorted by name, compared case-insensitively.")
+    out.append("template <std::size_t N>")
+    out.append("inline const RetailEntityClass *FindRetailEntityClass(const RetailEntityClass (&table)[N], const char *name) {")
+    out.append("    for (const RetailEntityClass &entry : table)")
+    out.append("        if (striEqual(entry.name, name)) return &entry;")
+    out.append("    return nullptr;")
+    out.append("}")
+    out.append("")
+    out.append("}  // namespace Respawn")
+    return "\n".join(out) + "\n"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--game", required=True, help="identifier used in the C++ table, e.g. Titanfall2")
+    parser.add_argument("bsps", nargs="+", type=Path)
+    parser.add_argument("--known", nargs="*", type=Path, default=[], help="existing .ent definition files")
+    parser.add_argument("--json", type=Path)
+    parser.add_argument("--ent", type=Path)
+    parser.add_argument("--header", type=Path, help="write (or merge into) this C++ header")
+    args = parser.parse_args(argv)
+    data = survey(args.bsps)
+    sources = sorted(b.stem for b in args.bsps)
+    if args.json:
+        args.json.write_text(json.dumps({"game": args.game, "maps": sources, "classes": data}, indent=1) + "\n",
+                             encoding="utf-8")
+    if args.ent:
+        args.ent.write_text(ent_xml(args.game, data, known_classes(args.known)), encoding="utf-8", newline="\n")
+    if args.header:
+        tables = {}
+        cache = args.header.with_suffix(".json")
+        if cache.is_file():
+            tables = {g: (s, d) for g, (s, d) in json.loads(cache.read_text(encoding="utf-8")).items()}
+        tables[args.game] = (sources, {c: {"partition": d["partition"], "partition_unanimous": d["partition_unanimous"],
+                                           "partition_counts": d["partition_counts"], "coll": d["coll"]}
+                                          for c, d in data.items()})
+        cache.write_text(json.dumps(tables, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        args.header.write_text(header(dict(sorted(tables.items()))), encoding="utf-8", newline="\n")
+    mixed = [c for c, d in data.items() if not d["partition_unanimous"]]
+    print(f"{args.game}: {len(data)} classes from {len(sources)} maps; {len(mixed)} with mixed partitions")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

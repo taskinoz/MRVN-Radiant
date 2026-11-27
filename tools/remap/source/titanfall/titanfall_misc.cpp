@@ -24,6 +24,7 @@
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include "titanfall.h"
+#include "../respawn/entity_partitions.h"
 
 
 /*
@@ -100,6 +101,15 @@ void Titanfall::EmitEntity(const entity_t &e) {
     // bsp
     } else {
         dest = ENT_BSP;
+    }
+    // Retail placement wins for every class seen in the retail corpora; the
+    // rules above only place classes retail maps never use. TF2 moved many
+    // classes (lights, triggers, game-mode markers) out of the BSP lump.
+    const Respawn::RetailEntityClass *retail = g_game->bspVersion == 37
+        ? Respawn::FindRetailEntityClass(Respawn::kTitanfall2EntityClasses, classname)
+        : Respawn::FindRetailEntityClass(Respawn::kTitanfall1EntityClasses, classname);
+    if (retail != nullptr) {
+        dest = static_cast<int>(retail->partition);
     }
     #undef ENT_IS
     #undef ENT_STARTS

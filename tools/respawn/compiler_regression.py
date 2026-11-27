@@ -919,6 +919,16 @@ def tf2_targeted_spot_checks(bsp, log_text):
     for needle in ('missing target "no_such_entity"', "has style 5"):
         if needle not in log_text:
             raise RuntimeError(f"targeted-spot log lacks warning: {needle}")
+    # Retail TF2 keeps every light entity in _env.ent and info_target in
+    # _script.ent (14 maps, 27 Nov 2026), not in the BSP entity lump.
+    env = bsp.with_name(bsp.stem + "_env.ent")
+    script = bsp.with_name(bsp.stem + "_script.ent")
+    env_text = env.read_text(encoding="latin-1") if env.is_file() else ""
+    script_text = script.read_text(encoding="latin-1") if script.is_file() else ""
+    if env_text.count('"classname" "light_spot"') != 2 or env_text.count('"classname" "light"') != 1:
+        raise RuntimeError("targeted-spot: light entities are not in the _env partition")
+    if '"classname" "info_target"' not in script_text:
+        raise RuntimeError("targeted-spot: info_target is not in the _script partition")
     return [tuple(round(v, 4) for v in s[6:9]) for s in spots]
 
 

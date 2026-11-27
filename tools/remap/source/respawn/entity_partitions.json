@@ -1,0 +1,1893 @@
+{
+ "ApexLegends": [
+  [
+   "mp_rr_aqueduct",
+   "mp_rr_canyonlands_64k_x_64k",
+   "mp_rr_canyonlands_64k_x_64k",
+   "mp_rr_canyonlands_mu1",
+   "mp_rr_canyonlands_staging",
+   "mp_rr_desertlands_64k_x_64k"
+  ],
+  {
+   "ambient_generic": {
+    "coll": false,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 9729
+    },
+    "partition_unanimous": true
+   },
+   "color_correction": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 6
+    },
+    "partition_unanimous": true
+   },
+   "env_fog_controller": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 13
+    },
+    "partition_unanimous": true
+   },
+   "envmap_volume": {
+    "coll": true,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 1054
+    },
+    "partition_unanimous": true
+   },
+   "fog_volume": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 14
+    },
+    "partition_unanimous": true
+   },
+   "func_brush": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 49
+    },
+    "partition_unanimous": true
+   },
+   "func_brush_lightweight": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 45
+    },
+    "partition_unanimous": true
+   },
+   "func_window_hint": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 642
+    },
+    "partition_unanimous": true
+   },
+   "info_arenas_airdrop_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1
+    },
+    "partition_unanimous": true
+   },
+   "info_arenas_circle_end_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2
+    },
+    "partition_unanimous": true
+   },
+   "info_arenas_map_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1
+    },
+    "partition_unanimous": true
+   },
+   "info_arenas_spawn_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2
+    },
+    "partition_unanimous": true
+   },
+   "info_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 300
+    },
+    "partition_unanimous": true
+   },
+   "info_hover_tank_node": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 966
+    },
+    "partition_unanimous": true
+   },
+   "info_intermission": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_lightprobe": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 16101
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_crouch": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1283
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_left": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 728
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_right": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 747
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_stand": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1425
+    },
+    "partition_unanimous": true
+   },
+   "info_node_safe_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 24
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 609
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 4256
+    },
+    "partition_unanimous": true
+   },
+   "info_player_start": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 9
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_human": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 200
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_titan": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 24
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_circle_end_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 250
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_invalid_end_zone": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 439
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_loot_hotzone": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 62
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_loot_zone": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 328
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_speaker_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 3616
+    },
+    "partition_unanimous": true
+   },
+   "info_survival_weapon_location": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 11985
+    },
+    "partition_unanimous": true
+   },
+   "info_target": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 7859
+    },
+    "partition_unanimous": true
+   },
+   "info_target_clientside": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 40
+    },
+    "partition_unanimous": true
+   },
+   "light": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 15888
+    },
+    "partition_unanimous": true
+   },
+   "light_environment": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 10
+    },
+    "partition_unanimous": true
+   },
+   "light_environment_volume": {
+    "coll": true,
+    "partition": "env",
+    "partition_counts": {
+     "env": 4
+    },
+    "partition_unanimous": true
+   },
+   "light_probe_volume": {
+    "coll": true,
+    "partition": "env",
+    "partition_counts": {
+     "env": 3
+    },
+    "partition_unanimous": true
+   },
+   "light_spot": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 15354
+    },
+    "partition_unanimous": true
+   },
+   "prop_control_panel": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 8
+    },
+    "partition_unanimous": true
+   },
+   "prop_door": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 3587
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2302
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic_clientside": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 6
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic_lightweight": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1844
+    },
+    "partition_unanimous": true
+   },
+   "prop_physics": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 123
+    },
+    "partition_unanimous": true
+   },
+   "resource_door": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 386
+    },
+    "partition_unanimous": true
+   },
+   "resource_group": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 472
+    },
+    "partition_unanimous": true
+   },
+   "resource_infantryspawn": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2123
+    },
+    "partition_unanimous": true
+   },
+   "script_mover": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 72
+    },
+    "partition_unanimous": true
+   },
+   "script_mover_lightweight": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 52
+    },
+    "partition_unanimous": true
+   },
+   "script_mover_path": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 11
+    },
+    "partition_unanimous": true
+   },
+   "script_mover_train_node": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 357
+    },
+    "partition_unanimous": true
+   },
+   "script_ref": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 6
+    },
+    "partition_unanimous": true
+   },
+   "script_rotator": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 3
+    },
+    "partition_unanimous": true
+   },
+   "script_soundeffect": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 6
+    },
+    "partition_unanimous": true
+   },
+   "script_survival_flyer_with_corpse": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 103
+    },
+    "partition_unanimous": true
+   },
+   "script_survival_pvpcurrency_container": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 777
+    },
+    "partition_unanimous": true
+   },
+   "script_survival_revival_chamber": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 110
+    },
+    "partition_unanimous": true
+   },
+   "script_survival_survey_beacon": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 93
+    },
+    "partition_unanimous": true
+   },
+   "script_survival_upgrade_station": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 462
+    },
+    "partition_unanimous": true
+   },
+   "sky_camera": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 6
+    },
+    "partition_unanimous": true
+   },
+   "soundscape_floor": {
+    "coll": false,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 501
+    },
+    "partition_unanimous": true
+   },
+   "stream_hint_point": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 1
+    },
+    "partition_unanimous": true
+   },
+   "traverse": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 50
+    },
+    "partition_unanimous": true
+   },
+   "trigger_hurt": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 169
+    },
+    "partition_unanimous": true
+   },
+   "trigger_indoor_area": {
+    "coll": true,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 18
+    },
+    "partition_unanimous": true
+   },
+   "trigger_multiple": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 182
+    },
+    "partition_unanimous": true
+   },
+   "trigger_no_grapple": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 39
+    },
+    "partition_unanimous": true
+   },
+   "trigger_no_zipline": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 912
+    },
+    "partition_unanimous": true
+   },
+   "trigger_out_of_bounds": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1002
+    },
+    "partition_unanimous": true
+   },
+   "trigger_pve_zone": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 228
+    },
+    "partition_unanimous": true
+   },
+   "trigger_skydive": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 20
+    },
+    "partition_unanimous": true
+   },
+   "trigger_slip": {
+    "coll": true,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2009
+    },
+    "partition_unanimous": true
+   },
+   "trigger_soundscape": {
+    "coll": true,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 3015
+    },
+    "partition_unanimous": true
+   },
+   "worldspawn": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 6
+    },
+    "partition_unanimous": true
+   },
+   "zipline": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 631
+    },
+    "partition_unanimous": true
+   },
+   "zipline_end": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 73
+    },
+    "partition_unanimous": true
+   }
+  }
+ ],
+ "Titanfall1": [
+  [
+   "mp_angel_city",
+   "mp_colony",
+   "mp_fracture",
+   "mp_lagoon",
+   "mp_relic"
+  ],
+  {
+   "ambient_generic": {
+    "coll": false,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 508
+    },
+    "partition_unanimous": true
+   },
+   "assault_assaultpoint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 194
+    },
+    "partition_unanimous": true
+   },
+   "beam_spotlight": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 4
+    },
+    "partition_unanimous": true
+   },
+   "color_correction": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 5
+    },
+    "partition_unanimous": true
+   },
+   "env_dropzone": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 3
+    },
+    "partition_unanimous": true
+   },
+   "env_fog_controller": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 5
+    },
+    "partition_unanimous": true
+   },
+   "env_soundscape_triggerable": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 32
+    },
+    "partition_unanimous": true
+   },
+   "env_sprite_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 5
+    },
+    "partition_unanimous": true
+   },
+   "env_wind": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 2
+    },
+    "partition_unanimous": true
+   },
+   "func_breakable_surf": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 12
+    },
+    "partition_unanimous": true
+   },
+   "func_brush": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 3
+    },
+    "partition_unanimous": true
+   },
+   "func_window_hint": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 372
+    },
+    "partition_unanimous": true
+   },
+   "info_frontline": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 93
+    },
+    "partition_unanimous": true
+   },
+   "info_hardpoint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 19
+    },
+    "partition_unanimous": true
+   },
+   "info_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 400
+    },
+    "partition_unanimous": true
+   },
+   "info_intermission": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_lightprobe": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 58
+    },
+    "partition_unanimous": true
+   },
+   "info_node": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 11012
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_crouch": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 355
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_left": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 22
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_right": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 29
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_stand": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 675
+    },
+    "partition_unanimous": true
+   },
+   "info_node_safe_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 46
+    },
+    "partition_unanimous": true
+   },
+   "info_node_spectre": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 83
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 23
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 1335
+    },
+    "partition_unanimous": true
+   },
+   "info_player_start": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 1
+    },
+    "partition_unanimous": true
+   },
+   "info_replacement_titan_spawn": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 7
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_droppod": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 205
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_droppod_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 53
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_dropship": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 21
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_dropship_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 33
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_flag": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 10
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_human": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 393
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_human_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 159
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_titan": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 222
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_titan_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 100
+    },
+    "partition_unanimous": true
+   },
+   "info_target": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 237
+    },
+    "partition_unanimous": true
+   },
+   "info_target_clientside": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 24
+    },
+    "partition_unanimous": true
+   },
+   "info_target_fx": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 41
+    },
+    "partition_unanimous": true
+   },
+   "info_target_fx_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 218
+    },
+    "partition_unanimous": true
+   },
+   "keyframe_rope": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 43
+    },
+    "partition_unanimous": true
+   },
+   "light": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 1001
+    },
+    "partition_unanimous": true
+   },
+   "light_environment": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 5
+    },
+    "partition_unanimous": true
+   },
+   "light_spot": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 1694
+    },
+    "partition_unanimous": true
+   },
+   "move_rope": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 79
+    },
+    "partition_unanimous": true
+   },
+   "npc_turret_mega": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 3
+    },
+    "partition_unanimous": true
+   },
+   "path_track": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 109
+    },
+    "partition_unanimous": true
+   },
+   "phys_ragdollmagnet": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 2
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 163
+    },
+    "partition_unanimous": true
+   },
+   "prop_exfil_panel": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 2
+    },
+    "partition_unanimous": true
+   },
+   "prop_physics": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 615
+    },
+    "partition_unanimous": true
+   },
+   "prop_refuel_pump": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 7
+    },
+    "partition_unanimous": true
+   },
+   "script_ref": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 3
+    },
+    "partition_unanimous": true
+   },
+   "sky_camera": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 10
+    },
+    "partition_unanimous": true
+   },
+   "traverse": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 707
+    },
+    "partition_unanimous": true
+   },
+   "trigger_capture_point": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 20
+    },
+    "partition_unanimous": true
+   },
+   "trigger_hurt": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 13
+    },
+    "partition_unanimous": true
+   },
+   "trigger_indoor_area": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 99
+    },
+    "partition_unanimous": true
+   },
+   "trigger_once": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 1
+    },
+    "partition_unanimous": true
+   },
+   "trigger_out_of_bounds": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 48
+    },
+    "partition_unanimous": true
+   },
+   "trigger_soundscape": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 68
+    },
+    "partition_unanimous": true
+   },
+   "water_lod_control": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 4
+    },
+    "partition_unanimous": true
+   },
+   "worldspawn": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 5
+    },
+    "partition_unanimous": true
+   }
+  }
+ ],
+ "Titanfall2": [
+  [
+   "mp_angel_city",
+   "mp_black_water_canal",
+   "mp_coliseum",
+   "mp_coliseum_column",
+   "mp_colony02",
+   "mp_complex3",
+   "mp_drydock",
+   "mp_glitch",
+   "mp_homestead",
+   "mp_lf_meadow",
+   "mp_lf_stacks",
+   "mp_lobby",
+   "mp_relic02",
+   "mp_wargames"
+  ],
+  {
+   "ambient_generic": {
+    "coll": false,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 1290
+    },
+    "partition_unanimous": true
+   },
+   "assault_assaultpoint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 134
+    },
+    "partition_unanimous": true
+   },
+   "beam_spotlight": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 1
+    },
+    "partition_unanimous": true
+   },
+   "color_correction": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 13
+    },
+    "partition_unanimous": true
+   },
+   "env_fog_controller": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 15
+    },
+    "partition_unanimous": true
+   },
+   "env_soundscape_triggerable": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 24
+    },
+    "partition_unanimous": true
+   },
+   "envmap_volume": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 101
+    },
+    "partition_unanimous": true
+   },
+   "fog_volume": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 3
+    },
+    "partition_unanimous": true
+   },
+   "func_brush": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 4
+    },
+    "partition_unanimous": true
+   },
+   "func_brush_fw_territory_border": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 12
+    },
+    "partition_unanimous": true
+   },
+   "func_brush_navmesh_separator": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 22
+    },
+    "partition_unanimous": true
+   },
+   "func_wallrun_curve": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 6
+    },
+    "partition_unanimous": true
+   },
+   "func_window_hint": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 570
+    },
+    "partition_unanimous": true
+   },
+   "info_attrition_bank": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 18
+    },
+    "partition_unanimous": true
+   },
+   "info_attrition_camp": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 33
+    },
+    "partition_unanimous": true
+   },
+   "info_bomb_mode_base": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 6
+    },
+    "partition_unanimous": true
+   },
+   "info_bomb_mode_bomb": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_bomb_mode_pilot_defuse_point": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 8
+    },
+    "partition_unanimous": true
+   },
+   "info_don_panel": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_fd_ai_position": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 276
+    },
+    "partition_unanimous": true
+   },
+   "info_fd_harvester": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 8
+    },
+    "partition_unanimous": true
+   },
+   "info_fd_mode_model": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 81
+    },
+    "partition_unanimous": true
+   },
+   "info_fd_route_node": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1030
+    },
+    "partition_unanimous": true
+   },
+   "info_fd_smoke_screen": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 34
+    },
+    "partition_unanimous": true
+   },
+   "info_frontline": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 162
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_battery_port": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 19
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_camp": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 18
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_foundation_plate": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 247
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_sonar_site": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 7
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_team_tower": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 8
+    },
+    "partition_unanimous": true
+   },
+   "info_fw_turret_site": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 42
+    },
+    "partition_unanimous": true
+   },
+   "info_hardpoint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 86
+    },
+    "partition_unanimous": true
+   },
+   "info_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 380
+    },
+    "partition_unanimous": true
+   },
+   "info_intermission": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 14
+    },
+    "partition_unanimous": true
+   },
+   "info_lightprobe": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 105
+    },
+    "partition_unanimous": true
+   },
+   "info_lts_bomb_site": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 13
+    },
+    "partition_unanimous": true
+   },
+   "info_move_animation": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2
+    },
+    "partition_unanimous": true
+   },
+   "info_node": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 12
+    },
+    "partition_unanimous": true
+   },
+   "info_node_air": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 849
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_crouch": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 702
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_left": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1749
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_right": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1810
+    },
+    "partition_unanimous": true
+   },
+   "info_node_cover_stand": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 1335
+    },
+    "partition_unanimous": true
+   },
+   "info_node_safe_hint": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 97
+    },
+    "partition_unanimous": true
+   },
+   "info_node_spectre": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 15
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 4
+    },
+    "partition_unanimous": true
+   },
+   "info_particle_system_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 2008
+    },
+    "partition_unanimous": true
+   },
+   "info_player_start": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 11
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_droppod": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 643
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_droppod_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 61
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_dropship": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 4
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_dropship_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 93
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_flag": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 22
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_human": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 1453
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_human_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 349
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_marvin": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_megaturret": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 21
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_titan": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 652
+    },
+    "partition_unanimous": true
+   },
+   "info_spawnpoint_titan_start": {
+    "coll": false,
+    "partition": "spawn",
+    "partition_counts": {
+     "spawn": 178
+    },
+    "partition_unanimous": true
+   },
+   "info_speedball_flag": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 5
+    },
+    "partition_unanimous": true
+   },
+   "info_target": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 388
+    },
+    "partition_unanimous": true
+   },
+   "info_target_clientside": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 40
+    },
+    "partition_unanimous": true
+   },
+   "info_target_fx": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 20
+    },
+    "partition_unanimous": true
+   },
+   "info_target_fx_clientside": {
+    "coll": false,
+    "partition": "fx",
+    "partition_counts": {
+     "fx": 74
+    },
+    "partition_unanimous": true
+   },
+   "light": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 4149
+    },
+    "partition_unanimous": true
+   },
+   "light_environment": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 28
+    },
+    "partition_unanimous": true
+   },
+   "light_environment_volume": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 14
+    },
+    "partition_unanimous": true
+   },
+   "light_spot": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 2841
+    },
+    "partition_unanimous": true
+   },
+   "move_rope": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 24
+    },
+    "partition_unanimous": true
+   },
+   "path_track": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 106
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 150
+    },
+    "partition_unanimous": true
+   },
+   "prop_dynamic_lightweight": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 10
+    },
+    "partition_unanimous": true
+   },
+   "prop_physics": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 280
+    },
+    "partition_unanimous": true
+   },
+   "script_marvin_job": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 6
+    },
+    "partition_unanimous": true
+   },
+   "script_power_up_other": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 49
+    },
+    "partition_unanimous": true
+   },
+   "script_rotator": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 41
+    },
+    "partition_unanimous": true
+   },
+   "sky_camera": {
+    "coll": false,
+    "partition": "env",
+    "partition_counts": {
+     "env": 23
+    },
+    "partition_unanimous": true
+   },
+   "traverse": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 519
+    },
+    "partition_unanimous": true
+   },
+   "trigger_capture_point": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 34
+    },
+    "partition_unanimous": true
+   },
+   "trigger_fw_territory": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 8
+    },
+    "partition_unanimous": true
+   },
+   "trigger_hurt": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 32
+    },
+    "partition_unanimous": true
+   },
+   "trigger_indoor_area": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 97
+    },
+    "partition_unanimous": true
+   },
+   "trigger_mp_spawn_zone": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 40
+    },
+    "partition_unanimous": true
+   },
+   "trigger_multiple": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 54
+    },
+    "partition_unanimous": true
+   },
+   "trigger_no_grapple": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 3
+    },
+    "partition_unanimous": true
+   },
+   "trigger_once": {
+    "coll": false,
+    "partition": "script",
+    "partition_counts": {
+     "script": 2
+    },
+    "partition_unanimous": true
+   },
+   "trigger_out_of_bounds": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 191
+    },
+    "partition_unanimous": true
+   },
+   "trigger_soundscape": {
+    "coll": false,
+    "partition": "snd",
+    "partition_counts": {
+     "snd": 238
+    },
+    "partition_unanimous": true
+   },
+   "water_lod_control": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 4
+    },
+    "partition_unanimous": true
+   },
+   "worldspawn": {
+    "coll": false,
+    "partition": "bsp",
+    "partition_counts": {
+     "bsp": 14
+    },
+    "partition_unanimous": true
+   }
+  }
+ ]
+}

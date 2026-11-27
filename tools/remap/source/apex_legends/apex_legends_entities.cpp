@@ -32,76 +32,68 @@
 #include "../remap.h"
 #include "../bspfile_abstract.h"
 #include "../model.h"
+#include "../respawn/entity_partitions.h"
 #include <cstring>
 #include <cmath>
 #include <algorithm>
 
 /*
-    EntityGoesToBSPLump()
-    Returns true if the entity will be stored in the BSP entity lump (lump 0x00)
-    rather than an external .ent file (_env, _fx, _script, _snd, _spawn).
-    
-    Entities in .ent files need *coll serialization for collision data;
-    entities in the BSP lump get collision via BSP lumps directly.
+    EntityPartition()
+    Where an entity is written: the BSP entity lump (0x00) or one of the
+    _env, _fx, _script, _snd, _spawn .ent files.
+
+    Classes seen in retail S0-S3 maps use their retail partition (every class
+    sits in exactly one). Other classes fall back to prefix rules.
 */
-bool ApexLegends::EntityGoesToBSPLump(const entity_t &e) {
+Respawn::EntPartition ApexLegends::EntityPartition(const entity_t &e) {
     const char *cls = e.valueForKey("classname");
-    
-    // Entities that start with "env" but go into BSP lump
-    if (striEqual(cls, "envmap_volume")) {
-        return true;
+    if (const auto *retail = Respawn::FindRetailEntityClass(Respawn::kApexLegendsEntityClasses, cls)) {
+        return retail->partition;
     }
-    
-    // env
-    if (striEqualPrefix(cls, "light")
-     || striEqualPrefix(cls, "color")
-     || striEqualPrefix(cls, "fog")
-     || striEqualPrefix(cls, "env")
-     || striEqualPrefix(cls, "sky")) {
-        return false;
+    using P = Respawn::EntPartition;
+    if (striEqualPrefix(cls, "light") || striEqualPrefix(cls, "color") || striEqualPrefix(cls, "fog")
+     || striEqualPrefix(cls, "env") || striEqualPrefix(cls, "sky")) {
+        return P::Env;
     }
-    // fx
     if (striEqualPrefix(cls, "info_particle")) {
-        return false;
+        return P::Fx;
     }
-    // script
-    if (striEqualPrefix(cls, "info_target")
-     || striEqualPrefix(cls, "prop_dynamic")
-     || striEqualPrefix(cls, "trigger_hurt")
-     || striEqualPrefix(cls, "trigger_out_of_bounds")
-     || striEqualPrefix(cls, "trigger_no_zipline")
-     || striEqualPrefix(cls, "trigger_multiple")
-     || striEqualPrefix(cls, "trigger_slip")
-     || striEqualPrefix(cls, "zipline")
-     || striEqualPrefix(cls, "trigger_teleport")
-     || striEqualPrefix(cls, "script_mover")) {
-        return false;
+    if (striEqualPrefix(cls, "info_target") || striEqualPrefix(cls, "prop_dynamic")
+     || striEqualPrefix(cls, "trigger_") || striEqualPrefix(cls, "zipline")
+     || striEqualPrefix(cls, "script_") || striEqualPrefix(cls, "func_brush")) {
+        return P::Script;
     }
-    // snd
-    if (striEqualPrefix(cls, "ambient_generic")
-     || striEqualPrefix(cls, "trigger_soundscape")
-     || striEqualPrefix(cls, "soundscape_")) {
-        return false;
+    if (striEqualPrefix(cls, "ambient_generic") || striEqualPrefix(cls, "soundscape_")) {
+        return P::Snd;
     }
-    // spawn
     if (striEqualPrefix(cls, "info_")) {
-        return false;
+        return P::Spawn;
     }
-    // Everything else goes to BSP entity lump
-    return true;
+    return P::Bsp;
+}
+
+bool ApexLegends::EntityGoesToBSPLump(const entity_t &e) {
+    return EntityPartition(e) == Respawn::EntPartition::Bsp;
+}
+
+/*
+    EntityNeedsInlineCollision()
+    Retail keeps collision for triggers and volumes in the entity itself as
+    base64 *coll key-value pairs; func_brush and other solid brush entities
+    use the BSP model instead.
+*/
+bool ApexLegends::EntityNeedsInlineCollision(const entity_t &e) {
+    const char *cls = e.valueForKey("classname");
+    if (const auto *retail = Respawn::FindRetailEntityClass(Respawn::kApexLegendsEntityClasses, cls)) {
+        return retail->inlineCollision;
+    }
+    const std::size_t n = std::strlen(cls);
+    return striEqualPrefix(cls, "trigger_") || (n > 7 && striEqual(cls + n - 7, "_volume"));
 }
 
 /*
     EmitEntity()
-    Saves an entity into its corresponding .ent file or the lump in the .bsp
-    
-    Entities are categorized into different files based on their classname:
-    - env: lights, fog, sky, color entities
-    - fx: particle effects
-    - script: info_target, prop_dynamic, trigger_hurt
-    - snd: ambient and soundscape entities
-    - spawn: info_* entities
-    - BSP entity lump: all other entities
+    Saves an entity into its partition (see EntityPartition()).
 */
 void ApexLegends::EmitEntity(const entity_t &e) {
     StringOutputStream data;
@@ -112,42 +104,14 @@ void ApexLegends::EmitEntity(const entity_t &e) {
     data << "}\n";
 
     std::vector<char> str = { data.begin(), data.end() };
-
-    // Entities that start with "env" but go into BSP entity lump
-    if (striEqual(e.valueForKey("classname"), "envmap_volume")) {
-        Titanfall::Bsp::entities.insert(Titanfall::Bsp::entities.end(), str.begin(), str.end());
-    // env
-    } else if (striEqualPrefix(e.valueForKey("classname"), "light")
-     || striEqualPrefix(e.valueForKey("classname"), "color")
-     || striEqualPrefix(e.valueForKey("classname"), "fog")
-     || striEqualPrefix(e.valueForKey("classname"), "env")
-     || striEqualPrefix(e.valueForKey("classname"), "sky")) {
-        Titanfall::Ent::env.insert(Titanfall::Ent::env.end(), str.begin(), str.end());
-    // fx
-    } else if(striEqualPrefix(e.valueForKey("classname"), "info_particle")) {
-        Titanfall::Ent::fx.insert(Titanfall::Ent::fx.end(), str.begin(), str.end());
-    // script
-    } else if (striEqualPrefix(e.valueForKey("classname"), "info_target")
-            || striEqualPrefix(e.valueForKey("classname"), "prop_dynamic")
-            || striEqualPrefix(e.valueForKey("classname"), "trigger_hurt")
-            || striEqualPrefix(e.valueForKey("classname"), "trigger_out_of_bounds")
-            || striEqualPrefix(e.valueForKey("classname"), "zipline") 
-            || striEqualPrefix(e.valueForKey("classname"), "trigger_teleport")
-            || striEqualPrefix(e.valueForKey("classname"), "script_mover")
-        ) {
-        Titanfall::Ent::script.insert(Titanfall::Ent::script.end(), str.begin(), str.end());
-        // snd
-    } else if (striEqualPrefix(e.valueForKey("classname"), "ambient_generic")
-            || striEqualPrefix(e.valueForKey("classname"), "trigger_soundscape")
-            || striEqualPrefix(e.valueForKey("classname"), "soundscape_")
-        ) {
-        Titanfall::Ent::snd.insert(Titanfall::Ent::snd.end(), str.begin(), str.end());
-    // spawn
-    } else if (striEqualPrefix(e.valueForKey("classname"), "info_")) {
-        Titanfall::Ent::spawn.insert(Titanfall::Ent::spawn.end(), str.begin(), str.end());
-    // bsp entity lump
-    } else {
-        Titanfall::Bsp::entities.insert(Titanfall::Bsp::entities.end(), str.begin(), str.end());
+    auto append = [&](std::vector<char> &out) { out.insert(out.end(), str.begin(), str.end()); };
+    switch (EntityPartition(e)) {
+        case Respawn::EntPartition::Env:    append(Titanfall::Ent::env); break;
+        case Respawn::EntPartition::Fx:     append(Titanfall::Ent::fx); break;
+        case Respawn::EntPartition::Script: append(Titanfall::Ent::script); break;
+        case Respawn::EntPartition::Snd:    append(Titanfall::Ent::snd); break;
+        case Respawn::EntPartition::Spawn:  append(Titanfall::Ent::spawn); break;
+        case Respawn::EntPartition::Bsp:    append(Titanfall::Bsp::entities); break;
     }
 }
 

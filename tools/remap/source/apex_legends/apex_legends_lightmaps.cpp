@@ -1891,6 +1891,44 @@ void ApexLegends::BuildLightOccluders(const entity_t &world) {
     g_occluders = std::make_unique<Respawn::Bake::Occluders>(std::move(brushes));
 }
 
+/*
+    EmitCubemapPakfile()
+    Renders every lump 0x2A cubemap from the light occluders, the sun and the
+    sky ambient, and stores materials/maps/<map>/cubemaps.hdr.vtf in the
+    PAKFILE in the retail S0-S3 layout (shared with Titanfall 2). CMA is 1.0
+    per cubemap; its meaning is not decoded.
+*/
+void ApexLegends::EmitCubemapPakfile() {
+    using Respawn::Bake::V3;
+    std::vector<V3> origins;
+    for (const CubemapSample_t &cube : ApexLegends::Bsp::cubemaps) {
+        origins.push_back({double(cube.origin[0]), double(cube.origin[1]), double(cube.origin[2])});
+    }
+    if (origins.empty()) return;
+    std::vector<Respawn::Bake::Light> suns;
+    V3 sky{0.4, 0.45, 0.5};
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        const V3 intensity{light.intensity[0], light.intensity[1], light.intensity[2]};
+        if (light.type == emit_skylight) {
+            Respawn::Bake::Light sun;
+            sun.type = Respawn::Bake::LightType::Sun;
+            sun.direction = {light.normal[0], light.normal[1], light.normal[2]};
+            sun.intensity = intensity;
+            suns.push_back(sun);
+        } else if (light.type == emit_skyambient && intensity.x + intensity.y + intensity.z > 0) {
+            sky = intensity;
+        }
+    }
+    std::string level = source;
+    const std::size_t slash = level.find_last_of("/\\");
+    if (slash != std::string::npos) level.erase(0, slash + 1);
+    const std::size_t dot = level.find_last_of('.');
+    if (dot != std::string::npos) level.erase(dot);
+    ApexLegends::Bsp::pakfile = Titanfall2::CubemapPakfile(level, origins, std::vector<float>(origins.size(), 1.0f),
+                                                           g_occluders.get(), nullptr, sky, suns);
+    Sys_Printf("  %zu cubemaps rendered into the PAKFILE (%zu bytes)\n", origins.size(), ApexLegends::Bsp::pakfile.size());
+}
+
 static bool OccludersBlocked(const Vector3 &from, const Vector3 &to) {
     return g_occluders && g_occluders->blocked(ToV3(from), ToV3(to));
 }

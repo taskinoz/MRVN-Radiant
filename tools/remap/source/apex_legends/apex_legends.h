@@ -29,6 +29,7 @@
 #include <cmath>
 #include "../remap.h"
 #include "../lump_names.h"
+#include "../respawn/entity_partitions.h"
 
 void LoadR5BSPFile(rbspHeader_t *header, const char *filename);
 void WriteR5BSPFile(const char *filename);
@@ -246,6 +247,9 @@ namespace ApexLegends {
     void        EmitStaticProp(entity_t &e);
     void        EmitEntity(const entity_t &e);
     bool        EntityGoesToBSPLump(const entity_t &e);
+    bool        EntityNeedsInlineCollision(const entity_t &e);
+    void        EmitCubemapPakfile();
+    Respawn::EntPartition EntityPartition(const entity_t &e);
     void        BeginModel(entity_t &entity);
     void        EndModel();
     void        EmitBVHNode();
@@ -667,6 +671,7 @@ namespace ApexLegends {
 
         // Cubemap lumps (0x2A, 0x2B)
         inline std::vector<CubemapSample_t>      cubemaps;            // Lump 0x2A - cubemap sample positions
+        inline std::vector<uint8_t>              pakfile;             // Lump 0x28 - stored zip with cubemaps.hdr.vtf
         
         // Surface Properties lump (0x11)
         // Maps surface property indices to contents masks, surface types, and surface names

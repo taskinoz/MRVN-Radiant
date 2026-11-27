@@ -60,6 +60,10 @@ namespace Titanfall2 {
     void CollectCubemap(const entity_t &e);
     void EmitCubemaps(const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid);
     void EmitCubemapsTF1(const Respawn::Bake::Occluders *occluders, const Respawn::Bake::RadianceGrid *grid);
+    std::vector<uint8_t> CubemapPakfile(const std::string &level, const std::vector<Respawn::Bake::V3> &origins,
+                                        const std::vector<float> &cma, const Respawn::Bake::Occluders *occluders,
+                                        const Respawn::Bake::RadianceGrid *grid, Respawn::Bake::V3 sky,
+                                        const std::vector<Respawn::Bake::Light> &suns);
 
     // 0x36, version 3
     struct WorldLight_t {

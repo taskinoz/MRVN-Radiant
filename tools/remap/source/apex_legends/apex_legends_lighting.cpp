@@ -43,49 +43,60 @@
 
 /*
     EmitCubemaps
-    Emits cubemap sample positions from env_cubemap entities
-    
-    The engine uses these positions to capture environment reflections at runtime
-    via the buildcubemaps command. Each cubemap sample has:
-    - origin: Position where the cubemap will be captured (stored as int32 in lump)
-    - guid: Asset GUID for pre-baked cubemaps (0 = runtime capture required)
-    
-    Lumps:
-    - 0x2A (CUBEMAPS): Array of CubemapSample_t (16 bytes each)
-    - 0x2B (CUBEMAPS_AMBIENT_RCP): Array of floats, one per cubemap (reciprocal of ambient)
-    
-    If no env_cubemap entities exist, creates a single default at world center
+    Lump 0x2A: one sample per cubemap (int32 origin, guid 0). Each sample is a
+    frame of the PAKFILE's materials/maps/<map>/cubemaps.hdr.vtf, which
+    EmitCubemapPakfile() renders once the lighting occluders exist; mesh records
+    and envmap_volume "cubemapID" index this table.
+
+    Positions come from env_cubemap entities (an editor-only class). Without
+    any, one cubemap is placed 64 units above the mean player spawn, or at the
+    world centre.
 */
 void ApexLegends::EmitCubemaps() {
     Sys_FPrintf(SYS_VRB, "--- EmitCubemaps ---\n");
-    
     ApexLegends::Bsp::cubemaps.clear();
-    
-    // Lump 0x2A stores cubemap samples — one per VTF frame in the
-    // pakfile cubemap atlas.  Multiple envmap_volume entities can
-    // share the same cubemapID index into this table.
-    // The default VTF has 25 frames, so we emit 25 samples.
-    constexpr int VTF_FRAME_COUNT = 25;
-    
-    // Calculate world center for sample positions
-    MinMax worldBounds;
-    for (const Shared::Mesh_t &mesh : Shared::meshes) {
-        worldBounds.extend(mesh.minmax.mins);
-        worldBounds.extend(mesh.minmax.maxs);
+
+    std::vector<Vector3> origins;
+    for (const entity_t &e : entities) {
+        if (e.classname_is("env_cubemap")) origins.push_back(e.vectorForKey("origin"));
     }
-    Vector3 center = worldBounds.valid()
-        ? (worldBounds.mins + worldBounds.maxs) * 0.5f
-        : Vector3(0, 0, 0);
-    
-    for (int i = 0; i < VTF_FRAME_COUNT; i++) {
+    if (origins.empty()) {
+        Vector3 sum(0, 0, 0);
+        int count = 0;
+        for (const entity_t &e : entities) {
+            if (e.classname_is("info_player_start") || e.classname_prefixed("info_spawnpoint_human")) {
+                sum += e.vectorForKey("origin");
+                ++count;
+            }
+        }
+        if (count) {
+            origins.push_back(sum * (1.0f / count) + Vector3(0, 0, 64));
+        } else {
+            MinMax worldBounds;
+            for (const Shared::Mesh_t &mesh : Shared::meshes) {
+                worldBounds.extend(mesh.minmax.mins);
+                worldBounds.extend(mesh.minmax.maxs);
+            }
+            origins.push_back(worldBounds.valid() ? (worldBounds.mins + worldBounds.maxs) * 0.5f : Vector3(0, 0, 0));
+        }
+    }
+    if (origins.size() > 255) {
+        Error("%zu cubemaps exceed the mesh record's 8-bit cubemap index", origins.size());
+    }
+    for (const Vector3 &origin : origins) {
         CubemapSample_t sample;
-        sample.origin[0] = static_cast<int32_t>(center[0]);
-        sample.origin[1] = static_cast<int32_t>(center[1]);
-        sample.origin[2] = static_cast<int32_t>(center[2]);
+        sample.origin[0] = static_cast<int32_t>(std::lround(origin[0]));
+        sample.origin[1] = static_cast<int32_t>(std::lround(origin[1]));
+        sample.origin[2] = static_cast<int32_t>(std::lround(origin[2]));
         sample.guid = 0;
         ApexLegends::Bsp::cubemaps.push_back(sample);
     }
-
+    for (const entity_t &e : entities) {
+        const char *id = e.valueForKey("cubemapID");
+        if (e.classname_is("envmap_volume") && id[0] && (atoi(id) < 0 || atoi(id) >= int(origins.size()))) {
+            Sys_Warning("envmap_volume cubemapID %s is outside the %zu cubemaps\n", id, origins.size());
+        }
+    }
     Sys_Printf("  %zu cubemap samples\n", ApexLegends::Bsp::cubemaps.size());
 }
 
@@ -200,7 +211,13 @@ void ApexLegends::EmitWorldLights() {
         WorldLight_t light = {};
         light.origin = e.vectorForKey("origin");
         light.type = spot ? emit_spotlight : emit_point;
-        light.style = e.intForKey("style");
+        // Retail S0-S3 world lights never use the style field (style 0 in all
+        // 31,262 records of six maps, 27 Nov 2026), so bake styled lights as
+        // constant lights, as the Titanfall writers do.
+        light.style = 0;
+        if (const int style = e.intForKey("_style", "style"); style != 0)
+            Sys_FPrintf(SYS_WRN, "WARNING: %s at %s has style %d; Respawn world lights have no light styles, baking it as a constant light\n",
+                        e.classname(), e.valueForKey("origin"), style);
         light.normal = spot ? SpotDirection(e) : Vector3(1.0f, 0.0f, 0.0f);
 
         const bool pbr = FloatKey(e, "_pbr_falloff", 0.0f) != 0.0f;

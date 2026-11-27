@@ -172,6 +172,7 @@ void WriteR5BSPFile(const char *filename) {
     AddLump(file, header.lumps[R5_LUMP_CELL_AABB_NUM_OBJ_REFS_TOTAL], ApexLegends::Bsp::cellAABBNumObjRefsTotal);
     AddLump(file, header.lumps[R5_LUMP_CSM_AABB_NUM_OBJ_REFS_TOTAL],  ApexLegends::Bsp::csmNumObjRefsTotalForAabb);
     AddLump(file, header.lumps[R5_LUMP_CELL_AABB_FADEDISTS],         ApexLegends::Bsp::cellAABBFadeDists);
+    AddLump(file, header.lumps[R5_LUMP_PAKFILE],                 ApexLegends::Bsp::pakfile);
     AddLump(file, header.lumps[R5_LUMP_CUBEMAPS],                ApexLegends::Bsp::cubemaps);
     AddLump(file, header.lumps[R5_LUMP_WORLD_LIGHTS],            ApexLegends::Bsp::worldLights);
     AddLump(file, header.lumps[R5_LUMP_VERTEX_UNLIT],            ApexLegends::Bsp::vertexUnlitVertices);
@@ -297,6 +298,8 @@ void CompileR5BSPFile() {
                 modelIndex++;
             } else if (ENT_IS("prop_static")) {
                 continue; // Already processed in Phase 1
+            } else if (ENT_IS("env_cubemap")) {
+                continue; // A cubemap position (EmitCubemaps); retail maps have no such entity
             } else if (ENT_IS("func_occluder")) {
                 Titanfall::EmitOcclusionMeshes(entity);
                 // Move occlusion data from shared Titanfall vectors to Apex vectors
@@ -319,8 +322,7 @@ void CompileR5BSPFile() {
                     loads collision for these from the entity string rather
                     than from BSP lumps.  envmap_volume goes to the BSP lump
                     but still carries inline *coll data. */
-                    if (!ApexLegends::EntityGoesToBSPLump(entity)
-                        || striEqual(entity.classname(), "envmap_volume")) {
+                    if (ApexLegends::EntityNeedsInlineCollision(entity)) {
                         ApexLegends::SerializeCollisionToEntity(entity);
                     }
                 }
@@ -402,6 +404,7 @@ void CompileR5BSPFile() {
     } else {
         ApexLegends::EmitLightProbes();
     }
+    ApexLegends::EmitCubemapPakfile();
 
     /* Emit info_lightprobe entities into BSP entity lump (0000) for each
        generated probe reference.  The engine expects these in the main

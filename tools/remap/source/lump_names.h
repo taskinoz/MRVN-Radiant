@@ -184,7 +184,7 @@
 #define R5_LUMP_CSM_AABB_NUM_OBJ_REFS_TOTAL		0x26  // Cumulative obj ref count per CSM AABB node
 #define R5_LUMP_CELL_AABB_FADEDISTS				0x27  // Fade distances for cell AABB objects
 // 0x28, 0x2B-0x30 — Engine never loads these. No loader calls, no references.
-// #define R5_LUMP_PAKFILE						0x28
+#define R5_LUMP_PAKFILE						0x28
 #define R5_LUMP_CUBEMAPS						0x2A
 // #define R5_LUMP_CUBEMAPS_AMBIENT_RCP		0x2B
 // #define R5_LUMP_WATER_BODIES				0x2C  // Water body definitions

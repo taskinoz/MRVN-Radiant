@@ -300,6 +300,18 @@ void CompileR1BSPFile() {
     Titanfall::Bsp::planes.emplace_back(Plane3f(0, 1, 0, 0));
     // TODO: set cmGrid.brushSidePlaneOffset here
 
+    // Multi-cell maps can keep each world mesh inside one visibility cell, so
+    // cells can cull them: build the cell graph first and split world faces
+    // along it (Shared::splitFaceByCells). Opt-in with "_vis_split" "1": in
+    // Northstar a split three-room fixture lost its _spawn.ent entities
+    // (27 Nov 2026, cause unknown) while the unsplit build kept them.
+    if (!entities.empty() && entities[0].intForKey("_viewportals") && entities[0].intForKey("_vis_split")) {
+        std::vector<std::vector<std::size_t>> cellObjects;
+        std::vector<MinMax> cellBounds;
+        Titanfall2::BuildVisibilityCells(entities[0], {}, cellObjects, cellBounds);
+        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();
+    }
+
     for (entity_t &entity : entities) {
         const char *pszClassname = entity.classname();
 

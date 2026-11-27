@@ -502,6 +502,7 @@ void Shared::MakeVisReferences() {
         ref.minmax.mins -= Vector3(1.0f);
         ref.minmax.maxs += Vector3(1.0f);
         ref.index = i;
+        ref.cellKey = mesh.cellKey;
     }
 
     /* Props */

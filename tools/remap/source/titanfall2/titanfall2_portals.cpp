@@ -392,6 +392,9 @@ void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const Min
 }
 } // namespace
 
+// The shared cell of opaque leaves in the graph BuildVisibilityCells last built (-1: none).
+static long long g_solidCell = -1;
+
 /*
     CellFaceSplitter()
     Clips a face down the cell BSP (Titanfall::Bsp::cellBSPNodes_stub, as
@@ -402,18 +405,38 @@ void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const Min
 std::function<std::vector<std::pair<std::vector<std::array<double, 3>>, int>>(
     const std::vector<std::array<double, 3>> &, const std::array<double, 3> &)> Titanfall2::CellFaceSplitter() {
     const std::vector<Titanfall::CellBspNode_t> nodes = B::cellBSPNodes_stub;
+    const long long solid = g_solidCell;
     std::vector<Respawn::Csg::Plane> planes(nodes.size());
     for (std::size_t i = 0; i < nodes.size(); ++i) {
         if (nodes[i].plane < 0) continue;
         const Plane3f &p = B::planes[nodes[i].plane];
         planes[i] = {{p.a, p.b, p.c}, p.d};
     }
-    return [nodes, planes](const Respawn::Csg::Polygon &face, const Respawn::Csg::Point &normal) {
+    return [nodes, planes, solid](const Respawn::Csg::Polygon &face, const Respawn::Csg::Point &normal) {
         std::vector<std::pair<Respawn::Csg::Polygon, int>> out;
         constexpr double eps = 0.1;
+        // The cell holding a point (front side on the plane, as the engine).
+        auto cellAt = [&](const Respawn::Csg::Point &point) {
+            std::size_t n = 0;
+            while (nodes[n].plane >= 0)
+                n = Respawn::Csg::dot(planes[n].normal, point) - planes[n].dist >= 0 ? nodes[n].child : nodes[n].child + 1;
+            return static_cast<long long>(nodes[n].child);
+        };
         std::function<void(const Respawn::Csg::Polygon &, std::size_t)> walk = [&](const Respawn::Csg::Polygon &poly, std::size_t n) {
             if (nodes[n].plane < 0) {
-                out.emplace_back(poly, static_cast<int>(nodes[n].child));
+                long long cell = nodes[n].child;
+                // The shared cell of solid leaves must stay empty. A piece that
+                // lands there (on a solid boundary) belongs to the open cell just
+                // in front of it. If that is solid too, the piece faces the sealed
+                // outside and no view can reach it: drop it, as vbsp does.
+                if (cell == solid) {
+                    Respawn::Csg::Point centre{0, 0, 0};
+                    for (const auto &p : poly) for (int a = 0; a < 3; ++a) centre[a] += p[a] / poly.size();
+                    for (int a = 0; a < 3; ++a) centre[a] += normal[a];
+                    cell = cellAt(centre);
+                    if (cell == solid) return;
+                }
+                out.emplace_back(poly, static_cast<int>(cell));
                 return;
             }
             const Respawn::Csg::Plane &plane = planes[n];
@@ -597,6 +620,10 @@ void Titanfall2::BuildVisibilityCells(const entity_t &world, const std::vector<M
     }
     geometry.Finish();
     // Each object goes to every non-opaque cell its bounds overlap.
+    // Opaque leaves share one cell (CollapseVisibilityCells).
+    g_solidCell = -1;
+    for (const node_t *leaf : leaves)
+        if (leaf->opaque) { g_solidCell = static_cast<long long>(ids.at(leaf)); break; }
     cellObjects.assign(cellBounds.size(), {});
     std::function<void(const node_t *, std::size_t)> distribute = [&](const node_t *node, std::size_t object) {
         if (node->planenum == PLANENUM_LEAF) {
@@ -653,9 +680,18 @@ void Titanfall2::EmitVisibility(const entity_t &world) {
     std::vector<MinMax> cellBounds;
     BuildVisibilityCells(world, boxes, cellObjects, cellBounds);
     // One access root per cell, followed by each root's geometric child tree.
+    // World meshes split along the cells (Shared::splitFaceByCells) belong to
+    // their own cell only, as retail meshes mostly do; portals make them visible
+    // from elsewhere. Other references go to every cell they overlap.
     std::vector<std::vector<Shared::visRef_t>> references(cellBounds.size());
+    auto ownCell = [&](const Shared::visRef_t &ref) {
+        return ref.cellKey >= 0 && static_cast<std::size_t>(ref.cellKey) < cellBounds.size() ? ref.cellKey : -1;
+    };
     for (std::size_t i = 0; i < cellBounds.size(); ++i)
-        for (std::size_t object : cellObjects[i]) references[i].push_back(Shared::visRefs[object]);
+        for (std::size_t object : cellObjects[i])
+            if (ownCell(Shared::visRefs[object]) < 0) references[i].push_back(Shared::visRefs[object]);
+    for (const Shared::visRef_t &ref : Shared::visRefs)
+        if (const int cell = ownCell(ref); cell >= 0) references[cell].push_back(ref);
     B::cellAABBNodes.clear(); B::cellAABBNodes.resize(cellBounds.size());
     B::cellBounds = cellBounds;
     B::objReferences.clear(); B::objReferenceBounds.clear();

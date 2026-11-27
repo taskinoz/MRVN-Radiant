@@ -75,6 +75,7 @@ namespace Shared {
     struct visRef_t {
         MinMax    minmax;
         uint16_t  index;  // index to mesh / model
+        int       cellKey = -1;  // world mesh split to one visibility cell (Mesh_t::cellKey)
     };
 
     struct visNode_t {

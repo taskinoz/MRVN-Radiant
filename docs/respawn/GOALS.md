@@ -524,17 +524,22 @@ shadows and trigger touch also work.
   - Reflections are not compared with a retail map.
 - [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
-- [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
+- [x] **APEX-17 Alpha-tested shadows** `[missing]`.
   - Progress 27 November 2026: written in the retail S3 layout.
     - Opaque shadow meshes first, then one alpha mesh per material sort
       (drawType 0, sort index), with position and float32 UV in 0x7D, and
       indices continuing 0x7E.
     - Checked by the `apex-alpha-shadow` regression.
     - A sunlit test map loads in the S3 client.
-  - Still open: the visual check. That test map showed no sunlight on its
-    floor, so neither shadow was visible
-    (`.local/respawn/apex-cells-20261127/alpha-contact.png`); it needs a scene
-    with a visible sun shadow.
+  - Verified in game 28 November 2026 in a sky-roofed, sunlit yard
+    (`.local/respawn/apex-cells-20261127/build_alpha.py`, `alpha-contact.png`).
+    - A box with an opaque material (Firing Range concrete, staged with
+      `--pak mp_rr_canyonlands_staging`) casts the same sun shadow from the
+      alpha stream as from the opaque stream.
+    - With a material missing from the loaded packs, the alpha stream cast no
+      shadow: the engine alpha-tests the material's texture.
+    - The first attempt had pointed the sun upward (`angles` pitch −70 without
+      `pitch`) and had no sky, so no sun reached the floor.
 - [ ] **APEX-18 Shadow environments** `[unproven]`: multi-environment stress,
   menu/gameplay isolation and a controlled shadow image comparison.
 - [ ] **APEX-19 Lightmap quality** `[missing]`: see ALL-11.

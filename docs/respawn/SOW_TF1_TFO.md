@@ -1,5 +1,9 @@
 # Scope of work: Titanfall 1 / R1Delta and Titanfall Online
 
+> **Closed 27 November 2026.** This scope of work is no longer maintained. Open
+> work is tracked in [GOALS.md](GOALS.md); this file is kept as the evidence
+> record behind those items.
+
 Date: 24 November 2026. Companion index:
 [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md). This is a task
 list for agents, not a compatibility certificate. Keep R1Delta and TFO results
@@ -51,17 +55,16 @@ Compiler target is `titanfallonline`, BSP v29. The checked-out
 `tf1-tfo-compatibility` branch only adds two release-packaging commits beyond
 the shared base; the substantive 21 November acceptance work lives on
 `tf1-r1-acceptance`, which was used as the base for both the one-hash integration
-worktree and this isolated TF1/TFO worktree. It contains the merged v29
+worktree and the isolated TF1/TFO closure worktree. It contains the merged v29
 static-prop and RTL analyser worktrees.
 
-On 24 November 2026 the TF1/TFO-relevant uncommitted notes and tools were copied
-from `tf1-tfo-compatibility` into the isolated worktree
-`.local/respawn/tf1-tfo-closure` on branch `tf1-tfo-closure`, based on
-`tf1-r1-acceptance` at `d43d43b61e85b0097f10d41aac40df496d6a5182`. Cross-target
+On 24 November 2026 the TF1/TFO-relevant notes and tools were copied from
+`tf1-tfo-compatibility` into the isolated worktree
+`.local/respawn/tf1-tfo-closure` on branch `tf1-tfo-closure` at `25a227a`, based
+on `tf1-r1-acceptance` at `d43d43b61e85b0097f10d41aac40df496d6a5182`. Cross-target
 TF2/Apex work, Quake-port experiments and `.claude/` metadata remain in the
-original worktree, untouched. No commits were made in either tree. All further
-TF1/TFO SOW work is done in this isolated worktree so it cannot affect the
-TF2/Apex integration; see [SOW_BRANCH_INTEGRATION.md](SOW_BRANCH_INTEGRATION.md).
+original worktree, untouched. The closure evidence paths below are relative to
+that worktree; see [SOW_BRANCH_INTEGRATION.md](SOW_BRANCH_INTEGRATION.md).
 
 Baseline evidence: [RESPAWN_MAP_SUPPORT_AUDIT.md](RESPAWN_MAP_SUPPORT_AUDIT.md),
 [RESPAWN_TF1_LUMPS.md](RESPAWN_TF1_LUMPS.md),
@@ -169,7 +172,7 @@ Upstream made the auto-guarantee defensive in
 [PR #1196](https://github.com/getsentry/sentry-native/pull/1196), released in
 sentry-native 0.8.4.
 
-The local patch is isolated in this closure tree:
+The local patch is isolated in the closure tree:
 `tools/respawn/tfo_sentry_patch.py` (SHA-256
 `5077d0062e26cf1eb2c67d02c0ac60c45c514f72716c8a995d3d85e9d51335c9`). It
 replaces the `DllMain` prologue at file offset `0x7c00` (RVA `0x8800`) with
@@ -271,6 +274,24 @@ Offline closure work in this isolated tree also produced:
   tree; use the integration one-hash 69-report result for compiler coverage
   instead of importing that cross-target fix here.
 
+### Installed-map audit and TFO native cross-check (`B`/`S`/`N`, 25 November)
+
+The all-games audit checked 34 loose TFO BSPs and 34 TFO record sets; no TFO VPK
+archive was in scope, and no TF1 inventory was flagged. Its one flagged TFO
+entry was stock `mp_colony.bsp`, whose declared entity-partition sidecars were
+not found in the scanned loose tree. A direct stock-map launch with the two
+installed content mods enabled and the reversible Sentry patch reached
+`UICodeCallback_LevelLoadingStarted`, SERVER `_mapspawn`, CLIENT
+`_cl_mapspawn`, `UICodeCallback_LevelInit` and
+`UICodeCallback_LevelLoadingFinished (error: false)`. `TFO.exe` SHA-256
+`1569b5b66dba1773dd04c7a0122bbf99a836e34177c7efcfe078944cf1faad5f`; BSP
+SHA-256 `76500eebba3d7fabef3706952e267c2e1c3d9fcf664952eb4fb0802aa736dc83`.
+`sentry.dll` and `enabledmods.json` were restored. This bounds the sidecar gap
+to static extraction scope for one stock map; entity partitions, triggers,
+navigation and gameplay remain unproven. Report:
+`.local/respawn/all-maps-audit-20261125/REPORT.md` (SHA-256
+`a0c58f31a7e910cd2147db1fff2c93f65f5bce5ecddad1eb9d620685ef62d7f4`).
+
 ## Map support
 
 ### TF1-MAP-01 — semantic parity of the v29 writer — Partial (`B`/`S`)
@@ -362,6 +383,17 @@ fluid keydata with nonempty brush/water/submodel fixtures. The 24 November
 one-hash replay adds one staged prop drop but no repeated physics launches, so
 it does not advance this gate.
 
+On 26 November, six independent R1Delta launches of the one-hash `mp_tf1_props`
+fixture were recorded under `app-3.0.5` (`server.dll`
+`50faad928e0715a51ad624d0a3eb8f00f7ffad9e66258dc95c960f9d11ff41e4`,
+`engine_r1o.dll` `7d85f8201f2a951a35ddb57dc8162169a1b3fa730b7a94b0caec002dcc569999`).
+All six loaded and finished with `errors: []`; each recorded a valid barrel
+drop with a resting height of 15.59375 or 15.625. Evidence:
+`.local/respawn/certification-program-20261126/tf1-physics-breadth/RESULT.md`
+(local, uncommitted). This advances only the R1Delta launch-breadth half of the
+gate: it adds no TFO launches (stock Sentry still fails), no retail control, no
+additional variant/model, and no `PHYSICS_TRIANGLES` A/B. The gate stays Partial.
+
 **Acceptance:** six or more independent launches per variant, with byte-identical
 BSPs and recorded hashes; no compiled-floor crate passes through the floor;
 retail control run in the same harness; failures retained with full logs.
@@ -420,8 +452,44 @@ finished, emitted the same events and captured four views; the stock-DLL failure
 is retained separately. No paired image comparison or shader validation was
 added.
 
+**Targeted and styled lights (`B`/`N`, 27 November).** The shared
+light writer now aims a `light_spot` at its `"target"` entity and bakes
+authored styles as constant lights with a warning (see TF2-LGT-01; the TF2 side
+has a native `N` pass and a style-2 runtime probe showing no style effect). The
+v29 fixture `mp_tf1_targetspot` (WORLD_LIGHTS v1) carries the aimed spot normal
+`(0.7295, 0, -0.6839)` for realtime (flag 30) and baked (flag 6) spots, and
+`(0, 0, -1)` for the untargeted control. The first native attempts were blocked
+by a machine-level desktop `BitBlt` hang that a reboot cleared. They are kept in
+`.local/respawn/tf2-targeted-spot-native-20261126/RESULT.md`. After the reboot:
+- R1Delta 3.0.5 (engine screenshots) and TFO Core 135 (local Sentry patch,
+  window capture) both loaded, finished and captured all six views with no
+  errors. The targeted pools sit toward +x in both runtimes. Top-down luminance
+  centroids are 0.70/0.69 (realtime/baked) against 0.25 for the control in
+  R1Delta, and 0.71/0.71 against 0.27 in TFO.
+- **Stepped spot edges (fixed).** With the original compiler, both runtimes cut
+  the realtime pools at the cone edge into texel-sized steps; TF2 shows smooth
+  edges from the same records. Probes on copies of the BSP showed why:
+  - Narrowing the record cone to 5° shrank the pool to the predicted 58 px
+    disc, so TF1 applies `stopdot`/`stopdot2` with the same linear fade the
+    baker uses.
+  - Dilating the realtime-light index plane (lump 0x69) by one or two texels
+    removed the steps.
+  Slot indices cannot be blended, so a pixel whose texel lacks the light goes
+  dark while the shader fade is still a few percent, which display gamma makes
+  visible. Pass 1 of the bake now scores each light at its best over the texel
+  centre and its eight neighbours ±1 texel. Scoring only the texel's own ±0.5
+  footprint was tried natively and still stepped. With the new rule the fixture
+  slots match the one-texel probe (light 1: 535 texels, light 2: 287), and the
+  compiler's own output renders smooth pools in R1Delta (report `88ba6bdf…`)
+  and TFO (report `ce2ab0ef…`). `remap.exe`
+  `fff36c8fd728139ee50b37eb1015aef47686ecc3fad6c528309e670153f9e40c`;
+  70 regression fixtures clean, 324 unit tests pass. The rule is shared with v37
+  and Apex. The TF2 slot planes widen too, but the TF2 visuals have not been
+  rechecked natively.
+- The TF1 style-field runtime probe has not been run; TF2 showed no effect.
+
 **Missing:** full RTL channel decoding beyond the tested slot layout, light
-flag/brightness equivalence for styled, targeted and `_pbr_falloff` lights, and
+flag/brightness equivalence for targeted (native), styled (native) and `_pbr_falloff` lights, and
 a calibrated fill level. Retail SKY A medians span 0.014–0.176 while released
 ports sit at 0.013–0.030; the default 0.04 ambient fill was calibrated on the
 dim Coliseum outlier.

@@ -1,5 +1,9 @@
 # Scope of work: branch integration and stranded changes
 
+> **Closed 27 November 2026.** This scope of work is no longer maintained. Open
+> work is tracked in [GOALS.md](GOALS.md); this file is kept as the evidence
+> record behind those items.
+
 Date: 24 November 2026. Companion index:
 [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md). This document is
 about **where work lives**, not just what is missing. An implementation that
@@ -11,13 +15,12 @@ document are relative to the main `C:/Users/Tristan/GitHub/MRVN-Radiant`
 checkout. Closure-owned evidence cited from the other SOWs is relative to
 `.local/respawn/tf1-tfo-closure`.
 
-A follow-up isolation step on 24 November 2026 created this worktree at
-`.local/respawn/tf1-tfo-closure` on branch `tf1-tfo-closure`, based on
-`tf1-r1-acceptance`. TF1/TFO-relevant uncommitted notes and tools were copied
-here from `tf1-tfo-compatibility`; TF2/Apex work, Quake-port experiments and
-`.claude/` metadata stayed in the original tree. Nothing was committed. This
-document copy tracks TF1/TFO closure work without affecting the TF2/Apex
-integration worktree.
+A follow-up isolation step on 24 November 2026 created that worktree at
+`.local/respawn/tf1-tfo-closure` on branch `tf1-tfo-closure` at `25a227a`, based
+on `tf1-r1-acceptance`. TF1/TFO-relevant notes and tools were copied there from
+`tf1-tfo-compatibility`; TF2/Apex work, Quake-port experiments and `.claude/`
+metadata stayed in the original tree. This document copy tracks the closure
+evidence without changing the TF2/Apex integration worktree.
 
 ## Local branch snapshot
 
@@ -220,29 +223,59 @@ recorded integration run. Re-verification evidence:
 `.local/respawn/integration-one-hash-replay/replay-reverify.json` (SHA-256
 `0A77BE5E692B0E02170BAB8A2383EB0DA3D02309BB0407CAE1765CCE2515AFBB`).
 
-**Still open:** a full cross-runtime certificate has not been recorded, but each
-target runtime now has bounded one-hash evidence. The 24 November closure replay
-recompiled four TF1 fixtures with this hash — `mp_tf1_lighting`,
-`mp_tf1_vertex_formats`, `mp_tf1_props` and `mp_tf1_masks` — with `[]` lump payload
-differences and paired R1Delta/TFO sessions. The paired TFO lighting session
-initially failed before map load with a `nvwgf2umx.dll` stack overflow; that was
-root-caused to the installed sentry-native 0.7.8 DLL, and a local reversible
-patch let all four fixtures load and finish. The original failure and patched
-passes are retained, but fixture-scoped replay with a local third-party DLL
-patch is not a release gate. The TFO harness path bug that made the first
-extended attempts stall at the loading bar is fixed and documented in ARES;
-ARES adapter tests pass 197 OK, 1 skipped. Details are in
+**Bounded one-hash native replays:** the 24 November closure pass recompiled four
+TF1 fixtures with this hash — `mp_tf1_lighting`, `mp_tf1_vertex_formats`,
+`mp_tf1_props` and `mp_tf1_masks` — with `[]` lump payload differences and paired
+R1Delta/TFO sessions. The paired TFO lighting session initially failed before map
+load with an `nvwgf2umx.dll` stack overflow; that was root-caused to the
+installed sentry-native 0.7.8 DLL, and a local reversible patch let all four
+fixtures load and finish. The original failure and patched passes are retained,
+but fixture-scoped replay with a local third-party DLL patch is not a release
+gate. The TFO harness path bug that made the first extended attempts stall at
+the loading bar is fixed and documented in ARES; ARES adapter tests pass 197 OK,
+1 skipped. Details are in
 [SOW_TF1_TFO.md](SOW_TF1_TFO.md#24-november-one-hash-replay-and-offline-closure-pass-bn)
 and its following TFO stack-overflow and corrected-path sections.
 
 A separate ARES-owned Northstar profile, seeded from the pinned `R2MapHarness`
 DLL and core mods, replayed `mp_mrvn_tf2light_stock` under this compiler with
-`[]` lump payload differences, four captured views and no errors. A fresh
-dedicated R5 server replayed the Apex S3 14-check fixture under the same binary
-with a new server VM and 14/14 checks passing. The `R2Northstar` 1.31.16 label,
-Apex rendered-client parity, custom assets, S0–S2, a clean-checkout rebuild and
-full cross-runtime breadth remain open; see
-[SOW_TF2.md](SOW_TF2.md) and [SOW_APEX.md](SOW_APEX.md). Broader native passes
-still tied to earlier hashes, especially TF2's `6daec3b2…`, must not be promoted
-to this binary. Results index SHA-256
+`[]` lump payload differences, four captured views and no errors; the
+[TF2 scope](SOW_TF2.md#integrated-compiler-replay) records the fingerprints. A
+fresh dedicated R5 server replayed the Apex S3 14-check fixture under the same
+binary with a new server VM and 14/14 checks passing. Results index SHA-256
 `52201694ce9cdb15b61434bbd80013e4be328266f1b686dea1a1281ba4a37bae`.
+
+On 26 November the compiler provenance gate received a scoped `E` pass. A fresh
+build directory configured from the clean tracked `bd10231` source tree with
+VS2022 CMake `3.31.6-msvc6`, generator `Visual Studio 17 2022` / `x64`, and MSVC
+`14.44.35207` produced a raw `remap.exe` at
+`3bceeb96f35b5561eb66f03c7b07ad6a0645910350ed0e584f9b86556e6cdbb6`. It differs
+from the evidence binary at exactly six byte offsets: the COFF timestamp and
+MSVC's repeated debug timestamp. Normalizing those non-content fields to the
+evidence value `0x6b04ef61` yields
+`b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110` exactly.
+The same result was obtained from a rebuild in the original build directory.
+Evidence and scripts:
+`.local/respawn/clean-checkout-hash-verify-20261126/RESULT.md`. This resolves
+compiler provenance without a new hash, so no report or native replay requires
+regeneration. It does not close any runtime gate.
+
+**Bounded response and breadth evidence (26 November, no gate promoted):** under
+the one-hash compiler, a controlled `_ambientscale` A/B, a raw retail SKY A plane
+comparison, a native SKY-A-only A/B, a native CMA-only A/B, a six-view engine
+cubemap-source capture and four engine-framebuffer repeats with the HUD hidden
+all recorded clean, bounded responses. CMA direction contradicts a simple
+multiplier, `CRC` was not varied, `engine_decode_verified` remains `false`, and
+no exposure-matched retail pair was captured, so shader-level CMA/CRC/SKY/RTL
+meaning and retail brightness parity stay open. `light_spot` `"target"` aiming
+has separate native `N` evidence under the current main compiler `73e7e0fa…`, not
+the one-hash binary. R1Delta physics had six stable launches; TFO breadth remains
+Sentry-scoped. Details are in [SOW_TF2.md](SOW_TF2.md) and the certification
+matrix under `.local/respawn/certification-program-20261126/MATRIX.md`.
+
+**Still open:** a full cross-runtime one-hash certificate has not been recorded.
+The `R2Northstar` 1.31.16 label, Apex rendered-client parity, custom assets,
+S0–S2, physics launch breadth, controlled image comparisons, and broader native
+passes still tied to earlier hashes (especially TF2's `6daec3b2…`) remain open.
+The 25 November installed-map audit adds bounded representative loads but does
+not close those gates. BRANCH-05 remains Partial.

@@ -7,9 +7,12 @@ says what was tested in game and what wasn't. The tools are indexed in
 
 ## Start here
 
-- [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md): 24 November 2026
-  scope-of-work index for completing TF1/TFO, TF2 and Apex compatibility. It
-  links the branch-integration and per-game task documents.
+- [GOALS.md](GOALS.md): the goal list for retail-compatible, retail-complete
+  maps in TF1 (R1Delta), Titanfall Online, TF2 (Northstar) and Apex S3
+  (R5Reloaded, with S0–S2), with R5Flowstate as release 1.1.
+- [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md): the closed
+  24 November 2026 scope of work. It and the other `SOW_*.md` files are kept as
+  the evidence record behind the goal list.
 - [RESPAWN_MAP_SUPPORT_AUDIT.md](RESPAWN_MAP_SUPPORT_AUDIT.md): 17 November 2026
   TF1/R1Delta, TFO and TF2 engine/game-file review, support matrix and measured limits.
 

@@ -1,0 +1,478 @@
+# MRVN-Radiant goal list: retail-compatible, retail-complete maps
+
+Started 27 November 2026. This replaces the scope-of-work documents
+(`SOW_*.md`), which are closed and kept as the evidence record behind each item
+here.
+
+**The goal:** MRVN-Radiant can author, compile, light, package and ship a map
+that loads and plays in each target runtime like a retail map. "Compatible" means
+the runtime accepts the map and nothing renders, collides or plays wrongly.
+"Complete" means the map can use every feature retail maps of that game use.
+
+| Release | Target | Runtime pin |
+| --- | --- | --- |
+| 1.0 | Titanfall 1 | R1Delta `app-3.0.5` (acceptance benchmark) |
+| 1.0 | Titanfall Online | TFORevive Core `135` (secondary; local Sentry patch kept for testing) |
+| 1.0 | Titanfall 2 | Northstar (`R2OneHashReplay` / `R2MapHarness` profiles; pin by `Northstar.dll` hash) |
+| 1.0 | Apex Legends Season 3 | R5Reloaded SDK 2.3, `R5pc_r5launch_N1094_CL456479` |
+| 1.0 (sub-items) | Apex Legends Seasons 0–2 | Installed under `F:/Games/Apex Detours/Apex s0`–`s2`; no mod loader, scripts edited by hand |
+| 1.1 | Apex Legends via R5Flowstate | `R5pc_r5-301_J28_CL11570498_FSv30_1`, game version `v3.0.1.28`, SDK `R5FlowstateSDK005` |
+
+Navigation was previously deferred to "version 2" in
+[RESPAWN_COMPATIBILITY.md](RESPAWN_COMPATIBILITY.md). It is in scope here,
+because a retail-complete map needs AI and titan navigation.
+
+## How to use this list
+
+- Each item is one thing that is missing, wrong or unproven. Tags:
+  - `[missing]`: not implemented.
+  - `[wrong]`: implemented, but writes a value known or suspected to differ from
+    retail.
+  - `[unproven]`: implemented, but no in-game check yet.
+  - `[research]`: the format or engine behaviour is not decoded yet.
+- Tick an item only after an in-game check in the named runtime with a pinned
+  compiler hash. Record the evidence path under `.local/respawn/` next to the
+  tick. A written lump, a passing parser or one load report is not enough.
+- Keep TF1 and TFO results separate even when the BSP is byte-identical. Never
+  carry an item from TF2 to Apex because the lump numbers match.
+- Retain failing runs as evidence.
+
+---
+
+## 0. Shared work (all targets)
+
+### Build, process and release
+
+- [ ] **ALL-01 Commit the outstanding work** `[missing]`: the slot-margin
+  fix, targeted spots for TF2 and Apex, the `tf2-targeted-spot` regression and
+  the docs are uncommitted on `main`. The Quake-port and TF1→TF2 asset tools
+  from the first audit are still untracked.
+- [ ] **ALL-02 One compiler build, all runtimes** `[unproven]`: no single
+  compiler hash has passed native runs in all four runtimes. The newest native
+  evidence is spread over `b0a80649…`, `73e7e0fa…`, `fff36c8f…` and `4d8f394d…`.
+  Done when one hash passes the native fixture set for every target.
+- [ ] **ALL-03 Native regression for the realtime slot margin** `[missing]`: a
+  tracked fixture that fails if realtime light slots lose the ±1 texel margin.
+  The margin fixes stepped spot edges in TF1, TFO and Apex.
+- [ ] **ALL-04 Image comparison harness** `[missing]`: every lighting gate needs
+  matched-camera, exposure-matched captures against a retail control. Existing
+  checks are luminance centroids and load/trace events only.
+- [ ] **ALL-05 Editor-to-game workflow** `[missing]`: one editor action per
+  target profile that compiles, bakes, packages and stages the map, with clear
+  errors and a reproducible manifest. Today this is a chain of scripts under
+  `tools/respawn`.
+
+### Editor and entity definitions
+
+- [ ] **ALL-06 Entity definitions match retail** `[missing]`: the gamepacks
+  define 23 classes (TitanfallOnline), 23 (Titanfall2) and 2 (ApexLegends). The
+  ENT partitions of six retail TF2 maps alone use 70 distinct classes, before
+  counting the BSP entity lump. Each game needs every retail class with its
+  keys, spawnflags and partition (`env`, `fx`, `script`, `snd`, `spawn`).
+- [ ] **ALL-07 Separate TF1 gamepack** `[missing]`: TF1 and TFO share the
+  `TitanfallOnline` gamepack. R1Delta requires things TFO doesn't, such as
+  `info_intermission`, the ±16384 envelope and per-map model VPKs.
+- [ ] **ALL-08 Asset browsers** `[missing]`: browse and place retail materials
+  and models from VPK (TF1/TFO), RPak v7 (TF2) and RPak v8 (Apex) without
+  extracting them by hand. Apex props need RSX Cast exports converted with
+  `cast_to_obj.py` today.
+
+### Lighting baker (shared `lightbake.h` and the Apex copy)
+
+- [ ] **ALL-09 Light styles** `[research]`: authored `style` bakes as a
+  constant light with a warning on TF1/TF2. TF2 ignores the record field at
+  runtime. Apex still copies `style` into the record without a retail check.
+  Decide per game whether any switchable or flickering light path exists
+  (entity I/O, server-set style strings), and implement it or document that it
+  doesn't exist.
+- [ ] **ALL-10 Default fill level** `[wrong]`: the `_ambientscale` default 0.04
+  was calibrated on Coliseum, the dimmest retail map. Decoded retail SKY A
+  medians span 0.013–0.277, so no single default matches retail. Choose a
+  per-map calibration rule backed by captures.
+- [ ] **ALL-11 Bake quality** `[missing]`: TF1, TFO and TF2 have one diffuse
+  bounce and chart filtering. Apex has no bounce. In Apex, props and patches
+  don't occlude baked light, and the 32-ray sky term leaves jagged bands on some
+  walls.
+
+---
+
+## 1. Titanfall 1 — R1Delta (release 1.0)
+
+Working today: authored v29 maps load and finish; there are paired R1Delta/TFO
+replays for lighting, vertex formats, props and masks; Hardpoint captures and
+scores; sun, baked, realtime point and aimed spot lights render with smooth
+edges.
+
+### Map format
+
+- [ ] **TF1-01 `PHYSICS_TRIANGLES` not emitted** `[missing]`: the only populated
+  retail lump the writer omits. The engine rebuilds the hulls at load. Either
+  emit the decoded hulls (`tools/respawn/physics_triangles.py`) and measure load
+  time, or document the cold-load cost.
+- [ ] **TF1-02 Field semantics for unvalidated records** `[unproven]`: 9 of 70
+  written lump types have no schema in `validate_records.py`, and semantic
+  parity is unverified for every row of
+  [RESPAWN_TF1_LUMP_CHECKLIST.md](RESPAWN_TF1_LUMP_CHECKLIST.md).
+- [ ] **TF1-03 Unused vertex formats** `[unproven]`: `VERTEX_UNLIT_TS` and
+  `VERTEX_BLINN_PHONG` have writer paths but no fixture.
+- [ ] **TF1-04 Corpus coverage** `[unproven]`: one generated fixture for every
+  lump the retail corpus populates, each validated and loaded.
+
+### Geometry and visibility
+
+- [ ] **TF1-05 Visibility on large maps** `[unproven]`: cells and portals are
+  generated, but native culling, water portals and opt-in portal geometry have
+  no large-map proof.
+- [ ] **TF1-06 3D skybox and sky camera** `[unproven]`: no TF1 native check of
+  a `sky_camera` scene.
+
+### Collision and physics
+
+- [ ] **TF1-07 Physics launch breadth** `[unproven]`: six R1Delta launches of
+  the props fixture are stable. Still needed: curved, stacked and thrown
+  variants with at least six launches each, plus a retail control in the same
+  harness.
+- [ ] **TF1-08 `PHYSICS_COLLIDE` contents** `[unproven]`: model/solid lengths,
+  material tables and fluid keydata with nonempty brush, water and submodel
+  fixtures.
+- [ ] **TF1-09 Patch collision breadth** `[unproven]`: backfaces, transformed
+  patch entities, all orientations, moving props, projectile masks and titan
+  hulls. Four dome hull cases are unresolved.
+- [ ] **TF1-10 `TRICOLL_BEVEL_INDICES` selection** `[wrong]`: the current rule is
+  a functional superset, not retail's selection. Decode the retail rule or
+  record the decision to keep the functional one.
+- [ ] **TF1-11 Water** `[unproven]`: `LEAF_WATER_DATA` cell assignment against
+  real visibility cells (single-cell maps especially), sloped and multiple
+  volumes, submerged props and buoyancy breadth.
+- [ ] **TF1-12 R1Delta underwater black band** `[research]`: classify it as a
+  compiler or runtime defect. Retail controls show a similar horizon artefact.
+
+### Lighting, shadows and reflections
+
+- [ ] **TF1-13 RTL channels** `[research]`: only the slot layout is decoded.
+  Decode the remaining channels against shader behaviour.
+- [ ] **TF1-14 Light brightness equivalence** `[unproven]`: point, spot, sun and
+  `_pbr_falloff` lights against retail captures.
+- [ ] **TF1-15 Light style runtime probe** `[missing]`: never run on TF1 (TF2
+  showed no effect). Feeds ALL-09.
+- [ ] **TF1-16 SKY A/B meaning** `[research]`: no shader validation of the
+  sky planes.
+- [ ] **TF1-17 Projected shadows** `[unproven]`: controlled image comparison of
+  opaque and alpha-tested shadow casters. Only a hand-stripped control has
+  shown the shadow difference, never the compiler's opt-out.
+- [ ] **TF1-18 Probes** `[unproven]`: character lighting across hulls and
+  environments; no TF1 v29 probe fixture yet.
+- [ ] **TF1-19 Cubemaps** `[unproven]`: cubemap selection per material sort,
+  path verification and reflection equivalence against Angel City and Colony.
+
+### Materials, models and packaging
+
+- [ ] **TF1-20 Dependency closure** `[missing]`: complete closure for custom
+  materials, models and shaders. The current audit covers direct dependencies
+  only.
+- [ ] **TF1-21 Clean-deployment load** `[unproven]`: an R1Delta addon with
+  custom materials, models and shaders loads from a clean install. No
+  loose-only shader may pass. The Water shaders must be in a VPK.
+- [ ] **TF1-22 Static props on a real package** `[unproven]`: the `sprp v12`
+  fix has not been checked on a nontrivial packaged map.
+
+### Entities, modes and gameplay
+
+- [ ] **TF1-23 All retail modes** `[unproven]`: tdm, ctf, lts, cp and exfil only
+  start; Hardpoint is the only mode played to capture and score. Needed:
+  contested and recapture objectives, respawns, evac/epilogue flow, dropship
+  and titan drops, plus every other mode retail maps ship.
+- [ ] **TF1-24 Human multiplayer session** `[missing]`: sustained play with
+  several human players.
+- [ ] **TF1-25 Retail gameplay entities** `[research]`: inventory the classes
+  retail maps use (ziplines, turrets, spawn types, hints, triggers) and check
+  each one in game.
+
+### Navigation and AI
+
+- [ ] **TF1-26 AI graph generation** `[missing]`: AIN graphs are exported by the
+  engine itself, behind launch flags. The compiler can't produce them, and
+  stamping a new CRC on an old graph is not regeneration.
+- [ ] **TF1-27 AI breadth** `[unproven]`: multiple hulls and routes, moving
+  obstacles, combat, spectres and titans. Only grunt and atlas routes are
+  recorded.
+
+---
+
+## 2. Titanfall Online — TFORevive Core 135 (release 1.0)
+
+Uses the same v29 writer as TF1. Every TF1 item above also needs its own TFO
+check; only the TFO-specific gaps are listed here.
+
+- [ ] **TFO-01 Unmodified Core 135** `[unproven]`: Hardpoint needs temporary
+  dialogue and sound fixes, so there is no claim for unmodified Core 135.
+- [ ] **TFO-02 Physics launch variance** `[research]`: a bad TFO launch sinks
+  every crate. Find the cause, then run six launches per variant.
+- [ ] **TFO-03 Water and crate drops** `[unproven]`: these currently work only
+  in some launches.
+- [ ] **TFO-04 Projected shadows** `[unproven]`: same gate as TF1-17. TFO has
+  the stronger shadow evidence but no controlled image comparison.
+- [ ] **TFO-05 Mod package from a clean install** `[unproven]`: the TFO mod
+  package with custom assets, using the recorded content-mod set.
+- [ ] **TFO-06 Stock `mp_colony` ENT sidecars** `[research]`: the declared
+  partition files were not found in the scanned loose tree. The map loads, but
+  its entities, triggers and navigation weren't checked.
+- Sentry: the local DLL patch stays in place for testing. It isn't a goal.
+
+---
+
+## 3. Titanfall 2 — Northstar (release 1.0)
+
+Working today: v37 maps load and play. Baked, realtime, spot and `_pbr_falloff`
+lights render, one light class per room. Probes with per-environment isolation,
+CSM and alpha shadow meshes, cubemaps, and an opt-in 1,022-cell portal fixture
+also work.
+
+### Map format
+
+- [ ] **TF2-01 Approximate record fields** `[wrong]`: resolve the fields still
+  approximated against the 14 sampled retail maps and the pinned engine.
+- [ ] **TF2-02 World light v1/v2 records** `[missing]`: the compiler reads them
+  but doesn't emit them.
+- [ ] **TF2-03 Production-scale map** `[unproven]`: a dense authored map near
+  retail budgets (Drydock reaches 67.9% of the 3,145,728-index capacity), with
+  real draw batches and visibility measured in Northstar.
+- [ ] **TF2-04 Main Northstar profile** `[unproven]`: retest on the main
+  `R2Northstar` profile (labelled `1.31.16`). Evidence so far is from the
+  `1.31.13` harness profile.
+
+### Geometry and visibility
+
+- [ ] **TF2-05 Culling parity** `[unproven]`: full culling on a large authored
+  map, plus water portals, global environment cells and leaks.
+- [ ] **TF2-06 Runtime area portals** `[missing]`: authored area portals don't
+  open or close at runtime.
+- [ ] **TF2-07 Default visibility** `[wrong]`: without `_viewportals "1"` the
+  map is a single cell. Retail maps are multi-cell, so the opt-in path should
+  become the proven default.
+
+### Collision
+
+- [ ] **TF2-08 Bevel generation** `[wrong]`: exact retail bevel parity and the
+  `TRICOLL_BEVEL_INDICES` selector. Vertex/edge adjacency is ruled out: 12,658
+  of 20,067 Coliseum references have no shared vertex.
+- [ ] **TF2-09 Flat-triangle tie exceptions** `[research]`: 15 triangles in six
+  maps don't follow the tie rule. Explain or reproduce them.
+- [ ] **TF2-10 Collision breadth** `[unproven]`: backfaces, transforms, moving
+  props, and projectile and titan sweeps.
+- [ ] **TF2-11 Water** `[missing]`: authored water volumes with buoyancy and
+  underwater checks. `LEAF_WATER_DATA` and `PHYSICS_LEVEL` are empty in retail;
+  document why.
+
+### Lighting, shadows and reflections
+
+- [ ] **TF2-12 RTL and SKY channel meaning** `[research]`: the planes respond in
+  game, but there is no shader-level decode or retail exposure match.
+- [ ] **TF2-13 Brightness parity** `[unproven]`: retail fill spans about 20×;
+  see ALL-10.
+- [ ] **TF2-14 Switchable lights** `[research]`: entity I/O toggles or style
+  strings, if any engine path exists. Feeds ALL-09.
+- [ ] **TF2-15 CMA value** `[wrong]`: the placeholder is 5.0 near menu anchors
+  and 1.0 elsewhere. The in-game A/B contradicts a simple multiplier.
+- [ ] **TF2-16 CRC value** `[wrong]`: always written as 0. Semantics unknown.
+- [ ] **TF2-17 Cubemap mesh assignment** `[wrong]`: the nearest-centre rule
+  matches retail on only 30–100% of meshes. Needs a rule that matches a
+  measured majority.
+- [ ] **TF2-18 Probe placement** `[wrong]`: one probe per static prop plus
+  environment probes. Retail placement is adaptive. Compare counts and weights
+  against a retail sample.
+- [ ] **TF2-19 Probe accelerator** `[unproven]`: the probe BSP (0x06/0x07) is
+  left empty and the engine falls back to the KD tree. Run an on/off
+  comparison.
+- [ ] **TF2-20 Alpha shadow contrast** `[unproven]`: the alpha-shadow fixture
+  loads, but its shadow delta is at the capture noise floor.
+- [ ] **TF2-21 Cascades and small holes** `[unproven]`: compare cascade
+  behaviour with retail.
+- [ ] **TF2-22 Menu and gameplay isolation** `[unproven]`: full menu-stage scene
+  parity beyond the structural environment ranges.
+
+### Materials, models and packaging
+
+- [ ] **TF2-23 Dependency closure** `[missing]`: arbitrary model, material and
+  texture closure, with a `--strict` manifest check like TF1's.
+- [ ] **TF2-24 Production RPak and STBSP writers** `[missing]`: `pack_vpk.py`
+  is for small tests and `rpak.py` is read-only. Texture streaming (STBSP) and
+  every shader pass are needed.
+- [ ] **TF2-25 Unknown game-lump versions** `[research]`: decode them or reject
+  them explicitly.
+- [ ] **TF2-26 Clean cold load** `[unproven]`: a prop-heavy map with custom
+  assets loads from a clean deployment, with missing assets recorded as
+  failures. `build_northstar_test_mod.py` still records
+  `ingame_tested: false`.
+
+### Entities, modes and gameplay
+
+- [ ] **TF2-27 All retail modes** `[unproven]`: Attrition, Bounty Hunt,
+  Hardpoint, CTF, LTS, Pilots vs Pilots, Frontier Defense, Coliseum, Live Fire
+  and the rest, each with spawns and objectives.
+- [ ] **TF2-28 Sustained multiplayer and repeated cold loads** `[missing]`.
+- [ ] **TF2-29 Retail gameplay entities** `[research]`: ziplines, titan spawns
+  (`info_spawnpoint_titan`), dropship paths, minimap, loading screen and 3D
+  sky, all checked in game.
+
+### Navigation and AI
+
+- [ ] **TF2-30 Navmesh generation** `[missing]`: there is no automatic navmesh.
+  Calling in a titan without a navmesh failed in game. Frontier Defense and AI
+  need navmesh files for every hull.
+
+---
+
+## 4. Apex Legends Season 3 — R5Reloaded (release 1.0)
+
+Working today: the S3 backend is in the compiler. The fixture room and a
+recovered `mp_box` render in the S3 client, with 14/14 native trace checks.
+Per-face lightmaps, realtime spots with smooth edges and aimed targets, prop sun
+shadows and trigger touch also work.
+
+### Map format
+
+- [ ] **APEX-01 BSP reader** `[missing]`: `LoadR5BSPFile()` is unimplemented
+  (`apex_legends_bsp.cpp:49-50`), and `EmitStubs()` has no Apex definition.
+- [ ] **APEX-02 Field semantics and lump versions** `[unproven]`: bounded
+  validators for every lump, and an explicit failure path for unsupported
+  versions.
+- [ ] **APEX-03 Rendered-client replay on the current compiler** `[unproven]`:
+  the 14-check fixture passes on a dedicated server under `b0a80649…`. The
+  rendered-client run used an earlier binary, and the targeted-spot client run
+  used `4d8f394d…`.
+- [ ] **APEX-04 Retail-map audit flags** `[research]`: 31 retail inventory rows
+  report "Lump range is outside the payload". They are classed as an extraction
+  scope issue, not proven.
+
+### Geometry and visibility
+
+- [ ] **APEX-05 Multi-cell visibility** `[missing]`: `EmitCells` writes exactly
+  one cell and `EmitPortals` only sky portals. Retail World's Edge has 265 cells.
+- [ ] **APEX-06 Authored portal graphs and culling** `[missing]`: measure
+  culling on a large multi-cell map.
+- [ ] **APEX-07 BVH field parity** `[unproven]`: the tree encoding has the
+  retail shape, but exact field parity isn't checked.
+
+### Collision
+
+- [ ] **APEX-08 Brush-entity collision** `[missing]`: a general brush-submodel
+  collision emitter. The trigger `*coll` path is a special case.
+- [ ] **APEX-09 Movers** `[missing]`: `func_brush`, doors, platforms and
+  rotating brushes.
+- [ ] **APEX-10 Collision breadth** `[unproven]`: broad authored geometry,
+  projectile traces, moving props and every contents value.
+- [ ] **APEX-11 Water** `[missing]`.
+
+### Lighting, shadows and reflections
+
+- [ ] **APEX-12 Point and spot baking** `[unproven]`: the baker follows VRAD,
+  so a `light` without `_quadratic_attn` has constant falloff. Check this
+  against retail.
+- [ ] **APEX-13 Static-light RTL and probe references** `[missing]`: not
+  reproduced from retail.
+- [ ] **APEX-14 Light style** `[wrong]`: copied into the record without a
+  retail check. Feeds ALL-09.
+- [ ] **APEX-15 Cubemaps** `[wrong]`: `EmitCubemaps()` writes 25 identical
+  samples at the world centre with `guid = 0`, and the PAKFILE is empty. Retail
+  S0–S3 ship `materials/maps/<map>/cubemaps.hdr.vtf`: VTF 7.5, 256×256, one
+  frame per cubemap, format 66, 9 mips, flags `0x420c`, plus a `CMA` resource.
+- [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
+  response near static and realtime lights.
+- [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
+- [ ] **APEX-18 Shadow environments** `[unproven]`: multi-environment stress,
+  menu/gameplay isolation and a controlled shadow image comparison.
+- [ ] **APEX-19 Lightmap quality** `[missing]`: see ALL-11.
+
+### Materials, models and packaging
+
+- [ ] **APEX-20 Custom assets** `[missing]`: custom textures, models and RPak
+  assets with cold-load closure, plus texture streaming and STARPaks. Map
+  materials currently have to be in an already loaded pak.
+- [ ] **APEX-21 RPak version coverage and GUID collision checks** `[missing]`.
+- [ ] **APEX-22 No missing-material checkerboard** `[unproven]`: an authored map
+  with arbitrary props.
+- [ ] **APEX-23 Repeatable stage cycle** `[unproven]`: compile, stage, load and
+  uninstall from a fresh deployment, every time.
+
+### Entities, modes and gameplay
+
+- [ ] **APEX-24 Trigger classes** `[unproven]`: only `trigger_multiple` is
+  tested.
+- [ ] **APEX-25 Modes and playlists** `[unproven]`: survival (ring/deathfield,
+  loot, drop path) plus every playlist beyond the tested Flowstate-script setup,
+  with full mode discovery recorded.
+- [ ] **APEX-26 Multiplayer first-person session** `[missing]`.
+- [ ] **APEX-27 Retail gameplay entities** `[research]`: ziplines, doors,
+  minimap, loading screen and level RPak contents.
+
+### Navigation and AI
+
+- [ ] **APEX-28 Navmesh files** `[missing]`: R5 maps use separate `.nm` files
+  per hull; none are generated.
+
+### Seasons 0–2 (sub-items)
+
+S0–S3 retail maps share rBSP 47, header revision 30, lump version 0 and 64-byte
+static props. Only S3 has been run in game.
+
+- [ ] **APEX-S0 Season 0 runtime gate** `[missing]`: load a compiled map in the
+  S0 install. Hand-edit the scripts to register it, since there is no mod
+  loader.
+- [ ] **APEX-S1 Season 1 runtime gate** `[missing]`: same as S0.
+- [ ] **APEX-S2 Season 2 runtime gate** `[missing]`: same as S0.
+- [ ] **APEX-S02-1 Per-season differences** `[research]`: diff the retail
+  corpora for each season, covering lump content, cubemap format and RTL
+  sidecar size. Notes disagree on S3's size: 6.5 bytes per texel in
+  `SOW_APEX.md`, 6.0 in Gravemind. Add a season switch to the compiler only
+  where the seasons differ.
+- [ ] **APEX-S02-2 Staging without a mod loader** `[missing]`: a staging tool
+  that patches level lists and scripts in place and can be fully undone.
+
+---
+
+## 5. Apex Legends via R5Flowstate (release 1.1)
+
+R5Flowstate runs a Season 30-era client (`r5apex_dx12.exe`, `client_s30.dll`)
+against a Season 3 dedicated server. It has a mod loader (`mods/`, `mods.vdf`)
+and ships `r5f-modtool.exe`. ARES has a rendered-client harness for it
+(`harnesses/adapters/flowstate_harness.py`, verified on Firing Range on
+20 November 2026).
+
+Observed on 27 November 2026, from the Firing Range extraction
+(`.local/respawn/flowstate-probe-20261127/`):
+
+- The map VPKs are server only (`englishserver_*`/`server_*`). The
+  `mp_rr_canyonlands_staging_mu1` BSP is rBSP v47, revision 30, with 24 lumps
+  holding data: entities, collision, the vis tree and world lights, but no
+  lightmaps, RTL or probes.
+- There is no client map VPK. Each map ships RPak v8 files: the map pak plus
+  `_client_perm`, `_client_temp` and `_loadscreen`. Where the client gets its
+  geometry and lighting is not confirmed; the RPaks are the likely place.
+- Navmeshes ship as `maps/navmesh/<map>_<hull>.nm`.
+
+Goals:
+
+- [ ] **FS-01 Client map format** `[research]`: find where the S30 client loads
+  render geometry, lightmaps, RTL, probes and cubemaps for a map. Check whether
+  that is a BSP inside an RPak, which version, and which lumps.
+- [ ] **FS-02 Server BSP** `[unproven]`: check that the S3 writer's v47 output
+  is accepted as the server half, and decide which lumps belong in the server
+  VPK.
+- [ ] **FS-03 Client writer** `[missing]`: emit the client-side map data in the
+  S30 format once FS-01 is decoded, with the season-30 lighting layouts (BC7
+  lightmap copy `0x61` and lightmap header flag `0x08` were seen in later-season
+  maps).
+- [ ] **FS-04 RPak v8 writer** `[missing]`: package map materials, models and
+  client map data into the per-map RPaks (`map`, `client_perm`, `client_temp`,
+  `loadscreen`).
+- [ ] **FS-05 Mod packaging** `[missing]`: a Flowstate mod (`mods.vdf`, playlist
+  and level registration) that installs and uninstalls cleanly. Evaluate
+  `r5f-modtool.exe`.
+- [ ] **FS-06 Navmesh** `[missing]`: the `.nm` files per hull; shares work with
+  APEX-28.
+- [ ] **FS-07 Rendered-client gate** `[missing]`: the 14-check fixture,
+  lighting and targeted-spot fixtures, and a gameplay session through the ARES
+  Flowstate harness.
+- [ ] **FS-08 Lighting, collision and gameplay parity** `[missing]`: repeat the
+  Apex section 4 items that apply to the S30 client.

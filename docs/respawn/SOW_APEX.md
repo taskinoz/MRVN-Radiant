@@ -1,6 +1,10 @@
 # Scope of work: Apex Legends / R5Reloaded
 
-Date: 24 November 2026. Companion index:
+> **Closed 27 November 2026.** This scope of work is no longer maintained. Open
+> work is tracked in [GOALS.md](GOALS.md); this file is kept as the evidence
+> record behind those items.
+
+Date: 24 November 2026; bounded inventory updated 26 November 2026. Companion index:
 [SOW_COMPATIBILITY_TRACKER.md](SOW_COMPATIBILITY_TRACKER.md). Do not transfer an
 item to Apex by matching TF2 v37 lump numbers. Pin the game build, season corpus
 and R5Reloaded SDK before starting any item.
@@ -63,15 +67,29 @@ issues: 37 `titanfallonline`, 29 `titanfall2` and 3 `apexlegends`. It also passe
 316 Python unit tests and six C++ tests. The older 33/26/Apex counts are no
 longer the acceptance totals.
 
-**Missing:** rebuild from a clean checkout and replay the rendered-client
-result under this exact compiler hash. The 14/14 dedicated-server checks now
-pass under the one-hash binary; the retained rendered-client result still belongs
-to the earlier `apex-s3-compiler` build and must not be claimed for that binary.
+**Missing:** replay the rendered-client result under this exact compiler hash.
+The clean-checkout compiler provenance is now recorded as scoped `E` evidence:
+`b0a80649…` was reproduced from a clean `bd10231` tracked tree with VS2022/MSVC
+after documented PE timestamp normalization
+(`.local/respawn/clean-checkout-hash-verify-20261126/RESULT.md`); that pass does
+not regenerate reports or certify runtime behavior. The 14/14 dedicated-server
+checks pass under the one-hash binary; the retained rendered-client result still
+belongs to the earlier `apex-s3-compiler` build and must not be claimed for that
+binary.
 
 **Acceptance:** one build from the chosen base contains the S3 backend, passes
 the full compiler suite (met), and reproduces the branch's 14/14 native fixture
-under the chosen binary (met for the dedicated-server regression; clean-checkout
-rebuild open).
+under the chosen binary (met for the dedicated-server regression; rendered-client
+replay open).
+
+**Recursive inventory (`S`/`B`/`N`, 26 November):** one-hash Apex evidence is a
+14/14 dedicated R5 server fixture only. Retained rendered-client results belong
+to the earlier `apex-s3-compiler` binary (`fc17d6a3…`), ARES Flowstate rendered
+evidence is stock S21 client / S3 server content rather than an MRVN-authored
+fixture, and the regression script hash recorded in the one-hash index
+(`295b2547…`) does not match the current main copy (`ad054cf7…`). No
+rendered-client, S0–S2, custom-asset or paired-image gate is closed by this
+inventory.
 
 ### APEX-MAP-01 — season-pinned v47 profile and corpus — Partial (`S`/`B`)
 
@@ -94,6 +112,23 @@ Earlier conclusions based on the backported Aqueduct were corrected: its
 features, not S3 features. S3 maps carry `cubemaps.hdr.vtf` in PAKFILE and 6.5
 bytes per texel of realtime light data; the compiler writes neither the later
 `0x61` nor the flag.
+
+**Installed-map audit (`B`/`S`/`N`, 25 November):** ten Apex source roots were
+inventoried: 130 BSP payloads and 196 level RPaks across 138 listed Apex VPK
+directories. Across `apex-r5c-test-runtime` and `apex-r5reloaded`, 31 inventory
+rows covering 29 unique v47 map names reported `Lump range is outside the
+payload.`. This is classified as per-VPK extraction scope under the current
+numeric-lump schema, not proven BSP corruption: docs place `.bsp`, `.bsp_lump`
+and `.ent` across client/server VPKs and the R5 harness mounts the server
+archive. Three Apex archives could not be listed and eight listed Apex
+common/frontend archives had no `/maps` payload; those are reader/coverage gaps,
+not absent-map
+claims. A representative stock `mp_rr_arena_composite` loaded on a dedicated R5
+server with `fresh_server_vm=true`, `entities=true` and a clean VPK unmount, so
+the `N` evidence bounds one map only. Rendered-client parity, all flagged maps,
+v47 `GAME_LUMP` version matching and record semantics remain unproven. Report:
+`.local/respawn/all-maps-audit-20261125/REPORT.md` (SHA-256
+`a0c58f31a7e910cd2147db1fff2c93f65f5bce5ecddad1eb9d620685ef62d7f4`).
 
 **Missing:** a runtime gate for each advertised season, or an explicit statement
 that S0–S2 share the layout but are untested; bounded validators for lump
@@ -207,6 +242,29 @@ RTL pages and probes:
   ambients before it. A realtime spot lit the floor with a realtime pillar shadow.
 - Probes (0x65): 12 SH values, sky vector, sun visibility and weights/indices at
   +0x20/+0x24, cross-checked against the R5 SDK `dlightprobe_t`.
+
+**Targeted spots and realtime slot margin (`B`/`N`, 27 November):**
+- `light_spot` now honours a Source-style `"target"`, using the same rule as
+  the Titanfall writer. The spot points at the named entity's origin; a missing
+  or coincident target warns and falls back to the angles.
+- The v47 build of the shared targeted-spot fixture (`mp_mrvn_targetspot`,
+  `build_apex.py`) writes the aimed normal `(0.7295, 0, -0.6839)` for both
+  realtime (flags 28) and baked (flags 4) spots, and `(0, 0, -1)` for the
+  untargeted control.
+- In the R5Reloaded S3 rendered client (SDK 2.3, staged with
+  `stage_r5_map.py`), the targeted pools sit toward +x. Top-down luminance
+  centroids: 0.70 (realtime) and 0.69 (baked) against 0.16 for the control.
+- The first capture showed the same texel-sized steps at realtime spot edges
+  as TF1. RTL slot scoring only counted sub-samples the light already reached.
+- `apex_legends_lightmaps.cpp` now scores reach over the texel and its eight
+  neighbours (±1 texel). The 2×2 sub-samples now measure shadow visibility
+  only. Slot texels went from 619 to 731, and the recapture shows smooth edges.
+- `remap.exe` `4d8f394d946035c0ceb8cab444ef8f405bd9e973062af2745dd2dc12162c566d`
+  passes 70 regression fixtures and 324 unit tests. Evidence:
+  `.local/respawn/tf2-targeted-spot-native-20261126/` (`apex-run-noslotmargin/`,
+  `apex-run/`, `RESULT.md`).
+- Apex still copies an authored `style` into the record. Retail use is not
+  checked, and no runtime probe has been run.
 
 **Missing:** point/spot light baking is not natively confirmed (the baker follows
 VRAD and a `light` without `_quadratic_attn` has constant falloff); static-light

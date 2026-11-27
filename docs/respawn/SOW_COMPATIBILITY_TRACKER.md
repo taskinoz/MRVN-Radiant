@@ -1,7 +1,11 @@
 # Scope of work: Respawn map compatibility tracker
 
-Date: 24 November 2026. Status: **discovery and task split**, not an acceptance
-certificate. This index is the entry point for agents continuing the work. It
+> **Closed 27 November 2026.** This scope of work is no longer maintained. Open
+> work is tracked in [GOALS.md](GOALS.md); this file is kept as the evidence
+> record behind those items.
+
+Date: 24 November 2026; bounded evidence updated 26 November 2026. Status:
+**discovery and task split**, not an acceptance certificate. This index is the entry point for agents continuing the work. It
 records what the branch evidence currently supports and separates that from what
 still has to be proved.
 
@@ -77,28 +81,87 @@ tied to several different compiler hashes. The original TF2 evidence build
 the 24 November native TF2 captures. A one-hash integration worktree now builds
 as `b0a8064905996b3b2790cee1df12fcf59aae212c9fc6b66301d6ca2370098110` and passes
 all 69 compiler reports (37 v29, 29 v37, 3 Apex), 316 Python unit tests and six
-C++ tests. Its isolated TF2 compiler replays have lump payloads identical to the earlier
-build; only BSP header timestamps differ. Four TF1 fixtures replayed under that
-hash (lighting, vertex formats, props and masks) matched all lump payloads and
-passed paired R1Delta/TFO sessions with the local Sentry patch. The first paired
-TFO session initially crashed before map load in `nvwgf2umx.dll`; that was
-root-caused to the installed sentry-native 0.7.8 DLL, and a local reversible
-patch let all four fixtures load and finish. The failing evidence and the
-wrong-`--maps`-depth stalls are retained; see
+C++ tests. Its isolated TF2 compiler replays have lump payloads identical to the
+earlier build; only BSP header timestamps differ.
+
+Four TF1 fixtures replayed under that hash (lighting, vertex formats, props and
+masks) matched all lump payloads and passed paired R1Delta/TFO sessions with the
+local Sentry patch. The first paired TFO session initially crashed before map
+load in `nvwgf2umx.dll`; that was root-caused to the installed sentry-native
+0.7.8 DLL, and a local reversible patch let all four fixtures load and finish.
+The failing evidence and the wrong-`--maps`-depth stalls are retained; see
 [SOW_TF1_TFO.md](SOW_TF1_TFO.md#24-november-one-hash-replay-and-offline-closure-pass-bn)
 and its TFO stack-overflow and corrected-path sections.
 
 Bounded one-hash native sessions now also exist for TF2/Northstar and Apex/R5.
 An ARES-owned profile seeded from the pinned `R2MapHarness` DLL and core mods
-loaded `mp_mrvn_tf2light_stock` with four views and no errors, and a dedicated
-R5 server passed 14/14 Apex S3 fixture checks with a fresh server VM. These do
-not test the `R2Northstar` 1.31.16 label, Apex rendered-client parity, custom
-assets, S0–S2 or a clean-checkout rebuild. Results index SHA-256
+loaded `mp_mrvn_tf2light_stock` with four views and no errors, and a dedicated R5
+server passed 14/14 Apex S3 fixture checks with a fresh server VM. These do not
+test the `R2Northstar` 1.31.16 label, Apex rendered-client parity, custom assets,
+S0–S2 or a clean-checkout rebuild. Results index SHA-256
 `52201694ce9cdb15b61434bbd80013e4be328266f1b686dea1a1281ba4a37bae`. Native
 claims still stay bound to their recorded build and Sentry DLL state. No
 branch's evidence may be claimed as a certificate for another branch's binary.
 Record hashes before and after integration; see each target document for
 installed engine hashes and version-label conflicts.
+
+### Installed-map coverage audit (25 November 2026)
+
+A static inventory and structural audit of 15 installed source roots is recorded
+in `.local/respawn/all-maps-audit-20261125/REPORT.md` (SHA-256
+`a0c58f31a7e910cd2147db1fff2c93f65f5bce5ecddad1eb9d620685ef62d7f4`). It checked
+244/244 archive listings, 81/81 loose BSPs, 312 BSP inventories, 176 record sets
+and 13 archive/extraction gaps. Three bounded native cross-checks were added:
+R5Reloaded `mp_rr_arena_composite` (dedicated load), Northstar `mp_eden` (ARES
+harness in a temporary clone of the pinned `R2MapHarness` profile) and TFO
+`mp_colony` (direct load with the reversible local `sentry.dll` workaround).
+Those loads are `N` evidence only for the named maps and profiles; the remaining
+inventory is `B`/`E`/`S`. The report classifies every flagged inventory and
+archive gap with an explicit limit. It does not change any item status, promote
+a branch binary, or add a cross-runtime one-hash certificate.
+
+### Bounded 26 November evidence (no gate promoted)
+
+The one-hash compiler `b0a80649…` was reproduced from a clean tracked tree at
+`bd10231` with VS2022/CMake `3.31.6-msvc6` and MSVC `14.44.35207`. The raw rebuild
+differs from the evidence binary in only six PE timestamp bytes; after
+normalizing two timestamp fields the hashes match exactly. This is a scoped `E`
+provenance pass, not a compatibility certificate. Record:
+`.local/respawn/clean-checkout-hash-verify-20261126/RESULT.md`.
+
+Under that binary, a bounded `_ambientscale` A/B recorded centre luminance
+`+2.83/+2.86` at two matched cameras when the override goes `0.04→0.08`; the
+default stays `0.04`. Record: `.local/respawn/tf2-brightness-ab-20261126/RESULT.md`.
+
+A raw SKY A plane comparison of six retail BSPs and two authored fixtures found
+retail medians `0.013271–0.276856`, authored `0.04` median `0.040074`, `0.08`
+median `0.080147`, `issues: []`, `layout_matches: true`,
+`engine_decode_verified: false`. A native plane-only SKY A A/B changed 47,110
+bytes, all inside lump 98, and raised matched-window mean luminance ~153.8→~162.8
+with `errors: []`. A CMA-only A/B changed one four-byte float in lump 40 (`0.01`
+vs `4.0`) and lowered mean luminance ~153.8→~151.1 with 20–22% pixels changed and
+`errors: []`; the direction contradicts a simple upward multiplier, so CMA
+semantics remain unresolved and `CRC` was not varied. Engine-framebuffer repeats
+with the HUD hidden reproduced both directions under pinned `R2OneHashReplay`.
+These are bounded response observations only, not shader proof or retail
+brightness parity. Records:
+`.local/respawn/tf2-sky-plane-compare-20261126/RESULT.md`,
+`.local/respawn/tf2-sky-plane-native-ab-20261126/RESULT.md`,
+`.local/respawn/tf2-cubemap-onehash-20261126/RESULT.md` and
+`.local/respawn/tf2-engine-ab-checks-20261126/RESULT.md`.
+
+`light_spot` `"target"` aiming has a separate bounded native `N` fixture under
+the current main compiler `73e7e0fa…`, **not** the one-hash binary: targeted
+realtime and baked pools move toward the named target versus an untargeted
+control. It does not close brightness parity or establish the property in
+TF1/TFO/Apex. Record: `.local/respawn/tf2-targeted-spot-native-20261126/RESULT.md`.
+
+A recursive Apex inventory confirms one-hash evidence is a 14/14 dedicated R5
+server fixture only. Retained rendered-client results belong to the earlier
+`apex-s3-compiler` binary; ARES Flowstate evidence is stock S21/S3 content; the
+one-hash index's regression script hash `295b2547…` does not match the current
+main copy `ad054cf7…`. No rendered-client, S0–S2, custom-asset or paired-image
+gate is closed.
 
 ## Current headline assessment
 
@@ -106,8 +169,8 @@ installed engine hashes and version-label conflicts.
 | --- | --- | --- | --- |
 | TF1 / R1Delta | Partial: authored v29 maps load; 21 November acceptance lives on `tf1-r1-acceptance`; one-hash R1 replay passes for lighting, vertex formats, props and masks; packaging, asset closure, human gameplay and nav remain gated | Partial: R1 physics/props/modes sampled on that branch; TFO physics remains launch-dependent; one-hash masks replay covers 16 trace and 16 hull cases | Partial: bake, RTL, SKY A/B, probes, opaque and cutout shadow streams implemented; visual parity and stability open |
 | TFO | Partial with Core135 content/mode overrides; separate runtime, not a free extension of R1; one-hash TFO replay passes four fixtures with a local Sentry DLL patch, while the stock-DLL failure and wrong-path stalls are retained | Same writer, same sampled traces and normalized events for four fixtures; crate drops and water remain conditional | Same writer; TFO has the stronger recorded shadow-stream evidence, with startup and image-comparison limits |
-| TF2 / Northstar | Most mature: v37 maps load/play in recorded Northstar runs; 24 November compiler smoke map reloaded cleanly in the 1.31.13 harness profile and again under the one-hash compiler in an ARES-owned copy of that pin; closure and all modes open | Partial/strongest: brush, bevel and patch collision natively sampled; bevel selection and broad traversal open; one-hash smoke replay repeats the two floor traces | Partial: baked maps play; probes, cubemaps, CSM and alpha shadows emitted; roof/sun/realtime-light, one-light-class-per-room and two-environment native capture sets pass load/render/shutdown; one-hash smoke replay adds four bounded views but no image comparison; opaque/alpha shadow emission is structurally certified and the alpha map loads cleanly, but runtime shadow contrast is not resolved; CMA, cubemap selection, brightness parity and full visual parity open |
-| Apex / R5 S3 | Partial: S3 backend is integrated into the one-hash compiler and loads a fixture room and `mp_box` in the retained rendered-client evidence; a dedicated-server fixture now also loads under that exact binary; other seasons and custom assets unproven | Partial: 14/14 native fixture traces and prop sun shadows pass on the earlier branch build and 14/14 dedicated-server checks pass under the one-hash compiler; water, movers, large multi-cell culling and exact BVH parity open | Partial: S3 world lights, RGBM lightmaps, RTL, probes and CSM are implemented, integrated and render in the retained client evidence; one-hash replay is collision/script-only with no client lighting check, so cubemaps, alpha shadows, character lighting and bake quality remain open |
+| TF2 / Northstar | Most mature: v37 maps load/play in recorded Northstar runs; 24 November compiler smoke map reloaded cleanly in the 1.31.13 harness profile and again under the one-hash compiler in an ARES-owned copy of that pin; closure and all modes open | Partial/strongest: brush, bevel and patch collision natively sampled; bevel selection and broad traversal open; one-hash smoke replay repeats the two floor traces | Partial: baked maps play; probes, cubemaps, CSM and alpha shadows emitted; roof/sun/realtime-light, one-light-class-per-room and two-environment native capture sets pass load/render/shutdown; one-hash smoke replay adds four bounded views; bounded one-hash SKY/CMA/`_ambientscale` engine-framebuffer A/Bs show native response but no shader decode or exposure-matched retail parity; opaque/alpha shadow emission is structurally certified and the alpha map loads cleanly, but runtime shadow contrast is not resolved; CMA/CRC semantics, cubemap selection, brightness parity and full visual parity open |
+| Apex / R5 S3 | Partial: S3 backend is integrated into the one-hash compiler; one-hash evidence is a 14/14 dedicated R5 server fixture only — retained rendered-client results predate that binary; other seasons and custom assets unproven | Partial: 14/14 native fixture traces and prop sun shadows pass on the earlier branch build and 14/14 dedicated-server checks pass under the one-hash compiler; water, movers, large multi-cell culling and exact BVH parity open | Partial: S3 world lights, RGBM lightmaps, RTL, probes and CSM are implemented, integrated and render in the retained client evidence; one-hash replay is collision/script-only with no client lighting check, so cubemaps, alpha shadows, character lighting and bake quality remain open |
 
 ## Documents
 

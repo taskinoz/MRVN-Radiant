@@ -43,17 +43,22 @@ because a retail-complete map needs AI and titan navigation.
 
 ### Build, process and release
 
-- [ ] **ALL-01 Commit the outstanding work** `[missing]`: the slot-margin
+- [x] **ALL-01 Commit the outstanding work** `[missing]`: the slot-margin
   fix, targeted spots for TF2 and Apex, the `tf2-targeted-spot` regression and
-  the docs are uncommitted on `main`. The Quake-port and TF1→TF2 asset tools
-  from the first audit are still untracked.
+  the docs are uncommitted on `main`.
+  - Done 27 November 2026: committed. The Quake-port and TF1→TF2 asset tools
+    the first audit called untracked are already tracked.
 - [ ] **ALL-02 One compiler build, all runtimes** `[unproven]`: no single
   compiler hash has passed native runs in all four runtimes. The newest native
   evidence is spread over `b0a80649…`, `73e7e0fa…`, `fff36c8f…` and `4d8f394d…`.
   Done when one hash passes the native fixture set for every target.
-- [ ] **ALL-03 Native regression for the realtime slot margin** `[missing]`: a
+- [x] **ALL-03 Regression for the realtime slot margin** `[missing]`: a
   tracked fixture that fails if realtime light slots lose the ±1 texel margin.
   The margin fixes stepped spot edges in TF1, TFO and Apex.
+  - Done 27 November 2026: `tools/respawn/lightbake_tests.cpp` lights a
+    30-unit disc and checks the texels one and two steps outside the cone.
+    Building with centre-only scoring fails it. The Apex writer's own copy of
+    the slot code (`apex_legends_lightmaps.cpp`) is not covered by this test.
 - [ ] **ALL-04 Image comparison harness** `[missing]`: every lighting gate needs
   matched-camera, exposure-matched captures against a retail control. Existing
   checks are luminance centroids and load/trace events only.
@@ -69,6 +74,13 @@ because a retail-complete map needs AI and titan navigation.
   ENT partitions of six retail TF2 maps alone use 70 distinct classes, before
   counting the BSP entity lump. Each game needs every retail class with its
   keys, spawnflags and partition (`env`, `fx`, `script`, `snd`, `spawn`).
+  - Progress 27 November 2026: each gamepack now has a generated
+    `retail_entities.ent` covering every retail class the hand-written
+    `entities.ent` lacks: 45 (TitanfallOnline, from TF1), 71 (Titanfall2) and
+    76 (ApexLegends). It lists each retail key, with a default only where most
+    retail entities share the value.
+  - Still open: key meanings, spawnflags and editor models. Radiant loading
+    them is not yet checked (HV-03).
 - [ ] **ALL-07 Separate TF1 gamepack** `[missing]`: TF1 and TFO share the
   `TitanfallOnline` gamepack. R1Delta requires things TFO doesn't, such as
   `info_intermission`, the ±16384 envelope and per-map model VPKs.
@@ -76,15 +88,35 @@ because a retail-complete map needs AI and titan navigation.
   and models from VPK (TF1/TFO), RPak v7 (TF2) and RPak v8 (Apex) without
   extracting them by hand. Apex props need RSX Cast exports converted with
   `cast_to_obj.py` today.
+- [x] **ALL-12 Entity partitions match retail** `[wrong]`: the writers routed
+  classes to the BSP lump and `.ent` files by hand-written prefix rules. TF2
+  used TF1's rules, putting 43 of 90 retail classes in the wrong place
+  (lights, triggers, game-mode markers). The two Apex rule lists disagreed with
+  each other and with retail on 20 of 50 S3 classes.
+  - Done 27 November 2026: `tools/respawn/entity_corpus.py` surveys retail maps.
+    Every class sits in exactly one partition per game (5 TF1, 14 TF2 and 6 Apex
+    maps). The generated `tools/remap/source/respawn/entity_partitions.h` now
+    routes all 231 known classes. The old rules remain only for classes retail
+    maps never use.
+  - Apex inline `*coll` collision now follows retail: triggers and volumes
+    only, not `func_brush`.
+  - Checked in game: the TF2 targeted-spot map (lights now in `_env.ent`)
+    renders identically in Northstar (`native-run-partitions/`), and the Apex
+    map loads and spawns in the S3 client (`apex-cube-run/`).
 
 ### Lighting baker (shared `lightbake.h` and the Apex copy)
 
-- [ ] **ALL-09 Light styles** `[research]`: authored `style` bakes as a
+- [x] **ALL-09 Light styles** `[research]`: authored `style` bakes as a
   constant light with a warning on TF1/TF2. TF2 ignores the record field at
   runtime. Apex still copies `style` into the record without a retail check.
   Decide per game whether any switchable or flickering light path exists
   (entity I/O, server-set style strings), and implement it or document that it
   doesn't exist.
+  - Done 27 November 2026: no game has a style path in the record. All 3,123
+    TF2 records and all 31,262 Apex S0–S3 records have style 0. A style-2
+    record changed nothing in Northstar or R1Delta (TF1-15). All three writers
+    now bake styled lights as constant lights with a warning. Script-driven
+    light switching is a separate gameplay feature (TF2-14).
 - [ ] **ALL-10 Default fill level** `[wrong]`: the `_ambientscale` default 0.04
   was calibrated on Coliseum, the dimmest retail map. Decoded retail SKY A
   medians span 0.013–0.277, so no single default matches retail. Choose a
@@ -153,8 +185,11 @@ edges.
   Decode the remaining channels against shader behaviour.
 - [ ] **TF1-14 Light brightness equivalence** `[unproven]`: point, spot, sun and
   `_pbr_falloff` lights against retail captures.
-- [ ] **TF1-15 Light style runtime probe** `[missing]`: never run on TF1 (TF2
+- [x] **TF1-15 Light style runtime probe** `[missing]`: never run on TF1 (TF2
   showed no effect). Feeds ALL-09.
+  - Done 27 November 2026: style 2 on all three spot records; 12 frames over
+    about 27 s in R1Delta 3.0.5 matched the style-0 baseline within ±3% (HUD
+    text only). Contact sheet `tf1-style2-contact.png` (HV-02).
 - [ ] **TF1-16 SKY A/B meaning** `[research]`: no shader validation of the
   sky planes.
 - [ ] **TF1-17 Projected shadows** `[unproven]`: controlled image comparison of
@@ -371,12 +406,22 @@ shadows and trigger touch also work.
   against retail.
 - [ ] **APEX-13 Static-light RTL and probe references** `[missing]`: not
   reproduced from retail.
-- [ ] **APEX-14 Light style** `[wrong]`: copied into the record without a
+- [x] **APEX-14 Light style** `[wrong]`: copied into the record without a
   retail check. Feeds ALL-09.
+  - Done 27 November 2026: all 31,262 retail S0–S3 world lights have style 0.
+    The writer now writes 0 and warns, like the Titanfall writers.
 - [ ] **APEX-15 Cubemaps** `[wrong]`: `EmitCubemaps()` writes 25 identical
   samples at the world centre with `guid = 0`, and the PAKFILE is empty. Retail
   S0–S3 ship `materials/maps/<map>/cubemaps.hdr.vtf`: VTF 7.5, 256×256, one
   frame per cubemap, format 66, 9 mips, flags `0x420c`, plus a `CMA` resource.
+  - Progress 27 November 2026: one cubemap per `env_cubemap` (or one above the
+    mean spawn) is rendered from the light occluders and sun, using the TF2
+    renderer. It is written to a new PAKFILE lump whose VTF header matches
+    retail World's Edge field for field. The S3 client loads the map and
+    renders as before (`apex-cube-contact.png`).
+  - Still open: CMA is 1.0 (meaning unknown, as TF2-15); there is no radiance
+    grid, so walls are lit only by the sun; reflections need a visual check
+    (HV-01).
 - [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
 - [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
@@ -476,3 +521,23 @@ Goals:
   Flowstate harness.
 - [ ] **FS-08 Lighting, collision and gameplay parity** `[missing]`: repeat the
   Apex section 4 items that apply to the S30 client.
+
+---
+
+## Human validation
+
+These items need a person: a judgement call, a visual check or access only you
+have. Screenshots are under
+`.local/respawn/tf2-targeted-spot-native-20261126/`.
+
+- [ ] **HV-01 Apex cubemap reflections**: `apex-cube-contact.png` shows the S3
+  test map before (top) and after (bottom) the compiled cubemap. The map loads
+  and renders the same, but its dev textures barely reflect. Please look at a
+  shiny material in game, or name a retail material to place in a test map,
+  and judge whether the reflection looks right.
+- [ ] **HV-02 TF1 light-style probe**: `tf1-style2-contact.png`. Confirm the
+  pools look steady across the four style-2 frames (columns 2–5) and match the
+  baseline (column 1).
+- [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
+  (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
+  loads with the new `retail_entities.ent` classes and no XML errors.

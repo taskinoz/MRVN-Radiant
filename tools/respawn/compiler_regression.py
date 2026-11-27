@@ -1268,6 +1268,41 @@ def physics_material_limit_fixture(folder, command, reports, game):
     reports.append({'game':game,'fixture':'physics-material-overflow-rejected','issues':[]})
 
 
+def apex_alpha_shadow_fixture(folder, command, reports, game):
+    """Apex alpha-tested shadow casters, laid out as retail S3 does: opaque
+    shadow meshes first (drawType 1, sort 0xFFFF), then one alpha mesh per
+    material sort (drawType 0, the sort index) with position + UV vertices in
+    0x7D, indices continuing the shared 0x7E stream."""
+    path = folder / 'apex-alpha-shadow.map'
+    path.write_text(TF2_ALPHA_SHADOW_FIXTURE, encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    if inventory['issues']:
+        raise RuntimeError(f'Apex alpha-shadow fixture inventory: {inventory["issues"]}')
+    with bsp.open('rb') as stream:
+        def payload(index):
+            entry = inventory['lumps'][index]
+            stream.seek(entry['offset'])
+            return stream.read(entry['length'])
+        meshes = list(struct.iter_unpack('<IIHH', payload(0x7F)))
+        alpha_vertices = list(struct.iter_unpack('<3f2f', payload(0x7D)))
+        index_count = len(payload(0x7E)) // 2
+    kinds = [m[2] for m in meshes]
+    alpha = [m for m in meshes if m[2] == 0]
+    if not alpha or kinds != sorted(kinds, reverse=True) or any(m[3] == 0xFFFF for m in alpha):
+        raise RuntimeError(f'Apex shadow meshes not opaque-then-alpha with material sorts: {meshes}')
+    if any(m[2] == 1 and m[3] != 0xFFFF for m in meshes):
+        raise RuntimeError(f'Apex opaque shadow meshes carry a material sort: {meshes}')
+    if not alpha_vertices or sum(m[1] for m in alpha) * 3 > len(alpha_vertices) * 3 * 4 \
+            or index_count != 3 * sum(m[1] for m in meshes):
+        raise RuntimeError('Apex alpha shadow vertices or shared index stream are inconsistent')
+    if not all(x - 1 < 1056 and x + 1 > 992 for x, *_ in alpha_vertices):
+        raise RuntimeError('Apex alpha shadow stream holds more than the alpha caster')
+    reports.append({'game': game, 'fixture': 'apex-alpha-shadow', 'alpha_meshes': len(alpha), 'issues': []})
+
+
 def apex_viewportals_fixture(folder, command, reports, game):
     """Opt-in Apex multi-cell visibility: the Titanfall 2 cell graph, one root per
     cell, world meshes split so each lies in exactly one cell (retail S3: 92-99%)."""
@@ -1474,6 +1509,7 @@ def main():
         if game == "apexlegends":
             apex_levelinfo_fixtures(folder, command, reports, game)
             apex_viewportals_fixture(folder, command, reports, game)
+            apex_alpha_shadow_fixture(folder, command, reports, game)
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":

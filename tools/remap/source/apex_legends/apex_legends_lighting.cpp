@@ -40,6 +40,9 @@
 #include <cmath>
 #include <unordered_map>
 #include <functional>
+#include <array>
+#include <cstring>
+#include <map>
 
 /*
     EmitCubemaps
@@ -476,10 +479,10 @@ void ApexLegends::EmitShadowMeshes() {
             continue;
         }
         
-        // Skip sky meshes
+        // Skip sky meshes; alpha-tested casters go to the alpha stream below
         int sharedIdx = meshIdx - worldModel.meshIndex;
         if (sharedIdx >= 0 && sharedIdx < static_cast<int>(Shared::meshes.size())
-            && (Shared::meshes[sharedIdx].shaderInfo->compileFlags & C_SKY)) {
+            && (Shared::meshes[sharedIdx].shaderInfo->compileFlags & (C_SKY | C_ALPHASHADOW))) {
             continue;
         }
         
@@ -591,8 +594,78 @@ void ApexLegends::EmitShadowMeshes() {
         }
     }
     
+    // Alpha-tested casters ("$compileflag alphashadow"), as retail S3 writes
+    // them (World's Edge: 8 of 137 shadow meshes): after every opaque mesh, one
+    // per material sort, drawType 0 with that sort's index, vertices in 0x7D as
+    // position + texture UV (float32), indices continuing the shared 0x7E stream.
+    std::map<uint16_t, std::vector<int32_t>> alphaBySort;
+    for (int32_t meshIdx = worldModel.meshIndex; meshIdx < worldModel.meshIndex + worldModel.meshCount; meshIdx++) {
+        const int sharedIdx = meshIdx - worldModel.meshIndex;
+        if (meshIdx < 0 || meshIdx >= static_cast<int32_t>(ApexLegends::Bsp::meshes.size())
+            || sharedIdx >= static_cast<int>(Shared::meshes.size())) continue;
+        const uint32_t flags = Shared::meshes[sharedIdx].shaderInfo->compileFlags;
+        if ((flags & C_ALPHASHADOW) && !(flags & C_SKY) && ApexLegends::Bsp::meshes[meshIdx].triCount)
+            alphaBySort[static_cast<uint16_t>(ApexLegends::Bsp::meshes[meshIdx].materialOffset)].push_back(meshIdx);
+    }
+    for (const auto &[sort, meshList] : alphaBySort) {
+        ShadowMesh_t *alpha = nullptr;
+        MinMax alphaBounds;
+        std::map<std::array<float, 5>, uint16_t> lookup;
+        auto finish = [&]() {
+            if (alpha) shadowMeshBounds.push_back(alphaBounds);
+            alpha = nullptr; alphaBounds = MinMax(); lookup.clear();
+        };
+        for (int32_t meshIdx : meshList) {
+            const auto &mesh = ApexLegends::Bsp::meshes[meshIdx];
+            const uint32_t vertexOffset = mesh.materialOffset < ApexLegends::Bsp::materialSorts.size()
+                ? ApexLegends::Bsp::materialSorts[mesh.materialOffset].vertexOffset : 0;
+            for (uint32_t t = 0; t < mesh.triCount; t++) {
+                if (!alpha || lookup.size() + 3 > 65535) {
+                    finish();
+                    ShadowMesh_t entry = {};
+                    entry.firstVertex = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size());
+                    entry.drawType = 0;
+                    entry.materialSortIdx = sort;
+                    ApexLegends::Bsp::shadowMeshes.push_back(entry);
+                    alpha = &ApexLegends::Bsp::shadowMeshes.back();
+                }
+                for (int k = 0; k < 3; k++) {
+                    const uint32_t index = mesh.triOffset + t * 3 + k;
+                    if (index >= ApexLegends::Bsp::meshIndices.size()) continue;
+                    const uint32_t v = vertexOffset + ApexLegends::Bsp::meshIndices[index];
+                    uint32_t position = 0;
+                    Vector2 uv(0, 0);
+                    switch (mesh.flags & 0x600) {
+                        case 0x200: position = ApexLegends::Bsp::vertexLitBumpVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexLitBumpVertices[v].uv0; break;
+                        case 0x400: position = ApexLegends::Bsp::vertexUnlitVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexUnlitVertices[v].uv0; break;
+                        case 0x600: position = ApexLegends::Bsp::vertexUnlitTSVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexUnlitTSVertices[v].uv0; break;
+                        default:    position = ApexLegends::Bsp::vertexLitFlatVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexLitFlatVertices[v].uv0; break;
+                    }
+                    const Vector3 pos = position < Titanfall::Bsp::vertices.size() ? Titanfall::Bsp::vertices[position] : Vector3(0, 0, 0);
+                    const std::array<float, 5> key{pos.x(), pos.y(), pos.z(), uv.x(), uv.y()};
+                    auto found = lookup.find(key);
+                    if (found == lookup.end()) {
+                        found = lookup.emplace(key, static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size() - alpha->firstVertex)).first;
+                        ShadowMeshAlphaVertex_t vertex = {};
+                        vertex.position = pos;
+                        const float u = uv.x(), w = uv.y();
+                        std::memcpy(&vertex.texCoord[0], &u, 4);
+                        std::memcpy(&vertex.texCoord[1], &w, 4);
+                        ApexLegends::Bsp::shadowMeshAlphaVerts.push_back(vertex);
+                    }
+                    ApexLegends::Bsp::shadowMeshIndices.push_back(found->second);
+                    worldBounds.extend(pos);
+                    alphaBounds.extend(pos);
+                }
+                alpha->triangleCount++;
+                totalTriangles++;
+            }
+        }
+        finish();
+    }
+
     totalVertices = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size());
-    
+
     EmitCsmTree(shadowMeshBounds);
 
     Sys_Printf("  %zu shadow meshes (%u tris, %u verts, %zu CSM nodes, %zu CSM refs)\n",

@@ -295,12 +295,17 @@ also work.
 - [ ] **TF2-07 Default visibility** `[wrong]`: without `_viewportals "1"` the
   map is a single cell. Retail maps are multi-cell, so the opt-in path should
   become the proven default.
-  - Progress 27 November 2026: with `_viewportals` plus `_vis_split "1"`,
-    world faces are split per cell, giving one cell per mesh (the
-    `portal-budget` fixture went from 64 to 1.00 cells per mesh). Retail TF2
-    averages 1.31 and TF1 Angel City 1.52.
-  - Blocked by TF2-31.
-- [ ] **TF2-31 Split meshes lose spawn entities** `[research]`: in Northstar a
+  - Progress 27 November 2026: with `_viewportals`, world faces are now split
+    per cell by default, giving one cell per mesh (the `portal-budget`
+    fixture went from 64 to 1.00 cells per mesh). Retail TF2 averages 1.31
+    and TF1 Angel City 1.52.
+    - Checked in Northstar and R1Delta with the three-room fixture
+      (`.local/respawn/apex-cells-20261127/tf2-cells-contact.png`,
+      `tf1-cells-contact.png`).
+  - Still open:
+    - `_viewportals` itself is still opt-in.
+    - Culling gains aren't measured (HV-04).
+- [x] **TF2-31 Split meshes lose spawn entities** `[research]`: in Northstar a
   split three-room fixture (`.local/respawn/apex-cells-20261127/titanfall2-cells`)
   loads, renders and collides, but has no `_spawn.ent` entities: 0
   `info_spawnpoint_human`, against 2 in the identical unsplit build.
@@ -309,6 +314,13 @@ also work.
   - The BSPs differ in meshes, vertices, LEVEL_INFO, probes and lumps 0x1E and
     0x7F.
   - Until the cause is found, splitting stays opt-in for TF1/TF2.
+  - Fixed 27 November 2026 (`git log`: "Fix lost spawns with cell-split
+    meshes").
+    - Cause: building the cell graph before meshing put its portal planes
+      ahead of the collision planes in the plane lump.
+    - A lump bisection in Northstar pinned it down: swapping in the cell graph
+      plus plane lump from the unsplit build restored the spawns, while
+      swapping probes, shadow meshes or visibility trees didn't.
 
 ### Collision
 

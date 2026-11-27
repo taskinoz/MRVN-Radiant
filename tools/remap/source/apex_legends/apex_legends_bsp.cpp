@@ -283,8 +283,13 @@ void CompileR5BSPFile() {
     if (entities[0].intForKey("_viewportals") && !entities[0].intForKey("_vis_nosplit")) {
         std::vector<std::vector<std::size_t>> cellObjects;
         std::vector<MinMax> cellBounds;
+        const std::size_t planeCount = Titanfall::Bsp::planes.size();
         Titanfall2::BuildVisibilityCells(entities[0], {}, cellObjects, cellBounds);
-        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();
+        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();  // keeps its own plane copies
+        // Drop the portal planes again so the plane lump keeps its usual order
+        // (collision planes first): with them here, Northstar created none of
+        // the _spawn.ent entities (TF2-31). The final graph re-adds them.
+        Titanfall::Bsp::planes.resize(planeCount);
     }
     {
         int modelIndex = 0;

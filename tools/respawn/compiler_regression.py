@@ -395,6 +395,29 @@ def portal_budget_fixture(folder, command, reports, game):
         raise RuntimeError('opaque leaves lost their empty shared cell')
     # Cells must be whole BSP subtrees for the renderer's front-to-back order;
     # the pillars' leaves exceed the budget, so they become visibility detail.
+    # World meshes are split per cell (Shared::splitFaceByCells): each is
+    # referenced from exactly one cell root, as retail meshes mostly are.
+    with bsp.open('rb') as stream:
+        def lump(index):
+            stream.seek(16 + index * 16)
+            offset, length = struct.unpack('<2I', stream.read(8))
+            stream.seek(offset)
+            return stream.read(length)
+        nodes, refs, mesh_count = lump(0x77), lump(0x78), len(lump(0x50)) // 28
+    references = struct.unpack(f'<{len(refs) // 2}H', refs)
+    holders = {}
+    for cell in range(len(r[107])):
+        stack, seen = [cell], set()
+        while stack:
+            index = stack.pop()
+            children, own = struct.unpack_from('<BB', nodes, index * 32 + 12)
+            first, ref_first = struct.unpack_from('<HH', nodes, index * 32 + 28)
+            seen.update(references[ref_first:ref_first + own])
+            stack.extend(range(first, first + children))
+        for obj in seen:
+            holders.setdefault(obj, set()).add(cell)
+    if mesh_count < 2 or any(len(holders.get(m, ())) != 1 for m in range(mesh_count)):
+        raise RuntimeError('world meshes are not split one per visibility cell')
     log = path.with_suffix('.log').read_text(errors='replace')
     if len(r[107]) > 1022 or '"_vis_detail"' not in log:
         raise RuntimeError('stress map did not exercise the native cell budget')

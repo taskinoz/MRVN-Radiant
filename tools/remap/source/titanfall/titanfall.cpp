@@ -300,16 +300,20 @@ void CompileR1BSPFile() {
     Titanfall::Bsp::planes.emplace_back(Plane3f(0, 1, 0, 0));
     // TODO: set cmGrid.brushSidePlaneOffset here
 
-    // Multi-cell maps can keep each world mesh inside one visibility cell, so
-    // cells can cull them: build the cell graph first and split world faces
-    // along it (Shared::splitFaceByCells). Opt-in with "_vis_split" "1": in
-    // Northstar a split three-room fixture lost its _spawn.ent entities
-    // (27 Nov 2026, cause unknown) while the unsplit build kept them.
-    if (!entities.empty() && entities[0].intForKey("_viewportals") && entities[0].intForKey("_vis_split")) {
+    // Multi-cell maps keep each world mesh inside one visibility cell, so cells
+    // can cull them, as retail does (TF2 1.3 cells per mesh): build the cell
+    // graph first and split world faces along it (Shared::splitFaceByCells).
+    // "_vis_nosplit" "1" keeps merged meshes.
+    if (!entities.empty() && entities[0].intForKey("_viewportals") && !entities[0].intForKey("_vis_nosplit")) {
         std::vector<std::vector<std::size_t>> cellObjects;
         std::vector<MinMax> cellBounds;
+        const std::size_t planeCount = Titanfall::Bsp::planes.size();
         Titanfall2::BuildVisibilityCells(entities[0], {}, cellObjects, cellBounds);
-        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();
+        Shared::splitFaceByCells = Titanfall2::CellFaceSplitter();  // keeps its own plane copies
+        // Drop the portal planes again so the plane lump keeps its usual order
+        // (collision planes first): with them here, Northstar created none of
+        // the _spawn.ent entities (TF2-31). The final graph re-adds them.
+        Titanfall::Bsp::planes.resize(planeCount);
     }
 
     for (entity_t &entity : entities) {

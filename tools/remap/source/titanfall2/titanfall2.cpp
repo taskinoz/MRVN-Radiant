@@ -47,7 +47,7 @@ void LoadR2BSPFile( rbspHeader_t *header, const char *filename ) {
    writes a titanfall2 bsp file and it's .ent files
 */
 void WriteR2BSPFile(const char *filename) {
-    rbspHeader_t header{};
+    rbspHeader_t header = ZeroedRecord<rbspHeader_t>();
 
     /* set up header */
     memcpy(header.ident, g_game->bspIdent, 4);

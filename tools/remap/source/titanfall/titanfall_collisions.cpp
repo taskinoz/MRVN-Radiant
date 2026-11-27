@@ -196,7 +196,7 @@ struct PendingPrimitive { MinMax bounds; int index; int contents; uint8_t type; 
 constexpr std::size_t GroupSize = 8;
 
 Titanfall::CMBound_t EncodeBounds(const MinMax &minmax) {
-    Titanfall::CMBound_t bound{};
+    Titanfall::CMBound_t bound = ZeroedRecord<Titanfall::CMBound_t>();
     bound.unknown1 = 128;
     try {
         for (int axis = 0; axis < 3; ++axis) {
@@ -236,7 +236,7 @@ void EmitTricollHeader(const shaderInfo_t &shader, int contents, bool modelOnly,
     out.modelOnly = modelOnly;
     const uint32_t texture = Titanfall::EmitTextureData(shader);
     if (texture > 32767) Error("Tricoll texture index exceeds its signed 16-bit field");
-    Titanfall::TricollHeader_t header{};
+    Titanfall::TricollHeader_t header = ZeroedRecord<Titanfall::TricollHeader_t>();
     header.texdata = texture;
     header.texinfoFlags = static_cast<int16_t>(shader.surfaceFlags & 0xffff);
     header.numVerts = static_cast<int16_t>(triangleCount * 3);
@@ -249,7 +249,7 @@ void EmitTricollHeader(const shaderInfo_t &shader, int contents, bool modelOnly,
     for (std::size_t i = 0; i < triangleCount; ++i) {
         const auto& triangle = triangles[firstTriangle + i];
         Titanfall::Bsp::vertices.insert(Titanfall::Bsp::vertices.end(), triangle.begin(), triangle.end());
-        Titanfall::TricollTriangle_t word{};
+        Titanfall::TricollTriangle_t word = ZeroedRecord<Titanfall::TricollTriangle_t>();
         word.idx0 = static_cast<uint32_t>(i * 3);
         word.idx1 = 1;
         word.idx2 = 2;

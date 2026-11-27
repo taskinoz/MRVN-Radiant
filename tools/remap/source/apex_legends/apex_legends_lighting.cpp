@@ -189,13 +189,13 @@ void ApexLegends::EmitWorldLights() {
     for (const entity_t &e : entities) {
         const char *classname = e.classname();
         if (striEqual(classname, "light_environment")) {
-            WorldLight_t ambient = {};
+            WorldLight_t ambient = ZeroedRecord<WorldLight_t>();
             ambient.origin = e.vectorForKey("origin");
             ambient.intensity = LinearLightColour(e.valueForKey("_ambient"), 255.0f);
             ambient.type = emit_skyambient;
             ambients.push_back(ambient);
 
-            WorldLight_t sun = {};
+            WorldLight_t sun = ZeroedRecord<WorldLight_t>();
             sun.origin = ambient.origin;
             sun.intensity = LinearLightColour(e.valueForKey("_light"), 255.0f);
             sun.normal = LightDirection(e);
@@ -211,7 +211,7 @@ void ApexLegends::EmitWorldLights() {
             continue;
         }
 
-        WorldLight_t light = {};
+        WorldLight_t light = ZeroedRecord<WorldLight_t>();
         light.origin = e.vectorForKey("origin");
         light.type = spot ? emit_spotlight : emit_point;
         // Retail S0-S3 world lights never use the style field (style 0 in all
@@ -582,7 +582,7 @@ void ApexLegends::EmitShadowMeshes() {
         // Create the shadow mesh entry if we added any geometry
         uint32_t shadowTriCount = (static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshIndices.size()) - firstShadowIndex) / 3;
         if (shadowTriCount > 0) {
-            ShadowMesh_t shadowMesh = {};
+            ShadowMesh_t shadowMesh = ZeroedRecord<ShadowMesh_t>();
             shadowMesh.firstVertex = firstShadowVert;
             shadowMesh.triangleCount = shadowTriCount;
             shadowMesh.drawType = 1;  // Opaque
@@ -622,7 +622,7 @@ void ApexLegends::EmitShadowMeshes() {
             for (uint32_t t = 0; t < mesh.triCount; t++) {
                 if (!alpha || lookup.size() + 3 > 65535) {
                     finish();
-                    ShadowMesh_t entry = {};
+                    ShadowMesh_t entry = ZeroedRecord<ShadowMesh_t>();
                     entry.firstVertex = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size());
                     entry.drawType = 0;
                     entry.materialSortIdx = sort;
@@ -646,7 +646,7 @@ void ApexLegends::EmitShadowMeshes() {
                     auto found = lookup.find(key);
                     if (found == lookup.end()) {
                         found = lookup.emplace(key, static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size() - alpha->firstVertex)).first;
-                        ShadowMeshAlphaVertex_t vertex = {};
+                        ShadowMeshAlphaVertex_t vertex = ZeroedRecord<ShadowMeshAlphaVertex_t>();
                         vertex.position = pos;
                         const float u = uv.x(), w = uv.y();
                         std::memcpy(&vertex.texCoord[0], &u, 4);
@@ -704,7 +704,7 @@ void ApexLegends::EmitShadowEnvironments() {
         // This is required for the engine to work properly
         Sys_Printf("  No light_environment found, creating default shadow environment\n");
         
-        ShadowEnvironment_t defaultEnv = {};
+        ShadowEnvironment_t defaultEnv = ZeroedRecord<ShadowEnvironment_t>();
         defaultEnv.beginAabbs = 0;
         defaultEnv.beginObjRefs = 0;
         defaultEnv.beginShadowMeshes = 0;
@@ -722,7 +722,7 @@ void ApexLegends::EmitShadowEnvironments() {
         
         for (const auto& light : ApexLegends::Bsp::worldLights) {
             if (light.type == emit_skylight) {
-                ShadowEnvironment_t env = {};
+                ShadowEnvironment_t env = ZeroedRecord<ShadowEnvironment_t>();
                 env.beginAabbs = 0;
                 env.beginObjRefs = 0;
                 env.beginShadowMeshes = 0;

@@ -80,7 +80,7 @@ struct PortalGeometry {
         if (!std::isfinite(facing) || std::abs(facing) < 1e-8) Error("Degenerate portal polygon");
         // Retail polygons retain positive plane winding for BOTH directed records.
         if (facing < 0) std::reverse(points.begin(), points.end());
-        Titanfall::Portal_t out{};
+        Titanfall::Portal_t out = ZeroedRecord<Titanfall::Portal_t>();
         out.refCount = points.size();
         if (B::portalVertexReferences_stub.size() + points.size() > 65535) Error("Portal reference offset exceeds 16 bits");
         out.firstRef = B::portalVertexReferences_stub.size();
@@ -192,7 +192,7 @@ struct PortalGeometry {
             std::set<std::pair<int16_t, int16_t>> intersections;
             for (const auto v : onEdge[e]) for (const auto other : incident[v])
                 if (other != e) intersections.emplace(other, v);
-            Titanfall::IntersectHeader_t header{};
+            Titanfall::IntersectHeader_t header = ZeroedRecord<Titanfall::IntersectHeader_t>();
             header.firstSet = B::portalIntersectEdges_stub.size();
             auto pair = intersections.begin();
             while (pair != intersections.end()) {
@@ -372,13 +372,13 @@ void WriteAccessNode(const Shared::visNode_t &node, std::size_t index, const Min
         B::objReferences.size() + node.refs.size() > 65535 ||
         B::cellAABBNodes.size() + node.children.size() > 65535)
         Error("Cell access tree exceeds native count/index fields");
-    Titanfall::CellAABBNode_t out{};
+    Titanfall::CellAABBNode_t out = ZeroedRecord<Titanfall::CellAABBNode_t>();
     out.mins = bounds.mins; out.maxs = bounds.maxs;
     out.childCount = node.children.size(); out.objRefCount = node.refs.size();
     out.totalRefCount = RefCount(node);
     out.objRef = B::objReferences.size();
     for (const auto &ref : node.refs) {
-        Titanfall::ObjReferenceBounds_t rb{};
+        Titanfall::ObjReferenceBounds_t rb = ZeroedRecord<Titanfall::ObjReferenceBounds_t>();
         rb.mins = ref.minmax.mins; rb.maxs = ref.minmax.maxs;
         B::objReferenceBounds.push_back(rb); B::objReferences.push_back(ref.index);
     }
@@ -612,7 +612,7 @@ void Titanfall2::BuildVisibilityCells(const entity_t &world, const std::vector<M
     }
     for (std::size_t i = 0; i < cellBounds.size(); ++i) {
         if (B::portals_stub.size() + outgoing[i].size() > 65535) Error("Portal record count exceeds 16 bits");
-        Titanfall::Cell_t cell{};
+        Titanfall::Cell_t cell = ZeroedRecord<Titanfall::Cell_t>();
         cell.firstPortal = B::portals_stub.size(); cell.portalCount = outgoing[i].size();
         cell.flags = 1; cell.leafWaterData = -1;
         for (const auto &p : outgoing[i]) { if (p.type == 1) cell.flags |= 4; B::portals_stub.push_back(p); }

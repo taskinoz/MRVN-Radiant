@@ -516,7 +516,7 @@ void Titanfall::EmitPhysicsModel(const entity_t &e, int modelIndex) {
                      worldSolids.size(), prop.c_str(), water.contents, surfaceZ);
             worldKeydata += text;
             worldSolids.push_back(WriteSolid(water.ledges, Centre(water.ledges)));
-            Titanfall::LeafWaterData_t data{};
+            Titanfall::LeafWaterData_t data = ZeroedRecord<Titanfall::LeafWaterData_t>();
             if (Titanfall::Bsp::leafWaterData.size() > 32767)
                 Error("Water record index exceeds its signed 16-bit cell field");
             data.surfaceZ = surfaceZ;

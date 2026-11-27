@@ -58,7 +58,7 @@ void LoadR5BSPFile(rbspHeader_t *header, const char *filename) {
     The data packing must be exact to match the game's expectations.
 */
 void WriteR5BSPFile(const char *filename) {
-    rbspHeader_t header{};
+    rbspHeader_t header = ZeroedRecord<rbspHeader_t>();
 
     /* Set up header */
     memcpy(header.ident, g_game->bspIdent, 4);

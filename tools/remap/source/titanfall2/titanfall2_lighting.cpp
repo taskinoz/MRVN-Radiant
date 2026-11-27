@@ -150,7 +150,7 @@ V3 SpotDirection(const entity_t &e) {
 }
 
 Titanfall2::WorldLight_t BaseRecord(const Light &light, int32_t type) {
-    Titanfall2::WorldLight_t record{};
+    Titanfall2::WorldLight_t record = ZeroedRecord<Titanfall2::WorldLight_t>();
     // Vector3's default constructor leaves its components uninitialized even
     // inside an otherwise zero-initialized record. These fields are unused by
     // ambient/point lights and must not contain allocator data.

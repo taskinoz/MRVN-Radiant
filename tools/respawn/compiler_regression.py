@@ -1296,6 +1296,13 @@ def apex_probe_placement_fixture(folder, command, reports, game):
             return stream.read(entry['length'])
         probes = list(struct.iter_unpack('<12h3hh4B4HI', payload(0x65)))
         references = list(struct.iter_unpack('<3fIhH', payload(0x68)))
+        world_lights = payload(0x36)
+    # ALL-13: the sky-ambient light's normal was never written, so it carried
+    # stack garbage (often a heap address) into the BSP.
+    ambient_normals = [world_lights[k + 0x18:k + 0x24] for k in range(0, len(world_lights), 112)
+                       if struct.unpack_from('<i', world_lights, k + 0x34)[0] == 5]
+    if not ambient_normals or any(normal != bytes(12) for normal in ambient_normals):
+        raise RuntimeError(f'Apex sky-ambient normals must be zero: {[n.hex() for n in ambient_normals]}')
     rooms = {'spawn': -1024, 'spot': 0}
 
     def room(x, y, z):

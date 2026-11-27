@@ -1541,7 +1541,7 @@ void ApexLegends::SerializeCollisionToEntity(entity_t &entity) {
     while (leafDataBytes.size() % 4 != 0) leafDataBytes.push_back(0);
 
     /* ---- surface property and name buffers ---- */
-    ApexLegends::CollSurfProps_t surfProp{};
+    ApexLegends::CollSurfProps_t surfProp = ZeroedRecord<ApexLegends::CollSurfProps_t>();
     surfProp.surfFlags   = striEqual(cls, "envmap_volume") ? 0x0610 : 0x0400;
     surfProp.surfTypeID  = 0;
     surfProp.contentsIdx = 0;

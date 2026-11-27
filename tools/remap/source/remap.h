@@ -74,8 +74,25 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
+#include <type_traits>
 
 #include "maxworld.h"
+
+/*
+    ZeroedRecord
+    An all-zero BSP lump record. `T x{}` does not zero a record holding a
+    Vector3: BasicVector3's default constructor is user-provided and empty, so
+    those members keep stack garbage and leak into the BSP (ALL-13: a heap
+    address in the Apex sky-ambient light's normal).
+*/
+template<typename T>
+T ZeroedRecord() {
+    static_assert(std::is_trivially_copyable_v<T>, "lump records must be trivially copyable");
+    T record;
+    std::memset(static_cast<void *>(&record), 0, sizeof(T));
+    return record;
+}
 #include "games.h"
 
 

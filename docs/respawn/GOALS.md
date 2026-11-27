@@ -130,9 +130,15 @@ because a retail-complete map needs AI and titan navigation.
   +0x18) holds a 64-bit heap address that changes run to run, where it should
   be zero. Seen in the `apex-alpha-shadow` and `apex-probe-placement`
   regression outputs back to 27 November 2026, so it predates the APEX-16
-  work. This looks like a stale pointer or reference written into
-  `worldLights` after reallocation. Find the write and add a regression check
-  that ambient normals are zero.
+  work. **Fixed 28 November 2026.** There was no stale pointer: the normal was
+  never written. `WorldLight_t ambient = {}` does not zero `Vector3` members,
+  because `BasicVector3()` (`libs/generic/vector.h`) is user-provided and empty,
+  so they keep stack garbage. Every remap lump record that was declared with
+  `T x{}` / `= {}` now uses `ZeroedRecord<T>()` (`remap.h`). A before/after
+  regression compare changes only Apex lump 0x36; every other lump in every
+  game is byte-identical, and Apex output is now identical run to run. The
+  `apex-probe-placement` fixture asserts that sky-ambient normals are zero.
+  Left unticked until the next Apex in-game run loads a rebuilt map.
 
 ---
 

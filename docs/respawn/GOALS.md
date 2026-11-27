@@ -362,9 +362,17 @@ also work.
     - The remaining mismatches, possibly from per-face assignment before
       merging.
     - No in-game reflection check of the rule.
-- [ ] **TF2-18 Probe placement** `[wrong]`: one probe per static prop plus
+- [x] **TF2-18 Probe placement** `[wrong]`: one probe per static prop plus
   environment probes. Retail placement is adaptive. Compare counts and weights
   against a retail sample.
+  - Closed 27 November 2026: the description was out of date.
+    - Since 6 November (`afd25b4`) probes follow walkable surfaces: a 64-unit
+      lattice 24 and 72 units above lit floors, median neighbour spacing 48
+      against retail's 56–129 (Gravemind lighting note).
+    - Weights match retail: 255 on over 99.9% of light links in Colony and
+      Angel City, and on ours.
+    - Light links per probe vary with light density in both (retail 0–4).
+  - Remaining probe work is TF2-19 (accelerator).
 - [ ] **TF2-19 Probe accelerator** `[unproven]`: the probe BSP (0x06/0x07) is
   left empty and the engine falls back to the KD tree. Run an on/off
   comparison.
@@ -517,6 +525,16 @@ shadows and trigger touch also work.
 - [ ] **APEX-16 Character lighting** `[unproven]`: check the third-person probe
   response near static and realtime lights.
 - [ ] **APEX-17 Alpha-tested shadows** `[missing]`.
+  - Progress 27 November 2026: written in the retail S3 layout.
+    - Opaque shadow meshes first, then one alpha mesh per material sort
+      (drawType 0, sort index), with position and float32 UV in 0x7D, and
+      indices continuing 0x7E.
+    - Checked by the `apex-alpha-shadow` regression.
+    - A sunlit test map loads in the S3 client.
+  - Still open: the visual check. That test map showed no sunlight on its
+    floor, so neither shadow was visible
+    (`.local/respawn/apex-cells-20261127/alpha-contact.png`); it needs a scene
+    with a visible sun shadow.
 - [ ] **APEX-18 Shadow environments** `[unproven]`: multi-environment stress,
   menu/gameplay isolation and a controlled shadow image comparison.
 - [ ] **APEX-19 Lightmap quality** `[missing]`: see ALL-11.

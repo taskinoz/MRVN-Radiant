@@ -373,9 +373,17 @@ also work.
       Angel City, and on ours.
     - Light links per probe vary with light density in both (retail 0–4).
   - Remaining probe work is TF2-19 (accelerator).
-- [ ] **TF2-19 Probe accelerator** `[unproven]`: the probe BSP (0x06/0x07) is
+- [x] **TF2-19 Probe accelerator** `[unproven]`: the probe BSP (0x06/0x07) is
   left empty and the engine falls back to the KD tree. Run an on/off
   comparison.
+  - Done 28 November 2026: the description was out of date; current builds
+    write the probe BSP (`EmitLightprobeBsp`).
+    - A/B in Northstar: the targeted-spot map against a copy with 0x06/0x07
+      emptied, third-person pilot at five spots (lit pools, dark corners,
+      dark spawn).
+    - Captures differ by under 0.1 grey levels
+      (`.local/respawn/tf2-targeted-spot-native-20261126/probebsp-contact.png`).
+    - The tree only speeds lookups up; it's kept, as retail ships it.
 - [x] **TF2-20 Alpha shadow contrast** `[unproven]`: the alpha-shadow fixture
   loads, but its shadow delta is at the capture noise floor.
   - Progress 28 November 2026: the old fixture had no sky around the yard

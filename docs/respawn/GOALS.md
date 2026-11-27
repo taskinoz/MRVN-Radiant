@@ -378,6 +378,16 @@ also work.
   comparison.
 - [ ] **TF2-20 Alpha shadow contrast** `[unproven]`: the alpha-shadow fixture
   loads, but its shadow delta is at the capture noise floor.
+  - Progress 28 November 2026: the old fixture had no sky around the yard
+    and no sun visible on the floor.
+    - In a sky-roofed, sunlit yard
+      (`.local/respawn/apex-cells-20261127/build_alpha_tf2.py`,
+      `tf2-alpha-contact.png`), Northstar draws the same sun shadow for a box
+      in the alpha stream as in the opaque stream (Coliseum concrete).
+    - With a missing material it still casts one, because TF2's magenta
+      fallback texture is opaque.
+  - Still open: a cut-out check. An alpha-tested texture with holes, such as a
+    fence material from a loaded pak, should cast a patterned shadow.
 - [ ] **TF2-21 Cascades and small holes** `[unproven]`: compare cascade
   behaviour with retail.
 - [ ] **TF2-22 Menu and gameplay isolation** `[unproven]`: full menu-stage scene

@@ -320,9 +320,22 @@ also work.
 - [ ] **TF2-15 CMA value** `[wrong]`: the placeholder is 5.0 near menu anchors
   and 1.0 elsewhere. The in-game A/B contradicts a simple multiplier.
 - [ ] **TF2-16 CRC value** `[wrong]`: always written as 0. Semantics unknown.
-- [ ] **TF2-17 Cubemap mesh assignment** `[wrong]`: the nearest-centre rule
+- [x] **TF2-17 Cubemap mesh assignment** `[wrong]`: the nearest-centre rule
   matches retail on only 30–100% of meshes. Needs a rule that matches a
   measured majority.
+  - Done 27 November 2026: retail uses `envmap_volume` entities.
+    - The highest-`priority` volume containing a mesh's bounds centre gives
+      the cubemap; meshes outside every volume fall back to the nearest.
+    - Match against seven retail TF2 maps: 80.3% (Angel City 94%, Colony 95%),
+      against 29% for nearest-only.
+    - Apex S3 follows the same rule: World's Edge 62.6% (nearest 17.6%),
+      Firing Range 88.1%.
+    - The TF2 and Apex writers apply it (volume `cubemapID`, or `target`
+      naming an `env_cubemap`), checked by the `tf2-envmap-volume` regression.
+  - Still open:
+    - The remaining mismatches, possibly from per-face assignment before
+      merging.
+    - No in-game reflection check of the rule.
 - [ ] **TF2-18 Probe placement** `[wrong]`: one probe per static prop plus
   environment probes. Retail placement is adaptive. Compare counts and weights
   against a retail sample.
@@ -406,6 +419,16 @@ shadows and trigger touch also work.
     - It's still opt-in.
 - [ ] **APEX-06 Authored portal graphs and culling** `[missing]`: measure
   culling on a large multi-cell map.
+  - Progress 27 November 2026: world meshes now split along the cells, so
+    culling can work at all.
+    - Before, merged meshes spanned every cell.
+    - Retail S3 puts 92–99% of meshes in a single cell (World's Edge 1.12
+      cells per mesh).
+    - With `_viewportals` the writer clips faces down the cell BSP; the
+      fixture is now 1.00 cells per mesh and renders correctly.
+  - Still open: measuring culling in game. `cl_updatevisibility 0` freezes
+    nothing visible in the S3 client, so this needs a draw-call capture
+    (see HV-04).
 - [ ] **APEX-07 BVH field parity** `[unproven]`: the tree encoding has the
   retail shape, but exact field parity isn't checked.
 
@@ -585,6 +608,12 @@ have. Screenshots are under
   pools look steady across the four style-2 frames (columns 2–5) and match the
   baseline (column 1).
   - Confirmed by the user, 27 November 2026: the lights look steady.
+- [ ] **HV-04 Draw-call capture for Apex culling**: R5Reloaded S3 has no
+  convar that locks world visibility. To prove multi-cell culling (APEX-06),
+  capture a frame of `.local/respawn/apex-cells-20261127/cells` (staged as
+  `mp_mrvn_cells`) in RenderDoc or PIX from room A facing the end wall, and
+  compare the draw count with the `one` build. Or name a convar you know
+  locks visibility.
 - [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
   (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
   loads with the new `retail_entities.ent` classes and no XML errors.

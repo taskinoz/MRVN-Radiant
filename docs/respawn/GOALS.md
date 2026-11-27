@@ -275,8 +275,10 @@ also work.
 
 - [ ] **TF2-01 Approximate record fields** `[wrong]`: resolve the fields still
   approximated against the 14 sampled retail maps and the pinned engine.
-- [ ] **TF2-02 World light v1/v2 records** `[missing]`: the compiler reads them
+- [x] **TF2-02 World light v1/v2 records** `[missing]`: the compiler reads them
   but doesn't emit them.
+  - Closed 27 November 2026, not needed: all 14 sampled retail TF2 maps use
+    `WORLD_LIGHTS` version 3, which the compiler writes.
 - [ ] **TF2-03 Production-scale map** `[unproven]`: a dense authored map near
   retail budgets (Drydock reaches 67.9% of the 3,145,728-index capacity), with
   real draw batches and visibility measured in Northstar.
@@ -392,6 +394,16 @@ shadows and trigger touch also work.
 
 - [ ] **APEX-05 Multi-cell visibility** `[missing]`: `EmitCells` writes exactly
   one cell and `EmitPortals` only sky portals. Retail World's Edge has 265 cells.
+  - Progress 27 November 2026: worldspawn `"_viewportals" "1"` now builds the
+    TF2 cell and portal graph for Apex (the cell, cell BSP and portal records
+    are byte-identical to TF2's), with one visibility root per cell.
+    - A three-room fixture compiles to 19 cells, 65 portals and a sky
+      aperture.
+    - It renders like the single-cell build in the S3 client
+      (`.local/respawn/apex-cells-20261127/cells-contact.png`).
+  - Still open:
+    - Culling isn't measured (APEX-06).
+    - It's still opt-in.
 - [ ] **APEX-06 Authored portal graphs and culling** `[missing]`: measure
   culling on a large multi-cell map.
 - [ ] **APEX-07 BVH field parity** `[unproven]`: the tree encoding has the
@@ -399,10 +411,21 @@ shadows and trigger touch also work.
 
 ### Collision
 
-- [ ] **APEX-08 Brush-entity collision** `[missing]`: a general brush-submodel
+- [x] **APEX-08 Brush-entity collision** `[missing]`: a general brush-submodel
   collision emitter. The trigger `*coll` path is a special case.
+  - Done 27 November 2026:
+    - `func_brush` is written to `_script.ent` without `*coll`, as in retail,
+      and collides through its BSP model.
+    - `apex_native_regression.py` gained side, top and hull traces and a
+      bounds check: 18/18 pass on a fresh S3 dedicated server.
 - [ ] **APEX-09 Movers** `[missing]`: `func_brush`, doors, platforms and
   rotating brushes.
+  - Progress 27 November 2026:
+    - Retail S3 has no brush doors: doors are `prop_door` models, and
+      `func_brush` entities named `train_brush` are moved by script.
+    - Moving a compiled `func_brush` with `SetOrigin` moves its collision with
+      it (traces checked).
+  - Still open: `prop_door` and `script_mover` setups.
 - [ ] **APEX-10 Collision breadth** `[unproven]`: broad authored geometry,
   projectile traces, moving props and every contents value.
 - [ ] **APEX-11 Water** `[missing]`.

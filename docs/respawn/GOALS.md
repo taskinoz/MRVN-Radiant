@@ -669,8 +669,29 @@ static props. Only S3 has been run in game.
 - [ ] **APEX-S0 Season 0 runtime gate** `[missing]`: load a compiled map in the
   S0 install. Hand-edit the scripts to register it, since there is no mod
   loader.
+  - Tried 28 November 2026 (`.local/respawn/apex-seasons-20261128/`), blocked
+    by HV-06: the `Apex s0` folder's `r5apex.exe` is byte-identical to the S1
+    one (SHA-256 `DD599E3C…`). It stops at startup with "File
+    'cfg/client/st_data.bin' header is invalid - np 16 != 17", before any map
+    loads. S0's `st_data.bin` has version 16 and S1's has 17.
 - [ ] **APEX-S1 Season 1 runtime gate** `[missing]`: same as S0.
+  - Tried 28 November 2026, blocked by HV-06. Staged with `stage_r5_map.py`
+    (VPKs, loose `maps/`, a level `.rson` and script under `platform/`), then
+    launched through `launcher.exe` with `+map mp_mrvn_envs` added to
+    `platform/cfg/startup_debug.cfg`. The `autoexec_dev.cfg` map line never
+    runs. On the server side our map loads:
+    - the detours console shows `scripts/levels/mp_mrvn_envs.rson`;
+    - our level script prints `MRVN_LEVEL_INIT`;
+    - `OnPropSurvivalCreate` follows.
+
+    The client then stays on the loading screen and the console ignores
+    commands. Stock `mp_lobby` stalls the same way, after `PlayerWaypoints_Init`,
+    so the stall is this install's launch setup, not the map.
 - [ ] **APEX-S2 Season 2 runtime gate** `[missing]`: same as S0.
+  - Tried 28 November 2026, blocked by HV-06. `r5launcher.exe` with `r5dev.dll`
+    reads `launchparams.txt`. With our map, and stock with no `+map`, the process
+    sits for 5–7 minutes with only the "R5 DEV -- INITIALIZED" console window,
+    at about four busy cores, and never opens a game window.
 - [ ] **APEX-S02-1 Per-season differences** `[research]`: diff the retail
   corpora for each season, covering lump content, cubemap format and RTL
   sidecar size. Notes disagree on S3's size: 6.5 bytes per texel in
@@ -743,6 +764,7 @@ otherwise.
 | HV-03 | Open each gamepack in MRVN-Radiant and check the generated `retail_entities.ent` loads | ALL-06 |
 | HV-04 | A RenderDoc/PIX draw-count capture of the Apex cell fixture, or a convar that locks visibility | APEX-06, making multi-cell the default |
 | HV-05 | Check `.local/respawn/apex-envs-20261128/apex-envs-contact.png` (two light environments) | APEX-18 |
+| HV-06 | Working S0–S2 installs: the right S0 `r5apex.exe`, and the steps that get stock S1 and S2 into a map | APEX-S0, APEX-S1, APEX-S2 |
 
 Agents: add new rows here when work waits on the user, and remove them when
 answered.
@@ -779,6 +801,17 @@ answered.
   - Open question for your judgement: the far floor in the top-left view looks
     warm even though the camera is in `*0`. It could be fog or the distant
     cubemap.
+- [ ] **HV-06 Apex S0–S2 installs**: none of the three reaches a playable map
+  here, even with stock maps (details under APEX-S0 to APEX-S2).
+  - **S0:** `Apex s0\r5apex.exe` is the S1 build, so it fails on S0's
+    `st_data.bin`. It needs the `R5pc_r5launch_J1624a_CL394493` executable.
+  - **S1:** reaches the title screen ("A new Origin Update is available"
+    banner). `+map mp_lobby` stalls on the loading screen.
+  - **S2:** `r5launcher.exe` never opens a game window.
+  - Please fix the installs, or tell me how you normally launch them into a
+    map (a launcher, an Origin offline setting, a key press). The rest is
+    scripted: `.local/respawn/apex-seasons-20261128/` holds the console
+    capture tools (`condump.ps1`, `consend.ps1`, `winshot.ps1`).
 - [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
   (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
   loads with the new `retail_entities.ent` classes and no XML errors.

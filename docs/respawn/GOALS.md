@@ -861,6 +861,26 @@ answered.
       - S2 faults in `ucrtbase.dll` at +0x1AA97.
 
       That fits hooks patched for a different exe.
+  - Historical R5R packages in `Game Launcher/` (checked 28 November 2026):
+    - Which builds they target:
+      - v0.1–v0.3 alpha (April–May 2021): an unpacked S0 exe with
+        `r5dev.dll` and `r5launcher.exe`. v0.3's exe is byte-identical to
+        the one now in `Apex s0`.
+      - v0.4–v1.1: the S1 exe. v0.5's is byte-identical to the S1 install's.
+      - v1.6 (September 2021): `r5reloaded.exe -debug|-release`; its DLLs
+        name Seasons 0, 2 and 3.
+    - Results:
+      - v0.3 pair in `Apex s0`: crashes at `r5apex.exe+0x46C78D` in the
+        vertex-declaration setup (POSITION/NORMAL/TEXCOORD strings nearby).
+        It reads address 0 through a null handle-table entry. That points to
+        an asset that never loaded, not the hook. S0's paks match the S0
+        archive.
+      - v1.6 on S0 (three exe dumps) and on S2, in linked test folders
+        `F:/Games/Apex Detours/.mrvn-s0-v16` and `.mrvn-s2-v16`: both
+        `r5dev.dll` and `r5detours.dll` crash at +0x16B3. That is a failed
+        signature lookup, so v1.6 was built for different exe dumps.
+      - v0.1–v0.3 pairs in the test folder exit immediately.
+    - The v0.3 files were removed from `Apex s0` afterwards.
   - Please fix the installs, or tell me how you normally launch them into a
     map (a launcher, an Origin offline setting, a key press). The rest is
     scripted: `.local/respawn/apex-seasons-20261128/` holds the console

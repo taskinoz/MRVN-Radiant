@@ -113,8 +113,20 @@ What the backported Aqueduct has that S0–S3 maps do not:
 So the earlier reading of 0x61 and the `0x08` header flag as "S3 features"
 was wrong: they come from the later-season backport. The compiler writes
 neither, which is correct for S3. Our output loads and renders in S3; one
-output should suit all four seasons, an inference from matching layouts
-(S0–S2 have no harness here and are not natively tested).
+output should suit all four seasons, an inference from matching layouts.
+
+A lump-by-lump comparison on 28 November 2026
+(`.local/respawn/apex-seasons-20261128/season_diff.py`) found no structural
+difference between S0, S1, S2 and S3 maps:
+- every lump has version 0;
+- the lightmap header, the cubemap VTF and the entity partitions are the
+  same;
+- RTL sidecars are 6.0 bytes per texel.
+
+Runtime status of the earlier seasons:
+- S1 loaded a compiled map server-side and ran its level script.
+- None of the local S0–S2 installs reaches gameplay, even with stock maps.
+  See HV-06 in [GOALS.md](GOALS.md).
 
 ## Lighting, shadows and visibility (21 November 2026)
 

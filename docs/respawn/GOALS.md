@@ -692,13 +692,40 @@ static props. Only S3 has been run in game.
     reads `launchparams.txt`. With our map, and stock with no `+map`, the process
     sits for 5–7 minutes with only the "R5 DEV -- INITIALIZED" console window,
     at about four busy cores, and never opens a game window.
-- [ ] **APEX-S02-1 Per-season differences** `[research]`: diff the retail
+- [x] **APEX-S02-1 Per-season differences** `[research]`: diff the retail
   corpora for each season, covering lump content, cubemap format and RTL
   sidecar size. Notes disagree on S3's size: 6.5 bytes per texel in
   `SOW_APEX.md`, 6.0 in Gravemind. Add a season switch to the compiler only
   where the seasons differ.
+  - Done 28 November 2026
+    (`.local/respawn/apex-seasons-20261128/season_diff.py`, output in
+    `season_diff.txt`). Compared S0, S1 and S2 Canyonlands with S3 Firing
+    Range and World's Edge.
+    - Identical in every season:
+      - rBSP 47, revision 30 and version 0 for every lump;
+      - five entity partitions;
+      - lightmap header flags `01 00 00 00`;
+      - lumps 0x2B and 0x61 empty;
+      - the PAKFILE cubemap (`cubemaps.hdr.vtf`, stored, VTF 7.5,
+        256×256, format 66, 9 mips, flags `0x420c`, 104-byte header).
+    - External RTL sidecars are exactly 6.0 bytes per texel in all five maps.
+      The 6.5 figure is the in-BSP 0x69 lump of the backported Aqueduct.
+    - Only 0x14 (packed vertices) and 0x37 (world-light parent infos) are
+      absent, and only in the Firing Range. That follows the map's content,
+      not its season.
+    - S0 and S1 Canyonlands differ in 60 lumps (a full recompile) with the
+      same layout.
+    - Result: no season switch is needed in the compiler. The runtime gates
+      are still open (HV-06).
 - [ ] **APEX-S02-2 Staging without a mod loader** `[missing]`: a staging tool
   that patches level lists and scripts in place and can be fully undone.
+  - Progress 28 November 2026: `stage_r5_map.py --install/--uninstall` works
+    unchanged on the S0–S2 folders.
+    - S1 picked up the loose `platform/scripts/levels/<map>.rson` and level
+      script without any edit to a level list.
+    - The only manual step was adding `+map` to `startup_debug.cfg`, which
+      was backed up and restored by hash.
+  - Still open: a load into gameplay (HV-06).
 
 ---
 

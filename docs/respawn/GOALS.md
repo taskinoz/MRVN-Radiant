@@ -835,6 +835,25 @@ answered.
   - **S1:** reaches the title screen ("A new Origin Update is available"
     banner). `+map mp_lobby` stalls on the loading screen.
   - **S2:** `r5launcher.exe` never opens a game window.
+  - Update 28 November 2026, exes taken from `Game Archives`: the PE link
+    timestamps showed the exes had been swapped between folders.
+    - `Apex s0` held the unpacked S1 exe (linked 20 March 2019).
+    - `Apex s2` held an unpacked S0 exe (linked 25 February 2019), which is
+      why it hung.
+
+    Each folder now has its own build:
+    - `Apex s0` gets the unpacked S0 exe from `Apex s2`.
+    - `Apex s2` gets the archive's 2021 `r5apex.exe` (linked 11 July 2019).
+    - The replaced exes are backed up in
+      `.local/respawn/apex-seasons-20261128/exes/`.
+
+    Results:
+    - S0 now starts with the right build name, then exits about 2 s after
+      "R5 DEV -- INITIALIZED", stock or custom.
+    - The archive's packed S0 exe exits at once.
+    - S2 exits after about 13 s.
+    - The detours SDK's README lists only S3 as supported, so these builds
+      probably need a matching `r5detours.dll`/`r5dev.dll`.
   - Please fix the installs, or tell me how you normally launch them into a
     map (a launcher, an Origin offline setting, a key press). The rest is
     scripted: `.local/respawn/apex-seasons-20261128/` holds the console

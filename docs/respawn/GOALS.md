@@ -15,7 +15,6 @@ the runtime accepts the map and nothing renders, collides or plays wrongly.
 | 1.0 | Titanfall Online | TFORevive Core `135` (secondary; local Sentry patch kept for testing) |
 | 1.0 | Titanfall 2 | Northstar (`R2OneHashReplay` / `R2MapHarness` profiles; pin by `Northstar.dll` hash) |
 | 1.0 | Apex Legends Season 3 | R5Reloaded SDK 2.3, `R5pc_r5launch_N1094_CL456479` |
-| 1.0 (sub-items) | Apex Legends Seasons 0–2 | Installed under `F:/Games/Apex Detours/Apex s0`–`s2`; no mod loader, scripts edited by hand |
 | 1.1 | Apex Legends via R5Flowstate | `R5pc_r5-301_J28_CL11570498_FSv30_1`, game version `v3.0.1.28`, SDK `R5FlowstateSDK005` |
 
 Navigation was previously deferred to "version 2" in
@@ -661,71 +660,27 @@ shadows and trigger touch also work.
 - [ ] **APEX-28 Navmesh files** `[missing]`: R5 maps use separate `.nm` files
   per hull; none are generated.
 
-### Seasons 0–2 (sub-items)
+### Seasons 0–2 (dropped 28 November 2026)
 
-S0–S3 retail maps share rBSP 47, header revision 30, lump version 0 and 64-byte
-static props. Only S3 has been run in game.
+Seasons 0–2 are no longer targets. Apex 1.0 means Season 3 only, because the
+earlier seasons are deprecated and none of the local installs could be
+launched into a map. The record is kept here:
 
-- [ ] **APEX-S0 Season 0 runtime gate** `[missing]`: load a compiled map in the
-  S0 install. Hand-edit the scripts to register it, since there is no mod
-  loader.
-  - Tried 28 November 2026 (`.local/respawn/apex-seasons-20261128/`), blocked
-    by HV-06: the `Apex s0` folder's `r5apex.exe` is byte-identical to the S1
-    one (SHA-256 `DD599E3C…`). It stops at startup with "File
-    'cfg/client/st_data.bin' header is invalid - np 16 != 17", before any map
-    loads. S0's `st_data.bin` has version 16 and S1's has 17.
-- [ ] **APEX-S1 Season 1 runtime gate** `[missing]`: same as S0.
-  - Tried 28 November 2026, blocked by HV-06. Staged with `stage_r5_map.py`
-    (VPKs, loose `maps/`, a level `.rson` and script under `platform/`), then
-    launched through `launcher.exe` with `+map mp_mrvn_envs` added to
-    `platform/cfg/startup_debug.cfg`. The `autoexec_dev.cfg` map line never
-    runs. On the server side our map loads:
-    - the detours console shows `scripts/levels/mp_mrvn_envs.rson`;
-    - our level script prints `MRVN_LEVEL_INIT`;
-    - `OnPropSurvivalCreate` follows.
+- **Format:** the retail S0–S3 maps share one layout:
+  - rBSP 47, revision 30 and version 0 for every lump;
+  - five entity partitions;
+  - lightmap header flags `01 00 00 00`;
+  - the same PAKFILE cubemap VTF;
+  - 6.0-byte-per-texel RTL sidecars.
 
-    The client then stays on the loading screen and the console ignores
-    commands. Stock `mp_lobby` stalls the same way, after `PlayerWaypoints_Init`,
-    so the stall is this install's launch setup, not the map.
-- [ ] **APEX-S2 Season 2 runtime gate** `[missing]`: same as S0.
-  - Tried 28 November 2026, blocked by HV-06. `r5launcher.exe` with `r5dev.dll`
-    reads `launchparams.txt`. With our map, and stock with no `+map`, the process
-    sits for 5–7 minutes with only the "R5 DEV -- INITIALIZED" console window,
-    at about four busy cores, and never opens a game window.
-- [x] **APEX-S02-1 Per-season differences** `[research]`: diff the retail
-  corpora for each season, covering lump content, cubemap format and RTL
-  sidecar size. Notes disagree on S3's size: 6.5 bytes per texel in
-  `SOW_APEX.md`, 6.0 in Gravemind. Add a season switch to the compiler only
-  where the seasons differ.
-  - Done 28 November 2026
-    (`.local/respawn/apex-seasons-20261128/season_diff.py`, output in
-    `season_diff.txt`). Compared S0, S1 and S2 Canyonlands with S3 Firing
-    Range and World's Edge.
-    - Identical in every season:
-      - rBSP 47, revision 30 and version 0 for every lump;
-      - five entity partitions;
-      - lightmap header flags `01 00 00 00`;
-      - lumps 0x2B and 0x61 empty;
-      - the PAKFILE cubemap (`cubemaps.hdr.vtf`, stored, VTF 7.5,
-        256×256, format 66, 9 mips, flags `0x420c`, 104-byte header).
-    - External RTL sidecars are exactly 6.0 bytes per texel in all five maps.
-      The 6.5 figure is the in-BSP 0x69 lump of the backported Aqueduct.
-    - Only 0x14 (packed vertices) and 0x37 (world-light parent infos) are
-      absent, and only in the Firing Range. That follows the map's content,
-      not its season.
-    - S0 and S1 Canyonlands differ in 60 lumps (a full recompile) with the
-      same layout.
-    - Result: no season switch is needed in the compiler. The runtime gates
-      are still open (HV-06).
-- [ ] **APEX-S02-2 Staging without a mod loader** `[missing]`: a staging tool
-  that patches level lists and scripts in place and can be fully undone.
-  - Progress 28 November 2026: `stage_r5_map.py --install/--uninstall` works
-    unchanged on the S0–S2 folders.
-    - S1 picked up the loose `platform/scripts/levels/<map>.rson` and level
-      script without any edit to a level list.
-    - The only manual step was adding `+map` to `startup_debug.cfg`, which
-      was backed up and restored by hash.
-  - Still open: a load into gameplay (HV-06).
+  So S3 output should be structurally valid for S0–S2 too
+  (`.local/respawn/apex-seasons-20261128/season_diff.py`).
+- **Runtime:** S1 loaded a compiled map server-side and ran its level script,
+  but neither stock nor custom maps got past its loading screen. S0 and S2
+  crashed at startup with every exe/hook pairing on disk: the `Game Archives`
+  builds and the `Game Launcher` R5R packages v0.1–v1.6. Details are in the
+  Gravemind Apex compiler document and in git history (commits `5619a51`
+  to `1f0df86`).
 
 ---
 
@@ -791,7 +746,6 @@ otherwise.
 | HV-03 | Open each gamepack in MRVN-Radiant and check the generated `retail_entities.ent` loads | ALL-06 |
 | HV-04 | A RenderDoc/PIX draw-count capture of the Apex cell fixture, or a convar that locks visibility | APEX-06, making multi-cell the default |
 | HV-05 | Check `.local/respawn/apex-envs-20261128/apex-envs-contact.png` (two light environments) | APEX-18 |
-| HV-06 | Working S0–S2 installs: the right S0 `r5apex.exe`, and the steps that get stock S1 and S2 into a map | APEX-S0, APEX-S1, APEX-S2 |
 
 Agents: add new rows here when work waits on the user, and remove them when
 answered.
@@ -828,63 +782,6 @@ answered.
   - Open question for your judgement: the far floor in the top-left view looks
     warm even though the camera is in `*0`. It could be fog or the distant
     cubemap.
-- [ ] **HV-06 Apex S0–S2 installs**: none of the three reaches a playable map
-  here, even with stock maps (details under APEX-S0 to APEX-S2).
-  - **S0:** `Apex s0\r5apex.exe` is the S1 build, so it fails on S0's
-    `st_data.bin`. It needs the `R5pc_r5launch_J1624a_CL394493` executable.
-  - **S1:** reaches the title screen ("A new Origin Update is available"
-    banner). `+map mp_lobby` stalls on the loading screen.
-  - **S2:** `r5launcher.exe` never opens a game window.
-  - Update 28 November 2026, exes taken from `Game Archives`: the PE link
-    timestamps showed the exes had been swapped between folders.
-    - `Apex s0` held the unpacked S1 exe (linked 20 March 2019).
-    - `Apex s2` held an unpacked S0 exe (linked 25 February 2019), which is
-      why it hung.
-
-    Each folder now has its own build:
-    - `Apex s0` gets the unpacked S0 exe from `Apex s2`.
-    - `Apex s2` gets the archive's 2021 `r5apex.exe` (linked 11 July 2019).
-    - The replaced exes are backed up in
-      `.local/respawn/apex-seasons-20261128/exes/`.
-
-    Results:
-    - S0 now starts with the right build name, then exits about 2 s after
-      "R5 DEV -- INITIALIZED", stock or custom.
-    - The archive's packed S0 exe exits at once.
-    - S2 exits after about 13 s.
-    - The detours SDK's README lists only S3 as supported, so these builds
-      probably need a matching `r5detours.dll`/`r5dev.dll`.
-    - Still the same after network access was allowed through the Windows
-      prompt. The Windows Application log shows both are access violations
-      (0xc0000005):
-      - S0 faults inside `r5apex.exe` at +0x46C78D;
-      - S2 faults in `ucrtbase.dll` at +0x1AA97.
-
-      That fits hooks patched for a different exe.
-  - Historical R5R packages in `Game Launcher/` (checked 28 November 2026):
-    - Which builds they target:
-      - v0.1–v0.3 alpha (April–May 2021): an unpacked S0 exe with
-        `r5dev.dll` and `r5launcher.exe`. v0.3's exe is byte-identical to
-        the one now in `Apex s0`.
-      - v0.4–v1.1: the S1 exe. v0.5's is byte-identical to the S1 install's.
-      - v1.6 (September 2021): `r5reloaded.exe -debug|-release`; its DLLs
-        name Seasons 0, 2 and 3.
-    - Results:
-      - v0.3 pair in `Apex s0`: crashes at `r5apex.exe+0x46C78D` in the
-        vertex-declaration setup (POSITION/NORMAL/TEXCOORD strings nearby).
-        It reads address 0 through a null handle-table entry. That points to
-        an asset that never loaded, not the hook. S0's paks match the S0
-        archive.
-      - v1.6 on S0 (three exe dumps) and on S2, in linked test folders
-        `F:/Games/Apex Detours/.mrvn-s0-v16` and `.mrvn-s2-v16`: both
-        `r5dev.dll` and `r5detours.dll` crash at +0x16B3. That is a failed
-        signature lookup, so v1.6 was built for different exe dumps.
-      - v0.1–v0.3 pairs in the test folder exit immediately.
-    - The v0.3 files were removed from `Apex s0` afterwards.
-  - Please fix the installs, or tell me how you normally launch them into a
-    map (a launcher, an Origin offline setting, a key press). The rest is
-    scripted: `.local/respawn/apex-seasons-20261128/` holds the console
-    capture tools (`condump.ps1`, `consend.ps1`, `winshot.ps1`).
 - [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
   (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
   loads with the new `retail_entities.ent` classes and no XML errors.

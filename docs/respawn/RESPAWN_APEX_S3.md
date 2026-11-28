@@ -123,10 +123,10 @@ difference between S0, S1, S2 and S3 maps:
   same;
 - RTL sidecars are 6.0 bytes per texel.
 
-Runtime status of the earlier seasons:
-- S1 loaded a compiled map server-side and ran its level script.
-- None of the local S0–S2 installs reaches gameplay, even with stock maps.
-  See HV-06 in [GOALS.md](GOALS.md).
+Seasons 0–2 were dropped as targets on 28 November 2026, and Apex 1.0 is
+Season 3 only. None of the local S0–S2 installs reached gameplay, even with
+stock maps. S1 loaded a compiled map server-side and ran its level script
+before stalling on the loading screen.
 
 ## Lighting, shadows and visibility (21 November 2026)
 
@@ -255,8 +255,6 @@ must not be offset by it.
    (4,194,303) node and reference indices.
 4. **Cubemaps.** Bake cubemaps and write `cubemaps.hdr.vtf` into the
    PAKFILE in the S3 format above.
-5. **S0–S2.** Find a way to run custom maps in those builds, or document
-   that the shared layout is the only evidence.
-6. **Navigation.** R5 maps use separate navmesh files; none are generated.
-7. **GPU baking.** The fork's HIPRT path is built only when its SDK is in
+5. **Navigation.** R5 maps use separate navmesh files; none are generated.
+6. **GPU baking.** The fork's HIPRT path is built only when its SDK is in
    `windeps/hiprt`; the CPU path is used otherwise.

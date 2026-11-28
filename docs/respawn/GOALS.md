@@ -854,6 +854,13 @@ answered.
     - S2 exits after about 13 s.
     - The detours SDK's README lists only S3 as supported, so these builds
       probably need a matching `r5detours.dll`/`r5dev.dll`.
+    - Still the same after network access was allowed through the Windows
+      prompt. The Windows Application log shows both are access violations
+      (0xc0000005):
+      - S0 faults inside `r5apex.exe` at +0x46C78D;
+      - S2 faults in `ucrtbase.dll` at +0x1AA97.
+
+      That fits hooks patched for a different exe.
   - Please fix the installs, or tell me how you normally launch them into a
     map (a launcher, an Origin offline setting, a key press). The rest is
     scripted: `.local/respawn/apex-seasons-20261128/` holds the console

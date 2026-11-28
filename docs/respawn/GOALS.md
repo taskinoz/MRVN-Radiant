@@ -125,7 +125,7 @@ because a retail-complete map needs AI and titan navigation.
   bounce and chart filtering. Apex has no bounce. In Apex, props and patches
   don't occlude baked light, and the 32-ray sky term leaves jagged bands on some
   walls.
-- [ ] **ALL-13 Heap address in the Apex sky-ambient light** `[wrong]`: in some
+- [x] **ALL-13 Heap address in the Apex sky-ambient light** `[wrong]`: in some
   Apex builds the `emit_skyambient` world light's `normal.x/.y` (lump 0x36,
   +0x18) holds a 64-bit heap address that changes run to run, where it should
   be zero. Seen in the `apex-alpha-shadow` and `apex-probe-placement`
@@ -138,7 +138,8 @@ because a retail-complete map needs AI and titan navigation.
   regression compare changes only Apex lump 0x36; every other lump in every
   game is byte-identical, and Apex output is now identical run to run. The
   `apex-probe-placement` fixture asserts that sky-ambient normals are zero.
-  Left unticked until the next Apex in-game run loads a rebuilt map.
+  Maps rebuilt with the fix load and render in R5Reloaded (the APEX-18 run,
+  28 November 2026).
 
 ---
 
@@ -606,8 +607,31 @@ shadows and trigger touch also work.
       shadow: the engine alpha-tests the material's texture.
     - The first attempt had pointed the sun upward (`angles` pitch −70 without
       `pitch`) and had no sky, so no sun reached the floor.
-- [ ] **APEX-18 Shadow environments** `[unproven]`: multi-environment stress,
-  menu/gameplay isolation and a controlled shadow image comparison.
+- [ ] **APEX-18 Shadow environments** `[done, awaiting HV-05]`: multi-environment
+  stress, menu/gameplay isolation and a controlled shadow image comparison.
+  - **Retail rule** (S3 Firing Range, 28 November 2026): `light_environment`
+    `*0` owns everything outside any volume. A `light_environment_volume` brush
+    entity claims its region for `*1`. Each environment has its own contiguous
+    range of shadow meshes, CSM nodes and CSM references (meshes 0–5 and 6–29),
+    and its own CSM tree. Child and reference indices are absolute across trees.
+  - **Compiler, 28 November 2026:** world lights, shadow environments and CSM
+    trees follow `lightEnvironmentIndex` order. Shadow casters are split per
+    triangle by the volume holding their centroid. Lightmap texels, probes and
+    cubemaps use the sun and ambient of the environment that holds them.
+    Volumes come from the entity's brushes, or from decompiled
+    `*trigger_brush` keys. The `apex-shadow-environments` regression fixture
+    checks the ranges, the world-light order and the per-environment suns.
+    Single-environment maps are byte-identical, except maps with no
+    `light_environment`: their CSM tree now uses the default shadow direction.
+  - **In game** (R5Reloaded, `.local/respawn/apex-envs-20261128`): the engine
+    applies the environment that holds the camera to the whole view.
+    - Standing at x=-300, the yard has `*0`'s white sun; at x=+300 it has
+      `*1`'s warm sun.
+    - The west pillar's shadow falls to +Y (`*0`), the east pillar's to -Y
+      (`*1`).
+    - The single-environment control map casts +Y in both halves.
+  - **Not covered:** more than two environments in game. Apex S3 has no
+    in-map menu stage, so "menu isolation" means volume isolation here.
 - [ ] **APEX-19 Lightmap quality** `[missing]`: see ALL-11.
 
 ### Materials, models and packaging
@@ -718,6 +742,7 @@ otherwise.
 | --- | --- | --- |
 | HV-03 | Open each gamepack in MRVN-Radiant and check the generated `retail_entities.ent` loads | ALL-06 |
 | HV-04 | A RenderDoc/PIX draw-count capture of the Apex cell fixture, or a convar that locks visibility | APEX-06, making multi-cell the default |
+| HV-05 | Check `.local/respawn/apex-envs-20261128/apex-envs-contact.png` (two light environments) | APEX-18 |
 
 Agents: add new rows here when work waits on the user, and remove them when
 answered.
@@ -740,6 +765,20 @@ answered.
   `mp_mrvn_cells`) in RenderDoc or PIX from room A facing the end wall, and
   compare the draw count with the `one` build. Or name a convar you know
   locks visibility.
+- [ ] **HV-05 Apex light environments**:
+  `.local/respawn/apex-envs-20261128/apex-envs-contact.png`. The map is one
+  yard, with environment `*0` (white sun) in the west half and `*1` (warm sun,
+  opposite direction) in the east half.
+  - Top row: the west pillar casts to the right and the east pillar to the
+    left.
+  - Middle left: the single-environment control, where the east pillar casts
+    to the right.
+  - Middle right and bottom row: the whole view follows the environment the
+    camera stands in.
+  - Please confirm the shadows and colours look right.
+  - Open question for your judgement: the far floor in the top-left view looks
+    warm even though the camera is in `*0`. It could be fog or the distant
+    cubemap.
 - [ ] **HV-03 Editor entity definitions**: open MRVN-Radiant with each gamepack
   (TitanfallOnline, Titanfall2, ApexLegends) and check that the entity list
   loads with the new `retail_entities.ent` classes and no XML errors.

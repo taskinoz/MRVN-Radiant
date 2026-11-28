@@ -73,6 +73,11 @@ namespace Titanfall2 {
                                         const std::vector<float> &cma, const Respawn::Bake::Occluders *occluders,
                                         const Respawn::Bake::RadianceGrid *grid, Respawn::Bake::V3 sky,
                                         const std::vector<Respawn::Bake::Light> &suns);
+    // Per cubemap: skies[i] and lights[i] light origins[i] (Apex light environments).
+    std::vector<uint8_t> CubemapPakfile(const std::string &level, const std::vector<Respawn::Bake::V3> &origins,
+                                        const std::vector<float> &cma, const Respawn::Bake::Occluders *occluders,
+                                        const Respawn::Bake::RadianceGrid *grid, const std::vector<Respawn::Bake::V3> &skies,
+                                        const std::vector<std::vector<Respawn::Bake::Light>> &lights);
 
     // 0x36, version 3
     struct WorldLight_t {

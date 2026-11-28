@@ -557,9 +557,17 @@ std::vector<uint8_t> Titanfall2::CubemapPakfile(const std::string &level, const 
                                                 const std::vector<float> &cma, const Respawn::Bake::Occluders *occluders,
                                                 const Respawn::Bake::RadianceGrid *grid, V3 sky,
                                                 const std::vector<Respawn::Bake::Light> &suns) {
+    return CubemapPakfile(level, origins, cma, occluders, grid, std::vector<V3>(origins.size(), sky),
+                          std::vector<std::vector<Respawn::Bake::Light>>(origins.size(), suns));
+}
+
+std::vector<uint8_t> Titanfall2::CubemapPakfile(const std::string &level, const std::vector<V3> &origins,
+                                                const std::vector<float> &cma, const Respawn::Bake::Occluders *occluders,
+                                                const Respawn::Bake::RadianceGrid *grid, const std::vector<V3> &skies,
+                                                const std::vector<std::vector<Respawn::Bake::Light>> &lights) {
     std::vector<std::vector<std::vector<Face>>> rendered(origins.size());
     for (std::size_t i = 0; i < origins.size(); ++i)
         for (int face = 0; face < 6; ++face)
-            rendered[i].push_back(MipChain(RenderFace(origins[i], face, occluders, grid, sky, suns, occluders != nullptr)));
+            rendered[i].push_back(MipChain(RenderFace(origins[i], face, occluders, grid, skies.at(i), lights.at(i), occluders != nullptr)));
     return StoredZip({{"materials/maps/" + level + "/cubemaps.hdr.vtf", BuildVtf(rendered, cma)}});
 }

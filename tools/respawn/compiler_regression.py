@@ -1320,6 +1320,75 @@ def apex_probe_placement_fixture(folder, command, reports, game):
                     'probes': {name: len(v) for name, v in placed.items()}, 'issues': []})
 
 
+def apex_shadow_environments_fixture(folder, command, reports, game):
+    """Two Apex light environments, as retail S3 mp_rr_canyonlands_staging
+    has them (APEX-18): environment *0 owns casters outside any volume, a
+    light_environment_volume brush entity claims room B for *1. Each
+    environment gets a contiguous range of shadow meshes, CSM nodes and CSM
+    references, its own sun, and world lights follow environment order even
+    when the *1 entity comes first in the file."""
+    path = folder / 'apex-shadow-environments.map'
+    pillar = lambda cx: box((cx - 32, -32, 0), (cx + 32, 32, 128), 'bump')
+    path.write_text(
+        '{\n"classname" "worldspawn"\n' + _tf2_light_class_room(0) + '\n' + pillar(0) + '\n'
+        + _tf2_light_class_room(2048) + '\n' + pillar(2048) + '\n}\n'
+        + entity(classname='light_environment', lightEnvironmentIndex='*1', origin='2048 0 1024', pitch='-35',
+                 angles='35 200 0', _light='255 200 150 300', _ambient='255 255 255 10')
+        + entity(classname='light_environment', lightEnvironmentIndex='*0', origin='0 0 1024', pitch='-60',
+                 angles='60 30 0', _light='255 255 255 400', _ambient='255 255 255 20')
+        + '{\n"classname" "light_environment_volume"\n"lightEnvironmentIndex" "*1"\n'
+        + box((1700, -400, -64), (2400, 400, 400), 'skip') + '\n}\n'
+        + entity(classname='info_player_start', origin='0 64 16', angles='0 0 0'), encoding='utf-8')
+    with path.with_suffix('.log').open('wb') as log:
+        subprocess.run(command[:-1] + [str(path)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    bsp = path.with_suffix('.bsp')
+    inventory = inspect(bsp)
+    if inventory['issues']:
+        raise RuntimeError(f'Apex shadow environments fixture inventory: {inventory["issues"]}')
+    with bsp.open('rb') as stream:
+        def payload(index):
+            entry = inventory['lumps'][index]
+            stream.seek(entry['offset'])
+            return stream.read(entry['length'])
+        environments = list(struct.iter_unpack('<6I3f', payload(0x05)))
+        meshes = list(struct.iter_unpack('<IIHH', payload(0x7F)))
+        nodes = list(struct.iter_unpack('<3fI3fI', payload(0x63)))
+        refs = list(struct.unpack(f'<{len(payload(0x64)) // 4}I', payload(0x64)))
+        vertices = list(struct.iter_unpack('<3f', payload(0x7C)))
+        indices = list(struct.unpack(f'<{len(payload(0x7E)) // 2}H', payload(0x7E)))
+        world_lights = payload(0x36)
+    if len(environments) != 2:
+        raise RuntimeError(f'expected 2 shadow environments, got {environments}')
+    (a, b) = environments
+    if a[:3] != (0, 0, 0) or b[:3] != a[3:6] or b[3:6] != (len(nodes), len(refs), len(meshes)) \
+            or a[5] == 0 or b[5] == b[2]:
+        raise RuntimeError(f'shadow environment ranges are not contiguous and non-empty: {environments}')
+    if (nodes[b[0]][3] >> 8) & 0x3FFFFF < b[0] and nodes[b[0]][3] & 0xFF:
+        raise RuntimeError('environment *1 CSM root points at nodes before its range')
+    for env in environments:
+        if any(not env[2] <= r < env[5] and r < len(meshes) for r in refs[env[1]:env[4]]):
+            raise RuntimeError(f'CSM references leave their environment mesh range: {env}')
+
+    def mesh_x(m):
+        first, count = meshes[m][0], meshes[m][1]
+        start = 3 * sum(meshes[k][1] for k in range(m))
+        return [vertices[first + i][0] for i in indices[start:start + 3 * count]]
+    if any(x > 1000 for m in range(a[2], a[5]) for x in mesh_x(m)) \
+            or any(x < 1000 for m in range(b[2], b[5]) for x in mesh_x(m)):
+        raise RuntimeError('shadow meshes are in the wrong environment')
+    records = [world_lights[k:k + 112] for k in range(0, len(world_lights), 112)]
+    kinds = [struct.unpack_from('<i', r, 0x34)[0] for r in records]
+    suns = [struct.unpack_from('<3f', r, 0x18) for r, kind in zip(records, kinds) if kind == 3]
+    ambient_origins = [struct.unpack_from('<3f', r, 0) for r, kind in zip(records, kinds) if kind == 5]
+    if kinds[:4] != [5, 5, 3, 3] or ambient_origins != [(0, 0, 1024), (2048, 0, 1024)]:
+        raise RuntimeError(f'world lights not in environment order: {kinds[:4]} {ambient_origins}')
+    if any(max(abs(s - e) for s, e in zip(sun, env[6:])) > 1e-4 for sun, env in zip(suns, environments)) \
+            or max(abs(s - e) for s, e in zip(suns[0], suns[1])) < 0.1:
+        raise RuntimeError(f'shadow directions do not match their environment suns: {suns} {environments}')
+    reports.append({'game': game, 'fixture': 'apex-shadow-environments',
+                    'meshes': [a[5] - a[2], b[5] - b[2]], 'issues': []})
+
+
 def apex_alpha_shadow_fixture(folder, command, reports, game):
     """Apex alpha-tested shadow casters, laid out as retail S3 does: opaque
     shadow meshes first (drawType 1, sort 0xFFFF), then one alpha mesh per
@@ -1563,6 +1632,7 @@ def main():
             apex_viewportals_fixture(folder, command, reports, game)
             apex_alpha_shadow_fixture(folder, command, reports, game)
             apex_probe_placement_fixture(folder, command, reports, game)
+            apex_shadow_environments_fixture(folder, command, reports, game)
         if game != "apexlegends":
             tangent_checks(bsp, game == "titanfallonline")
             if game == "titanfallonline":

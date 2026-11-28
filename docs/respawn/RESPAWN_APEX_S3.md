@@ -196,6 +196,42 @@ probes dropped, spot cones that rank light links instead of gating them, and
 96-unit spacing. Both are kept. The floor grid now walks every floor down
 each column, not only the top one.
 
+## Light environments (28 November 2026)
+
+The S3 Firing Range has two `light_environment` entities. `*0` is the
+default. A `light_environment_volume` brush entity (`model *16`,
+`lightEnvironmentIndex *1`, inline `*coll`) claims the range area for `*1`.
+
+**Lump 0x05.** Each environment's ranges are contiguous:
+
+| Environment | Shadow meshes | CSM nodes | CSM references |
+| --- | --- | --- | --- |
+| `*0` | 0–5 | 0–8 | 0–6 |
+| `*1` | 6–29 | 9–3815 | 7–4561 |
+
+- Each environment has its own CSM tree. Child and reference indices are
+  absolute, so `*1`'s root is node 9.
+- The alpha meshes (28 and 29) sit at the end of `*1`'s range.
+- Lump 0x26 runs to the last internal node of all the trees.
+- Lump 0x36 holds every ambient, then every sun, in environment order.
+
+**Compiler.** It writes the same layout:
+
+- Each shadow-caster triangle goes to the volume that holds its centroid.
+  World meshes span regions, so they are split.
+- Static props are assigned by the centre of their bounds.
+- Lightmap texels, probes and cubemaps use their own environment's sun and
+  ambient.
+
+**In R5Reloaded** the environment that holds the camera lights the whole
+view: its sun direction and colour, and its set of CSM casters. Volumes
+therefore separate areas the player does not see together. Casters outside
+the camera's environment cast no realtime shadow.
+
+**A remap pitfall found on the way.** Brush entities carry an `origin` key set
+to their model centre while their brushes stay in world space, so brush planes
+must not be offset by it.
+
 ## Open work, in order
 
 1. **Lightmap quality.** Patch and prop occlusion, bounce light, and filtering

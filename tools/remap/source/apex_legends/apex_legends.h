@@ -271,6 +271,12 @@ namespace ApexLegends {
     void        EmitLevelInfo();
     void        EmitWorldLights();
     int         HardwareLightIndex(std::size_t worldLightIndex);
+    // Light environments in lightEnvironmentIndex order; slot 0 owns every
+    // point outside a light_environment_volume.
+    std::size_t     LightEnvironmentCount();
+    const entity_t *LightEnvironmentEntity(std::size_t slot);
+    std::size_t     LightEnvironmentAt(const Vector3 &point);
+    const WorldLight_t *EnvironmentWorldLight(std::size_t slot, int32_t type);  // its emit_skyambient or emit_skylight
     float       LocalLightFalloff(const WorldLight_t &light, float dist);
     float       LocalLightSpot(const WorldLight_t &light, const Vector3 &dirFromLight);
     void        EmitCubemaps();

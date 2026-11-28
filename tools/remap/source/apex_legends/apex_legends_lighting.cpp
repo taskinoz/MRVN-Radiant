@@ -170,6 +170,126 @@ Vector3 SpotDirection(const entity_t &e) {
     return LightDirection(e);
 }
 
+/*
+    Light environments and their volumes, as retail S3 mp_rr_canyonlands_staging
+    has them: light_environment "lightEnvironmentIndex" "*N" (entity order
+    without the key); environment 0 owns everything outside any volume, and a
+    light_environment_volume brush entity ("lightEnvironmentIndex" "*1") claims
+    its region for that environment. World lights, shadow environments and CSM
+    trees follow environment order.
+*/
+struct LightEnvironment {
+    int index;
+    const entity_t *entity;
+};
+
+std::vector<LightEnvironment> LightEnvironments() {
+    std::vector<LightEnvironment> list;
+    for (const entity_t &e : entities) {
+        if (!striEqual(e.classname(), "light_environment")) continue;
+        const char *value = e.valueForKey("lightEnvironmentIndex");
+        list.push_back({value[0] == '*' ? atoi(value + 1) : static_cast<int>(list.size()), &e});
+    }
+    std::stable_sort(list.begin(), list.end(), [](const auto &a, const auto &b) { return a.index < b.index; });
+    for (std::size_t slot = 0; slot < list.size(); slot++) {
+        if (list[slot].index != static_cast<int>(slot))
+            Sys_Warning("light_environment indices should run from *0 without gaps (found *%d at slot %zu)\n", list[slot].index, slot);
+    }
+    return list;
+}
+
+struct EnvironmentVolume {
+    std::size_t slot;
+    std::vector<std::vector<Plane3>> brushes;  // world space, inside when n.p <= d
+
+    bool contains(const Vector3 &p) const {
+        for (const auto &brush : brushes) {
+            bool inside = !brush.empty();
+            for (const Plane3 &plane : brush) {
+                if (plane.a * p.x() + plane.b * p.y() + plane.c * p.z() > plane.d + 1e-3) { inside = false; break; }
+            }
+            if (inside) return true;
+        }
+        return false;
+    }
+};
+
+std::vector<EnvironmentVolume> EnvironmentVolumes(const std::vector<LightEnvironment> &environments) {
+    std::vector<EnvironmentVolume> volumes;
+    for (const entity_t &e : entities) {
+        if (!striEqual(e.classname(), "light_environment_volume")) continue;
+        const char *value = e.valueForKey("lightEnvironmentIndex");
+        const int index = value[0] == '*' ? atoi(value + 1) : 1;
+        const auto found = std::find_if(environments.begin(), environments.end(),
+                                        [&](const LightEnvironment &env) { return env.index == index; });
+        if (found == environments.end()) {
+            Sys_Warning("light_environment_volume at %s names light environment *%d, which does not exist\n", e.valueForKey("origin"), index);
+            continue;
+        }
+        // Brushes are in world space here (the compiler later sets "origin" to
+        // the model centre); decompiled "*trigger_brush" keys are relative to it.
+        const Vector3 origin = e.vectorForKey("origin");
+        EnvironmentVolume volume{static_cast<std::size_t>(found - environments.begin()), {}};
+        for (const brush_t &brush : e.brushes) {
+            std::vector<Plane3> planes;
+            for (const side_t &side : brush.sides) {
+                planes.push_back(side.plane);
+            }
+            volume.brushes.push_back(std::move(planes));
+        }
+        // Decompiled maps keep the volume as "*trigger_brush_B_plane_P" "nx ny nz d" keys.
+        for (int b = 0; e.brushes.empty(); b++) {
+            std::vector<Plane3> planes;
+            for (int s = 0;; s++) {
+                char key[64];
+                snprintf(key, sizeof(key), "*trigger_brush_%d_plane_%d", b, s);
+                const char *text = e.valueForKey(key);
+                if (!text[0]) break;
+                Plane3 plane{0, 0, 0, 0};
+                sscanf(text, "%lf %lf %lf %lf", &plane.a, &plane.b, &plane.c, &plane.d);
+                plane.d += plane.a * origin.x() + plane.b * origin.y() + plane.c * origin.z();
+                planes.push_back(plane);
+            }
+            if (planes.empty()) break;
+            volume.brushes.push_back(std::move(planes));
+        }
+        if (volume.brushes.empty())
+            Sys_Warning("light_environment_volume at %s has no brushes\n", e.valueForKey("origin"));
+        volumes.push_back(std::move(volume));
+    }
+    return volumes;
+}
+
+// Environment slot owning a shadow caster: the first volume holding its centre point, else 0.
+std::size_t CasterEnvironment(const std::vector<EnvironmentVolume> &volumes, const Vector3 &centre) {
+    for (const EnvironmentVolume &volume : volumes) {
+        if (volume.contains(centre)) return volume.slot;
+    }
+    return 0;
+}
+
+// Per environment slot: [begin, end) of shadow meshes, CSM nodes and CSM references.
+struct ShadowEnvironmentRange {
+    uint32_t meshes[2], nodes[2], refs[2];
+    Vector3 sun;
+};
+std::vector<ShadowEnvironmentRange> shadowEnvironmentRanges;
+
+struct EnvironmentCache {
+    bool ready = false;
+    std::vector<LightEnvironment> environments;
+    std::vector<EnvironmentVolume> volumes;
+};
+EnvironmentCache &Environments() {
+    static EnvironmentCache cache;
+    if (!cache.ready) {
+        cache.environments = LightEnvironments();
+        cache.volumes = EnvironmentVolumes(cache.environments);
+        cache.ready = true;
+    }
+    return cache;
+}
+
 // Order key for local lights; lower sorts first.
 int LightGroup(const WorldLight_t &light) {
     if (light.flags & WORLDLIGHT_FLAG_TWEAK) return 0;
@@ -186,9 +306,9 @@ void ApexLegends::EmitWorldLights() {
     std::vector<WorldLight_t> ambients, suns;
     std::vector<std::pair<int, WorldLight_t>> locals;  // (group, light), stable-sorted by group
 
-    for (const entity_t &e : entities) {
-        const char *classname = e.classname();
-        if (striEqual(classname, "light_environment")) {
+    for (const LightEnvironment &environment : Environments().environments) {
+        const entity_t &e = *environment.entity;
+        {
             WorldLight_t ambient = ZeroedRecord<WorldLight_t>();
             ambient.origin = e.vectorForKey("origin");
             ambient.intensity = LinearLightColour(e.valueForKey("_ambient"), 255.0f);
@@ -203,9 +323,11 @@ void ApexLegends::EmitWorldLights() {
             sun.flags = 0x18;
             sun.sun_highlight_size_or_vfog_boost = FloatKey(e, "sun_highlight_size", 0.0f);
             suns.push_back(sun);
-            continue;
         }
+    }
 
+    for (const entity_t &e : entities) {
+        const char *classname = e.classname();
         const bool spot = striEqual(classname, "light_spot") || striEqual(classname, "light_spotlight");
         if (!spot && !striEqual(classname, "light")) {
             continue;
@@ -300,6 +422,38 @@ int ApexLegends::HardwareLightIndex(std::size_t worldLightIndex) {
 }
 
 /*
+    Light environment queries for the bakes: lightmaps, probes and cubemaps
+    inside a light_environment_volume use that environment's sun and ambient,
+    as its shadow environment does.
+*/
+
+std::size_t ApexLegends::LightEnvironmentCount() {
+    return Environments().environments.size();
+}
+
+const entity_t *ApexLegends::LightEnvironmentEntity(std::size_t slot) {
+    const auto &environments = Environments().environments;
+    return slot < environments.size() ? environments[slot].entity : nullptr;
+}
+
+std::size_t ApexLegends::LightEnvironmentAt(const Vector3 &point) {
+    const auto &volumes = Environments().volumes;
+    return volumes.empty() ? 0 : CasterEnvironment(volumes, point);
+}
+
+const WorldLight_t *ApexLegends::EnvironmentWorldLight(std::size_t slot, int32_t type) {
+    // EmitWorldLights writes every ambient, then every sun, in environment order.
+    const WorldLight_t *first = nullptr;
+    std::size_t seen = 0;
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        if (light.type != type) continue;
+        if (!first) first = &light;
+        if (seen++ == slot) return &light;
+    }
+    return first;
+}
+
+/*
     LocalLightFalloff
     Distance falloff of a point or spot light, 0 at and beyond its radius.
     Non-PBR lights use their stored attenuation polynomial. PBR lights are
@@ -353,11 +507,7 @@ float ApexLegends::LocalLightSpot(const WorldLight_t &light, const Vector3 &dirF
     last internal node.
     All static props are included, bounded by their editor copy.
 */
-static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
-    Vector3 sun(0, 0, -1);
-    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
-        if (light.type == emit_skylight) { sun = light.normal; break; }
-    }
+static void EmitCsmTree(const std::vector<std::pair<uint32_t, MinMax>> &casters, const Vector3 &sun, std::size_t &lastInternal) {
     const Vector3 z = vector3_normalised(sun * -1.0f);
     Vector3 x(sun.y(), -sun.x(), 0);
     x = vector3_length(x) < 1e-4f ? Vector3(1, 0, 0) : vector3_normalised(x);
@@ -377,17 +527,14 @@ static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
         ids.push_back(id);
         boxes.push_back(light);
     };
-    for (std::size_t i = 0; i < shadowMeshBounds.size(); i++) add(static_cast<uint32_t>(i), shadowMeshBounds[i]);
-    const uint32_t propBase = ApexLegends::Bsp::levelInfo.empty() ? 0 : static_cast<uint32_t>(ApexLegends::Bsp::levelInfo[0].unk3);
-    for (const auto &[propIndex, bounds] : ApexLegends::Bsp::staticPropShadowBounds) add(propBase + propIndex, bounds);
+    for (const auto &[id, bounds] : casters) add(id, bounds);
 
     if (ids.empty()) {
-        ApexLegends::Bsp::csmAABBNodes.push_back({});
+        ApexLegends::Bsp::csmAABBNodes.push_back(ZeroedRecord<CSMAABBNode_t>());
         return;
     }
     const ApexLegends::ObjTreeNode root = ApexLegends::BuildObjTree(boxes);
 
-    std::size_t lastInternal = 0;
     std::function<void(const ApexLegends::ObjTreeNode &, std::size_t)> emit = [&](const ApexLegends::ObjTreeNode &node, std::size_t index) {
         std::size_t total = 0;
         std::function<void(const ApexLegends::ObjTreeNode &)> count = [&](const ApexLegends::ObjTreeNode &n) {
@@ -415,10 +562,9 @@ static void EmitCsmTree(const std::vector<MinMax> &shadowMeshBounds) {
         ApexLegends::Bsp::csmAABBNodes.resize(first + node.children.size());
         for (std::size_t i = 0; i < node.children.size(); i++) emit(node.children[i], first + i);
     };
-    ApexLegends::Bsp::csmAABBNodes.emplace_back();
-    emit(root, 0);
-    // 0x26 holds subtree totals up to the last internal node (retail S3).
-    ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(lastInternal + 1);
+    const std::size_t rootIndex = ApexLegends::Bsp::csmAABBNodes.size();
+    ApexLegends::Bsp::csmAABBNodes.push_back(ZeroedRecord<CSMAABBNode_t>());
+    emit(root, rootIndex);
 }
 
 /*
@@ -445,6 +591,7 @@ void ApexLegends::EmitShadowMeshes() {
     ApexLegends::Bsp::csmAABBNodes.clear();
     ApexLegends::Bsp::csmObjRefsTotal.clear();
     ApexLegends::Bsp::csmNumObjRefsTotalForAabb.clear();
+    shadowEnvironmentRanges.clear();
     
     // We'll create one shadow mesh per world mesh (model 0)
     // For simplicity, we iterate the meshes from model 0 (worldspawn)
@@ -466,207 +613,185 @@ void ApexLegends::EmitShadowMeshes() {
     MinMax worldBounds;
     std::vector<MinMax> shadowMeshBounds;
     
-    // Iterate through world meshes and generate shadow geometry
-    for (int32_t meshIdx = worldModel.meshIndex; meshIdx < worldModel.meshIndex + worldModel.meshCount; meshIdx++) {
-        if (meshIdx < 0 || meshIdx >= static_cast<int32_t>(ApexLegends::Bsp::meshes.size())) {
-            continue;
-        }
-        
-        const auto& mesh = ApexLegends::Bsp::meshes[meshIdx];
-        
-        // Skip meshes with no triangles
-        if (mesh.triCount == 0) {
-            continue;
-        }
-        
-        // Skip sky meshes; alpha-tested casters go to the alpha stream below
-        int sharedIdx = meshIdx - worldModel.meshIndex;
-        if (sharedIdx >= 0 && sharedIdx < static_cast<int>(Shared::meshes.size())
-            && (Shared::meshes[sharedIdx].shaderInfo->compileFlags & (C_SKY | C_ALPHASHADOW))) {
-            continue;
-        }
-        
-        // Get the vertex offset from the material sort entry
-        // The mesh's materialOffset indexes into the materialSorts array
-        uint32_t vertexOffset = 0;
-        if (mesh.materialOffset < ApexLegends::Bsp::materialSorts.size()) {
-            vertexOffset = ApexLegends::Bsp::materialSorts[mesh.materialOffset].vertexOffset;
-        }
-        
-        // Get the vertices for this mesh based on vertex type
-        // The mesh references indices into the meshIndices array, which point to vertices
-        uint32_t firstShadowVert = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size());
-        uint32_t firstShadowIndex = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshIndices.size());
-        
-        // Map from original vertex index to shadow vertex index
-        std::unordered_map<uint16_t, uint16_t> vertexRemap;
-        MinMax shadowBounds;
-        
-        // Process indices for this mesh
-        uint32_t indexStart = mesh.triOffset;
-        uint32_t indexCount = mesh.triCount * 3;  // triCount is triangle count, need 3 indices per tri
-        
-        for (uint32_t i = 0; i < indexCount; i++) {
-            if (indexStart + i >= ApexLegends::Bsp::meshIndices.size()) {
-                break;
-            }
-            
-            uint16_t origIdx = ApexLegends::Bsp::meshIndices[indexStart + i];
-            
-            // Check if we've already remapped this vertex
-            auto it = vertexRemap.find(origIdx);
-            if (it != vertexRemap.end()) {
-                ApexLegends::Bsp::shadowMeshIndices.push_back(it->second);
-            } else {
-                // Add new shadow vertex
-                uint16_t newIdx = static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size() - firstShadowVert);
-                vertexRemap[origIdx] = newIdx;
-                
-                // Get the vertex position based on vertex type
-                Vector3 pos(0, 0, 0);
-                
-                // The index in meshIndices is relative to the materialSort's vertexOffset
-                // Add vertexOffset to get the actual vertex index in the vertex format array
-                uint32_t actualIdx = vertexOffset + origIdx;
-                
-                // The vertex format structs (VertexLitBump_t, etc.) contain a vertexIndex
-                // which points to the actual position in Titanfall::Bsp::vertices
-                uint32_t positionIndex = 0;
-                
-                // Vertex type bits in mesh.flags:
-                // S_VERTEX_LIT_FLAT  = 0x000
-                // S_VERTEX_LIT_BUMP  = 0x200
-                // S_VERTEX_UNLIT     = 0x400
-                // S_VERTEX_UNLIT_TS  = 0x600
-                switch (mesh.flags & 0x600) {
-                    case 0x000:  // S_VERTEX_LIT_FLAT
-                        if (actualIdx < ApexLegends::Bsp::vertexLitFlatVertices.size()) {
-                            positionIndex = ApexLegends::Bsp::vertexLitFlatVertices[actualIdx].vertexIndex;
-                        }
-                        break;
-                    case 0x200:  // S_VERTEX_LIT_BUMP
-                        if (actualIdx < ApexLegends::Bsp::vertexLitBumpVertices.size()) {
-                            positionIndex = ApexLegends::Bsp::vertexLitBumpVertices[actualIdx].vertexIndex;
-                        }
-                        break;
-                    case 0x400:  // S_VERTEX_UNLIT
-                        if (actualIdx < ApexLegends::Bsp::vertexUnlitVertices.size()) {
-                            positionIndex = ApexLegends::Bsp::vertexUnlitVertices[actualIdx].vertexIndex;
-                        }
-                        break;
-                    case 0x600:  // S_VERTEX_UNLIT_TS
-                        if (actualIdx < ApexLegends::Bsp::vertexUnlitTSVertices.size()) {
-                            positionIndex = ApexLegends::Bsp::vertexUnlitTSVertices[actualIdx].vertexIndex;
-                        }
-                        break;
-                    default:
-                        // Fallback: use index directly
-                        positionIndex = origIdx;
-                        break;
-                }
-                
-                // Get the actual position from the vertices array
-                if (positionIndex < Titanfall::Bsp::vertices.size()) {
-                    pos = Titanfall::Bsp::vertices[positionIndex];
-                }
-                
-                // Update world bounds
-                worldBounds.extend(pos);
-                shadowBounds.extend(pos);
-                
-                ApexLegends::Bsp::shadowMeshOpaqueVerts.push_back(pos);
-                ApexLegends::Bsp::shadowMeshIndices.push_back(newIdx);
-            }
-        }
-        
-        // Create the shadow mesh entry if we added any geometry
-        uint32_t shadowTriCount = (static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshIndices.size()) - firstShadowIndex) / 3;
-        if (shadowTriCount > 0) {
-            ShadowMesh_t shadowMesh = ZeroedRecord<ShadowMesh_t>();
-            shadowMesh.firstVertex = firstShadowVert;
-            shadowMesh.triangleCount = shadowTriCount;
-            shadowMesh.drawType = 1;  // Opaque
-            shadowMesh.materialSortIdx = 0xFFFF;  // No material
-            
-            ApexLegends::Bsp::shadowMeshes.push_back(shadowMesh);
-            shadowMeshBounds.push_back(shadowBounds);
-            totalTriangles += shadowTriCount;
-        }
-    }
-    
-    // Alpha-tested casters ("$compileflag alphashadow"), as retail S3 writes
-    // them (World's Edge: 8 of 137 shadow meshes): after every opaque mesh, one
-    // per material sort, drawType 0 with that sort's index, vertices in 0x7D as
-    // position + texture UV (float32), indices continuing the shared 0x7E stream.
-    std::map<uint16_t, std::vector<int32_t>> alphaBySort;
-    for (int32_t meshIdx = worldModel.meshIndex; meshIdx < worldModel.meshIndex + worldModel.meshCount; meshIdx++) {
-        const int sharedIdx = meshIdx - worldModel.meshIndex;
-        if (meshIdx < 0 || meshIdx >= static_cast<int32_t>(ApexLegends::Bsp::meshes.size())
-            || sharedIdx >= static_cast<int>(Shared::meshes.size())) continue;
-        const uint32_t flags = Shared::meshes[sharedIdx].shaderInfo->compileFlags;
-        if ((flags & C_ALPHASHADOW) && !(flags & C_SKY) && ApexLegends::Bsp::meshes[meshIdx].triCount)
-            alphaBySort[static_cast<uint16_t>(ApexLegends::Bsp::meshes[meshIdx].materialOffset)].push_back(meshIdx);
-    }
-    for (const auto &[sort, meshList] : alphaBySort) {
-        ShadowMesh_t *alpha = nullptr;
-        MinMax alphaBounds;
-        std::map<std::array<float, 5>, uint16_t> lookup;
-        auto finish = [&]() {
-            if (alpha) shadowMeshBounds.push_back(alphaBounds);
-            alpha = nullptr; alphaBounds = MinMax(); lookup.clear();
+    // Casters are grouped by light environment (retail Firing Range: shadow
+    // meshes 0-5 for *0, 6-29 for *1), opaque then alpha within each. World
+    // meshes span regions, so each triangle goes to the environment whose
+    // volume holds its centroid and a mesh is split where it crosses one.
+    const std::vector<LightEnvironment> &environments = Environments().environments;
+    const std::vector<EnvironmentVolume> &volumes = Environments().volumes;
+    const std::size_t slots = std::max<std::size_t>(environments.size(), 1);
+
+    // Position (and texture UV) of the vertex at meshIndices[index].
+    auto vertexOf = [](const ApexLegends::Mesh_t &mesh, uint32_t index, Vector2 *uv) -> Vector3 {
+        const uint32_t base = mesh.materialOffset < ApexLegends::Bsp::materialSorts.size()
+            ? ApexLegends::Bsp::materialSorts[mesh.materialOffset].vertexOffset : 0;
+        const uint32_t v = base + ApexLegends::Bsp::meshIndices[index];
+        uint32_t position = UINT32_MAX;
+        Vector2 coord(0, 0);
+        auto take = [&](const auto &vertices) {
+            if (v < vertices.size()) { position = vertices[v].vertexIndex; coord = vertices[v].uv0; }
         };
-        for (int32_t meshIdx : meshList) {
-            const auto &mesh = ApexLegends::Bsp::meshes[meshIdx];
-            const uint32_t vertexOffset = mesh.materialOffset < ApexLegends::Bsp::materialSorts.size()
-                ? ApexLegends::Bsp::materialSorts[mesh.materialOffset].vertexOffset : 0;
-            for (uint32_t t = 0; t < mesh.triCount; t++) {
-                if (!alpha || lookup.size() + 3 > 65535) {
-                    finish();
-                    ShadowMesh_t entry = ZeroedRecord<ShadowMesh_t>();
-                    entry.firstVertex = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size());
-                    entry.drawType = 0;
-                    entry.materialSortIdx = sort;
-                    ApexLegends::Bsp::shadowMeshes.push_back(entry);
-                    alpha = &ApexLegends::Bsp::shadowMeshes.back();
-                }
+        switch (mesh.flags & 0x600) {  // S_VERTEX_LIT_FLAT 0x000, LIT_BUMP 0x200, UNLIT 0x400, UNLIT_TS 0x600
+            case 0x200: take(ApexLegends::Bsp::vertexLitBumpVertices); break;
+            case 0x400: take(ApexLegends::Bsp::vertexUnlitVertices); break;
+            case 0x600: take(ApexLegends::Bsp::vertexUnlitTSVertices); break;
+            default:    take(ApexLegends::Bsp::vertexLitFlatVertices); break;
+        }
+        if (uv) *uv = coord;
+        return position < Titanfall::Bsp::vertices.size() ? Titanfall::Bsp::vertices[position] : Vector3(0, 0, 0);
+    };
+    auto triangleComplete = [](const ApexLegends::Mesh_t &mesh, uint32_t t) {
+        return mesh.triOffset + t * 3 + 2 < ApexLegends::Bsp::meshIndices.size();
+    };
+
+    std::vector<int32_t> opaqueMeshes;
+    std::map<uint16_t, std::vector<int32_t>> alphaBySort;
+    std::unordered_map<int32_t, std::vector<uint16_t>> triangleEnvironments;
+    for (int32_t meshIdx = worldModel.meshIndex; meshIdx < worldModel.meshIndex + worldModel.meshCount; meshIdx++) {
+        if (meshIdx < 0 || meshIdx >= static_cast<int32_t>(ApexLegends::Bsp::meshes.size())) continue;
+        const ApexLegends::Mesh_t &mesh = ApexLegends::Bsp::meshes[meshIdx];
+        if (mesh.triCount == 0) continue;
+        const int sharedIdx = meshIdx - worldModel.meshIndex;
+        const bool known = sharedIdx >= 0 && sharedIdx < static_cast<int>(Shared::meshes.size());
+        const uint32_t flags = known ? Shared::meshes[sharedIdx].shaderInfo->compileFlags : 0;
+        if (flags & C_SKY) continue;
+        // Alpha-tested casters ("$compileflag alphashadow") go to the alpha stream.
+        if (flags & C_ALPHASHADOW) alphaBySort[static_cast<uint16_t>(mesh.materialOffset)].push_back(meshIdx);
+        else opaqueMeshes.push_back(meshIdx);
+        if (!volumes.empty()) {
+            std::vector<uint16_t> &owners = triangleEnvironments[meshIdx];
+            for (uint32_t t = 0; t < mesh.triCount && triangleComplete(mesh, t); t++) {
+                const uint32_t first = mesh.triOffset + t * 3;
+                const Vector3 centroid = (vertexOf(mesh, first, nullptr) + vertexOf(mesh, first + 1, nullptr)
+                                          + vertexOf(mesh, first + 2, nullptr)) * (1.0f / 3.0f);
+                owners.push_back(static_cast<uint16_t>(CasterEnvironment(volumes, centroid)));
+            }
+        }
+    }
+    auto triangleEnvironment = [&](int32_t meshIdx, uint32_t t) -> std::size_t {
+        if (volumes.empty()) return 0;
+        const std::vector<uint16_t> &owners = triangleEnvironments[meshIdx];
+        return t < owners.size() ? owners[t] : 0;
+    };
+
+    shadowEnvironmentRanges.assign(slots, {});
+    for (std::size_t slot = 0; slot < slots; slot++) {
+        shadowEnvironmentRanges[slot].meshes[0] = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshes.size());
+        shadowEnvironmentRanges[slot].sun = slot < environments.size() ? LightDirection(*environments[slot].entity)
+                                                                         : Vector3(0.5227f, 0.2733f, -0.8072f);
+
+        // Opaque: one shadow mesh per world mesh (drawType 1, no material),
+        // positions in 0x7C with mesh-local uint16 indices in 0x7E.
+        for (int32_t meshIdx : opaqueMeshes) {
+            const ApexLegends::Mesh_t &mesh = ApexLegends::Bsp::meshes[meshIdx];
+            const uint32_t firstShadowVert = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size());
+            std::unordered_map<uint16_t, uint16_t> vertexRemap;
+            MinMax shadowBounds;
+            uint32_t shadowTriCount = 0;
+            for (uint32_t t = 0; t < mesh.triCount && triangleComplete(mesh, t); t++) {
+                if (triangleEnvironment(meshIdx, t) != slot) continue;
                 for (int k = 0; k < 3; k++) {
                     const uint32_t index = mesh.triOffset + t * 3 + k;
-                    if (index >= ApexLegends::Bsp::meshIndices.size()) continue;
-                    const uint32_t v = vertexOffset + ApexLegends::Bsp::meshIndices[index];
-                    uint32_t position = 0;
-                    Vector2 uv(0, 0);
-                    switch (mesh.flags & 0x600) {
-                        case 0x200: position = ApexLegends::Bsp::vertexLitBumpVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexLitBumpVertices[v].uv0; break;
-                        case 0x400: position = ApexLegends::Bsp::vertexUnlitVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexUnlitVertices[v].uv0; break;
-                        case 0x600: position = ApexLegends::Bsp::vertexUnlitTSVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexUnlitTSVertices[v].uv0; break;
-                        default:    position = ApexLegends::Bsp::vertexLitFlatVertices[v].vertexIndex; uv = ApexLegends::Bsp::vertexLitFlatVertices[v].uv0; break;
+                    const uint16_t origIdx = ApexLegends::Bsp::meshIndices[index];
+                    auto it = vertexRemap.find(origIdx);
+                    if (it == vertexRemap.end()) {
+                        const Vector3 pos = vertexOf(mesh, index, nullptr);
+                        it = vertexRemap.emplace(origIdx, static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size() - firstShadowVert)).first;
+                        worldBounds.extend(pos);
+                        shadowBounds.extend(pos);
+                        ApexLegends::Bsp::shadowMeshOpaqueVerts.push_back(pos);
                     }
-                    const Vector3 pos = position < Titanfall::Bsp::vertices.size() ? Titanfall::Bsp::vertices[position] : Vector3(0, 0, 0);
-                    const std::array<float, 5> key{pos.x(), pos.y(), pos.z(), uv.x(), uv.y()};
-                    auto found = lookup.find(key);
-                    if (found == lookup.end()) {
-                        found = lookup.emplace(key, static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size() - alpha->firstVertex)).first;
-                        ShadowMeshAlphaVertex_t vertex = ZeroedRecord<ShadowMeshAlphaVertex_t>();
-                        vertex.position = pos;
-                        const float u = uv.x(), w = uv.y();
-                        std::memcpy(&vertex.texCoord[0], &u, 4);
-                        std::memcpy(&vertex.texCoord[1], &w, 4);
-                        ApexLegends::Bsp::shadowMeshAlphaVerts.push_back(vertex);
-                    }
-                    ApexLegends::Bsp::shadowMeshIndices.push_back(found->second);
-                    worldBounds.extend(pos);
-                    alphaBounds.extend(pos);
+                    ApexLegends::Bsp::shadowMeshIndices.push_back(it->second);
                 }
-                alpha->triangleCount++;
-                totalTriangles++;
+                shadowTriCount++;
+            }
+            if (shadowTriCount > 0) {
+                ShadowMesh_t shadowMesh = ZeroedRecord<ShadowMesh_t>();
+                shadowMesh.firstVertex = firstShadowVert;
+                shadowMesh.triangleCount = shadowTriCount;
+                shadowMesh.drawType = 1;  // Opaque
+                shadowMesh.materialSortIdx = 0xFFFF;  // No material
+                ApexLegends::Bsp::shadowMeshes.push_back(shadowMesh);
+                shadowMeshBounds.push_back(shadowBounds);
+                totalTriangles += shadowTriCount;
             }
         }
-        finish();
+
+        // Alpha-tested, as retail S3 writes them (World's Edge: 8 of 137 shadow
+        // meshes): after the opaque meshes, one per material sort, drawType 0
+        // with that sort's index, vertices in 0x7D as position + texture UV
+        // (float32), indices continuing the shared 0x7E stream.
+        for (const auto &[sort, meshList] : alphaBySort) {
+            ShadowMesh_t *alpha = nullptr;
+            MinMax alphaBounds;
+            std::map<std::array<float, 5>, uint16_t> lookup;
+            auto finish = [&]() {
+                if (alpha) shadowMeshBounds.push_back(alphaBounds);
+                alpha = nullptr; alphaBounds = MinMax(); lookup.clear();
+            };
+            for (int32_t meshIdx : meshList) {
+                const ApexLegends::Mesh_t &mesh = ApexLegends::Bsp::meshes[meshIdx];
+                for (uint32_t t = 0; t < mesh.triCount && triangleComplete(mesh, t); t++) {
+                    if (triangleEnvironment(meshIdx, t) != slot) continue;
+                    if (!alpha || lookup.size() + 3 > 65535) {
+                        finish();
+                        ShadowMesh_t entry = ZeroedRecord<ShadowMesh_t>();
+                        entry.firstVertex = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size());
+                        entry.drawType = 0;
+                        entry.materialSortIdx = sort;
+                        ApexLegends::Bsp::shadowMeshes.push_back(entry);
+                        alpha = &ApexLegends::Bsp::shadowMeshes.back();
+                    }
+                    for (int k = 0; k < 3; k++) {
+                        Vector2 uv(0, 0);
+                        const Vector3 pos = vertexOf(mesh, mesh.triOffset + t * 3 + k, &uv);
+                        const std::array<float, 5> key{pos.x(), pos.y(), pos.z(), uv.x(), uv.y()};
+                        auto found = lookup.find(key);
+                        if (found == lookup.end()) {
+                            found = lookup.emplace(key, static_cast<uint16_t>(ApexLegends::Bsp::shadowMeshAlphaVerts.size() - alpha->firstVertex)).first;
+                            ShadowMeshAlphaVertex_t vertex = ZeroedRecord<ShadowMeshAlphaVertex_t>();
+                            vertex.position = pos;
+                            const float u = uv.x(), w = uv.y();
+                            std::memcpy(&vertex.texCoord[0], &u, 4);
+                            std::memcpy(&vertex.texCoord[1], &w, 4);
+                            ApexLegends::Bsp::shadowMeshAlphaVerts.push_back(vertex);
+                        }
+                        ApexLegends::Bsp::shadowMeshIndices.push_back(found->second);
+                        worldBounds.extend(pos);
+                        alphaBounds.extend(pos);
+                    }
+                    alpha->triangleCount++;
+                    totalTriangles++;
+                }
+            }
+            finish();
+        }
+        shadowEnvironmentRanges[slot].meshes[1] = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshes.size());
     }
+
 
     totalVertices = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshOpaqueVerts.size());
 
-    EmitCsmTree(shadowMeshBounds);
+    // One CSM tree per environment with absolute node and reference indices
+    // (retail Firing Range: *1's root is node 9, its references start at 7);
+    // 0x26 holds subtree totals up to the last internal node of all trees.
+    const uint32_t propBase = ApexLegends::Bsp::levelInfo.empty() ? 0 : static_cast<uint32_t>(ApexLegends::Bsp::levelInfo[0].unk3);
+    std::size_t lastInternal = 0;
+    for (std::size_t slot = 0; slot < slots; slot++) {
+        ShadowEnvironmentRange &range = shadowEnvironmentRanges[slot];
+        std::vector<std::pair<uint32_t, MinMax>> casters;
+        for (uint32_t m = range.meshes[0]; m < range.meshes[1]; m++) casters.emplace_back(m, shadowMeshBounds[m]);
+        for (const auto &[propIndex, bounds] : ApexLegends::Bsp::staticPropShadowBounds) {
+            const std::size_t owner = volumes.empty() || !bounds.valid() ? 0 : CasterEnvironment(volumes, (bounds.mins + bounds.maxs) * 0.5f);
+            if (owner == slot) casters.emplace_back(propBase + propIndex, bounds);
+        }
+        range.nodes[0] = static_cast<uint32_t>(ApexLegends::Bsp::csmAABBNodes.size());
+        range.refs[0] = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
+        EmitCsmTree(casters, range.sun, lastInternal);
+        range.nodes[1] = static_cast<uint32_t>(ApexLegends::Bsp::csmAABBNodes.size());
+        range.refs[1] = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
+    }
+    ApexLegends::Bsp::csmNumObjRefsTotalForAabb.resize(lastInternal + 1);
 
     Sys_Printf("  %zu shadow meshes (%u tris, %u verts, %zu CSM nodes, %zu CSM refs)\n",
         ApexLegends::Bsp::shadowMeshes.size(), totalTriangles, totalVertices,
@@ -675,71 +800,36 @@ void ApexLegends::EmitShadowMeshes() {
 
 /*
     EmitShadowEnvironments
-    Generates the shadow environment data for each light_environment.
-    The shadow environment defines the sun direction for cascaded shadow maps.
-    
-    Must be called AFTER EmitWorldLights() since we iterate through the worldLights
-    to find emit_skylight entries which contain the sun direction.
+    Lump 0x05: one record per light environment, in lightEnvironmentIndex
+    order, with the [begin, end) ranges of CSM nodes, CSM references and
+    shadow meshes that EmitShadowMeshes() grouped for it, and its sun
+    direction (the direction light travels). A map without a
+    light_environment gets one default environment.
 */
 void ApexLegends::EmitShadowEnvironments() {
     Sys_FPrintf(SYS_VRB, "--- EmitShadowEnvironments ---\n");
     ApexLegends::Bsp::shadowEnvironments.clear();
-
-    // Count light environments by finding emit_skyambient lights
-    // (each light_environment creates one emit_skyambient + one emit_skylight)
-    size_t numLightEnvironments = 0;
-    for (const auto& light : ApexLegends::Bsp::worldLights) {
-        if (light.type == emit_skyambient) {
-            numLightEnvironments++;
-        }
+    if (shadowEnvironmentRanges.empty()) {
+        // EmitShadowMeshes() found no models; keep one environment over nothing.
+        shadowEnvironmentRanges.push_back({{0, 0}, {0, 0}, {0, 0}, Vector3(0.5227f, 0.2733f, -0.8072f)});
     }
-
-    // Get the shadow mesh data counts for reference
-    uint32_t numShadowMeshes = static_cast<uint32_t>(ApexLegends::Bsp::shadowMeshes.size());
-    uint32_t numCSMNodes = static_cast<uint32_t>(ApexLegends::Bsp::csmAABBNodes.size());
-    uint32_t numCSMObjRefs = static_cast<uint32_t>(ApexLegends::Bsp::csmObjRefsTotal.size());
-
-    if (numLightEnvironments == 0) {
-        // No light_environment entities - create a default one
-        // This is required for the engine to work properly
+    if (Environments().environments.empty())
         Sys_Printf("  No light_environment found, creating default shadow environment\n");
-        
-        ShadowEnvironment_t defaultEnv = ZeroedRecord<ShadowEnvironment_t>();
-        defaultEnv.beginAabbs = 0;
-        defaultEnv.beginObjRefs = 0;
-        defaultEnv.beginShadowMeshes = 0;
-        defaultEnv.endAabbs = numCSMNodes;
-        defaultEnv.endObjRefs = numCSMObjRefs;
-        defaultEnv.endShadowMeshes = numShadowMeshes;
-        // Default sun direction (pointing down and slightly south-west)
-        defaultEnv.shadowDir = Vector3(0.5227f, 0.2733f, -0.8072f);
-        
-        ApexLegends::Bsp::shadowEnvironments.push_back(defaultEnv);
-    } else {
-        // Create shadow environment for each light_environment
-        // The shadowDir in the shadow environment should match the light's normal
-        // (the direction light travels, i.e., from sun towards ground)
-        
-        for (const auto& light : ApexLegends::Bsp::worldLights) {
-            if (light.type == emit_skylight) {
-                ShadowEnvironment_t env = ZeroedRecord<ShadowEnvironment_t>();
-                env.beginAabbs = 0;
-                env.beginObjRefs = 0;
-                env.beginShadowMeshes = 0;
-                env.endAabbs = numCSMNodes;
-                env.endObjRefs = numCSMObjRefs;
-                env.endShadowMeshes = numShadowMeshes;
-                
-                // shadowDir is the direction light travels (from sun towards ground)
-                // This matches the worldlight's normal direction
-                env.shadowDir = light.normal;
-                
-                ApexLegends::Bsp::shadowEnvironments.push_back(env);
-            }
-        }
+    for (const ShadowEnvironmentRange &range : shadowEnvironmentRanges) {
+        ShadowEnvironment_t env = ZeroedRecord<ShadowEnvironment_t>();
+        env.beginAabbs = range.nodes[0];
+        env.beginObjRefs = range.refs[0];
+        env.beginShadowMeshes = range.meshes[0];
+        env.endAabbs = range.nodes[1];
+        env.endObjRefs = range.refs[1];
+        env.endShadowMeshes = range.meshes[1];
+        env.shadowDir = range.sun;
+        ApexLegends::Bsp::shadowEnvironments.push_back(env);
+        Sys_FPrintf(SYS_VRB, "  environment %zu: %u shadow meshes, %u CSM nodes, %u CSM references\n",
+                    ApexLegends::Bsp::shadowEnvironments.size() - 1, range.meshes[1] - range.meshes[0],
+                    range.nodes[1] - range.nodes[0], range.refs[1] - range.refs[0]);
     }
-
-    Sys_Printf("  %zu shadow environments\n", ApexLegends::Bsp::shadowEnvironments.size());
+    Sys_Printf("  %zu shadow environments\n",ApexLegends::Bsp::shadowEnvironments.size());
 }
 
 

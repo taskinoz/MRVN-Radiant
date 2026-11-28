@@ -967,7 +967,7 @@ struct SkyEnvironment {
     float sunAngularExtent;   // sin(SunSpreadAngle) for soft sun shadows (0 = hard)
     bool valid;
 };
-static SkyEnvironment GetSkyEnvironment();
+static SkyEnvironment GetSkyEnvironment(std::size_t slot = 0);
 static void LogSkyEnvironment(const SkyEnvironment &sky);
 
 
@@ -1922,19 +1922,26 @@ void ApexLegends::EmitCubemapPakfile() {
     if (origins.empty()) return;
     std::vector<Respawn::Bake::Light> suns;
     // No light_environment (an indoor or sealed map): no sky light, so unlit
-    // walls reflect black rather than a default sky tint.
-    V3 sky{0, 0, 0};
-    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
-        const V3 intensity{light.intensity[0], light.intensity[1], light.intensity[2]};
-        if (light.type == emit_skylight) {
+    // walls reflect black rather than a default sky tint. Each cubemap gets
+    // the sun and sky of the light environment holding it.
+    const std::size_t slots = std::max<std::size_t>(ApexLegends::LightEnvironmentCount(), 1);
+    std::vector<V3> skies(slots, V3{0, 0, 0});
+    std::vector<std::vector<Respawn::Bake::Light>> environmentSuns(slots);
+    for (std::size_t slot = 0; slot < slots; slot++) {
+        const WorldLight_t *ambient = ApexLegends::EnvironmentWorldLight(slot, emit_skyambient);
+        if (ambient && ambient->intensity[0] + ambient->intensity[1] + ambient->intensity[2] > 0)
+            skies[slot] = {ambient->intensity[0], ambient->intensity[1], ambient->intensity[2]};
+        if (const WorldLight_t *light = ApexLegends::EnvironmentWorldLight(slot, emit_skylight)) {
             Respawn::Bake::Light sun;
             sun.type = Respawn::Bake::LightType::Sun;
-            sun.direction = {light.normal[0], light.normal[1], light.normal[2]};
-            sun.intensity = intensity;
-            suns.push_back(sun);
-        } else if (light.type == emit_skyambient && intensity.x + intensity.y + intensity.z > 0) {
-            sky = intensity;
-        } else if ((light.type == emit_point || light.type == emit_spotlight) && !(light.flags & WORLDLIGHT_FLAG_PBR)
+            sun.direction = {light->normal[0], light->normal[1], light->normal[2]};
+            sun.intensity = {light->intensity[0], light->intensity[1], light->intensity[2]};
+            environmentSuns[slot].push_back(sun);
+        }
+    }
+    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        const V3 intensity{light.intensity[0], light.intensity[1], light.intensity[2]};
+        if ((light.type == emit_point || light.type == emit_spotlight) && !(light.flags & WORLDLIGHT_FLAG_PBR)
                    && light.radius > 0) {
             // Non-PBR falloff is the stored polynomial, as in the shared baker.
             // PBR lights (x100000, inverse square) are left out of the cubemaps.
@@ -1955,8 +1962,16 @@ void ApexLegends::EmitCubemapPakfile() {
     if (slash != std::string::npos) level.erase(0, slash + 1);
     const std::size_t dot = level.find_last_of('.');
     if (dot != std::string::npos) level.erase(dot);
+    std::vector<V3> cubemapSkies;
+    std::vector<std::vector<Respawn::Bake::Light>> cubemapLights;
+    for (const V3 &origin : origins) {
+        const std::size_t slot = std::min(ApexLegends::LightEnvironmentAt(Vector3(float(origin.x), float(origin.y), float(origin.z))), slots - 1);
+        cubemapSkies.push_back(skies[slot]);
+        cubemapLights.push_back(environmentSuns[slot]);
+        cubemapLights.back().insert(cubemapLights.back().end(), suns.begin(), suns.end());
+    }
     ApexLegends::Bsp::pakfile = Titanfall2::CubemapPakfile(level, origins, std::vector<float>(origins.size(), 1.0f),
-                                                           g_occluders.get(), nullptr, sky, suns);
+                                                           g_occluders.get(), nullptr, cubemapSkies, cubemapLights);
     Sys_Printf("  %zu cubemaps rendered into the PAKFILE (%zu bytes)\n", origins.size(), ApexLegends::Bsp::pakfile.size());
 }
 
@@ -1969,12 +1984,15 @@ static bool OccludersInside(const Vector3 &point) {
 }
 
 static void BakeLightmapPlanes(std::vector<std::vector<bool>> &computed) {
-    const WorldLight_t *ambient = nullptr, *sun = nullptr;
+    // Each texel takes the sun and ambient of the light environment holding it.
+    std::vector<const WorldLight_t *> ambients, suns;
+    for (std::size_t slot = 0; slot < std::max<std::size_t>(ApexLegends::LightEnvironmentCount(), 1); slot++) {
+        ambients.push_back(ApexLegends::EnvironmentWorldLight(slot, emit_skyambient));
+        suns.push_back(ApexLegends::EnvironmentWorldLight(slot, emit_skylight));
+    }
     std::vector<const WorldLight_t *> statics;
     for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
-        if (light.type == emit_skyambient && !ambient) ambient = &light;
-        else if (light.type == emit_skylight && !sun) sun = &light;
-        else if ((light.type == emit_point || light.type == emit_spotlight) && BakeLocalLight(light)) statics.push_back(&light);
+        if ((light.type == emit_point || light.type == emit_spotlight) && BakeLocalLight(light)) statics.push_back(&light);
     }
     constexpr int kSkyRays = 32;
     constexpr double kAmbientScale = 0.04;  // TF2 baker default, calibrated on retail SKY A
@@ -2019,6 +2037,9 @@ static void BakeLightmapPlanes(std::vector<std::vector<bool>> &computed) {
                 }
                 const float fraction = open / float(kSkyRays);
                 const Vector3 skyVector = open ? vector3_normalised(bent) * std::cbrt(fraction) : Vector3(0, 0, 0);
+                const std::size_t environment = ApexLegends::LightEnvironmentAt(start);
+                const WorldLight_t *sun = suns[environment < suns.size() ? environment : 0];
+                const WorldLight_t *ambient = ambients[environment < ambients.size() ? environment : 0];
 
                 // Sun: four sub-texel rays.
                 float sunVisible = 0.0f;
@@ -2335,8 +2356,8 @@ static bool ParseLightKey(const char *value, Vector3 &outColor, float &outBright
     return false;
 }
 
-// Extract sky environment from light_environment entity and worldlights (called once)
-static SkyEnvironment GetSkyEnvironment() {
+// Sky of one light environment slot, from its light_environment entity and world lights
+static SkyEnvironment GetSkyEnvironment(std::size_t slot) {
     SkyEnvironment sky;
     sky.ambientColor = Vector3(0.65f, 0.55f, 0.45f);  // Default warm outdoor
     sky.ambientIntensity = 100.0f / 255.0f;             // Default ambient (worldlight scale)
@@ -2352,8 +2373,7 @@ static SkyEnvironment GetSkyEnvironment() {
     // First, try to get data directly from light_environment entity
     // This is more reliable as it reads the raw _light and _ambient keys
     for (const entity_t &entity : entities) {
-        const char *classname = entity.classname();
-        if (striEqual(classname, "light_environment")) {
+        if (&entity == ApexLegends::LightEnvironmentEntity(slot)) {
             // Get sun color from _light key (format: "R G B brightness")
             const char *lightValue = entity.valueForKey("_light");
             Vector3 lightColor;
@@ -2400,13 +2420,16 @@ static SkyEnvironment GetSkyEnvironment() {
                 }
             }
             
-            break;  // Only use first light_environment
+            break;  // this slot's light_environment
         }
     }
     
     // Fallback: try to get data from worldlights if not found in entity
     if (!foundSkyAmbient || !foundSkyLight) {
-        for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
+        for (const WorldLight_t *candidate : {ApexLegends::EnvironmentWorldLight(slot, emit_skyambient),
+                                              ApexLegends::EnvironmentWorldLight(slot, emit_skylight)}) {
+            if (!candidate) continue;
+            const WorldLight_t &light = *candidate;
             if (light.type == 5 && !foundSkyAmbient) {  // emit_skyambient
                 float maxIntensity = std::max({light.intensity[0], light.intensity[1], light.intensity[2], 1.0f});
                 sky.ambientColor[0] = light.intensity[0] / maxIntensity;
@@ -3383,9 +3406,8 @@ static void AssignStaticLightsToProbe(const Vector3 &probePos, LightProbe_t &pro
     for (int k = 0; k < 3; k++) probe.skyVector[k] = ClampToInt16(skyVector[k] * 8192.0f);
 
     float sun = 0.0f;
-    for (const WorldLight_t &light : ApexLegends::Bsp::worldLights) {
-        if (light.type == emit_skylight) { sun = ProbeVisibility(probePos, light.normal * -1.0f, true); break; }
-    }
+    if (const WorldLight_t *light = ApexLegends::EnvironmentWorldLight(ApexLegends::LightEnvironmentAt(probePos), emit_skylight))
+        sun = ProbeVisibility(probePos, light->normal * -1.0f, true);
     probe.sunVisibility = ClampToInt16(sun * 8192.0f);
     probe.padding = 0;
 }
@@ -3821,9 +3843,11 @@ void ApexLegends::EmitLightProbes() {
     ApexLegends::Bsp::lightprobeParentInfos.clear();
     ApexLegends::Bsp::staticPropLightprobeIndices.clear();
     
-    // Get sky environment first (needed for lighting computation)
-    SkyEnvironment sky = GetSkyEnvironment();
-    LogSkyEnvironment(sky);
+    // One sky per light environment; each probe uses the one holding it.
+    std::vector<SkyEnvironment> skies;
+    for (std::size_t slot = 0; slot < std::max<std::size_t>(ApexLegends::LightEnvironmentCount(), 1); slot++)
+        skies.push_back(GetSkyEnvironment(slot));
+    LogSkyEnvironment(skies[0]);
     
     // Calculate world bounds from all meshes
     MinMax worldBounds;
@@ -4113,6 +4137,7 @@ void ApexLegends::EmitLightProbes() {
             ProbeCandidate candidate;
             candidate.pos = probePositions[p];
             candidate.keep = true;
+            const SkyEnvironment &sky = skies[std::min(ApexLegends::LightEnvironmentAt(probePositions[p]), skies.size() - 1)];
             
             // Compute radcolor from direction ray results
             Vector3 radcolor[NUM_SPHERE_NORMALS];
@@ -4176,6 +4201,7 @@ void ApexLegends::EmitLightProbes() {
             ProbeCandidate candidate;
             candidate.pos = probePositions[p];
             candidate.keep = true;
+            const SkyEnvironment &sky = skies[std::min(ApexLegends::LightEnvironmentAt(probePositions[p]), skies.size() - 1)];
             
             Vector3 radcolor[NUM_SPHERE_NORMALS];
             
